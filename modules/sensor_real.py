@@ -30,8 +30,21 @@ class RealPesaje(ISistemaPesaje):
 
     def conectar(self, puerto: str) -> bool:
         try:
-            print(f"[REAL] Conectando a BaseStation en {puerto}...")
-            self.connection = mscl.Connection.Serial(puerto)
+            print(f"[REAL] Intentando conectar a: {puerto}...")
+            
+            # Detectar si es IP:Puerto o Serial
+            if ":" in puerto and not "COM" in puerto.upper():
+                # Asumir formato IP:PUERTO (ej: 192.168.1.100:10000)
+                parts = puerto.split(":")
+                ip = parts[0]
+                port = int(parts[1])
+                print(f"[REAL] Usando conexión TCP/IP: {ip}:{port}")
+                self.connection = mscl.Connection.TcpIp(ip, port)
+            else:
+                # Asumir Serial (ej: COM3 o /dev/ttyUSB0)
+                print(f"[REAL] Usando conexión Serial: {puerto}")
+                self.connection = mscl.Connection.Serial(puerto)
+
             self.base_station = mscl.BaseStation(self.connection)
             
             # Verificar comunicación (ping)

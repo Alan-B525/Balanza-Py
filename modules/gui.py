@@ -123,6 +123,10 @@ class BalanzaGUI(ttk.Window):
         actions_frame = ttk.Frame(header_frame, style='Header.TFrame')
         actions_frame.pack(side=RIGHT)
         
+        # Botón de Configuración (Engranaje)
+        btn_config = ttk.Button(actions_frame, text="⚙", bootstyle="secondary-outline", command=self.show_configuration_dialog, width=3)
+        btn_config.pack(side=LEFT, padx=(0, 10))
+        
         # Usar estilo explícito Large.success.TButton para asegurar tamaño de fuente inicial
         self.btn_connect = ttk.Button(actions_frame, text="CONECTAR", command=self.toggle_connection, style='Large.success.TButton', width=12, padding=(10, 8))
         self.btn_connect.pack(side=LEFT, padx=10)
@@ -360,3 +364,173 @@ class BalanzaGUI(ttk.Window):
         if self.show_large_confirmation("Sair", "Deseja sair do sistema?"):
             self.command_queue.put({'cmd': 'EXIT'})
             self.destroy()
+
+    def show_configuration_dialog(self):
+        """Abre un diálogo para configurar conexión y nodos."""
+        import json
+        import os
+        
+        # Cargar configuración actual o usar defaults
+        config_path = "settings.json"
+        current_config = {
+            "connection_type": "TCP", # Default a TCP por solicitud
+            "serial_port": "COM3",
+            "tcp_ip": "192.168.0.100",
+            "tcp_port": "8000",
+            "nodes": NODOS_CONFIG
+        }
+        
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    saved_config = json.load(f)
+                    current_config.update(saved_config)
+            except:
+                pass
+
+        # Crear ventana modal
+        dialog = ttk.Toplevel(self)
+        dialog.title("Configuración del Sistema")
+        dialog.geometry("700x600")
+        dialog.resizable(False, False)
+        
+        # Centrar
+        try:
+            x = self.winfo_x() + (self.winfo_width() // 2) - 350
+            y = self.winfo_y() + (self.winfo_height() // 2) - 300
+            dialog.geometry(f"+{x}+{y}")
+        except:
+            pass
+
+        # --- Pestañas ---
+        notebook = ttk.Notebook(dialog)
+        notebook.pack(fill=BOTH, expand=YES, padx=10, pady=10)
+        
+        # Tab Conexión
+        tab_conn = ttk.Frame(notebook, padding=20)
+        notebook.add(tab_conn, text="Conexión")
+        
+        ttk.Label(tab_conn, text="Tipo de Conexión:", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 5))
+        conn_type_var = tk.StringVar(value=current_config["connection_type"])
+        
+        # Contenedores para opciones
+        lf_serial = ttk.LabelFrame(tab_conn, text="Configuración Serial", padding=15)
+        lf_tcp = ttk.LabelFrame(tab_conn, text="Configuración TCP/IP", padding=15)
+
+        # Función para alternar visibilidad
+        def toggle_connection_options():
+            if conn_type_var.get() == "SERIAL":
+                lf_serial.pack(fill=X, pady=10)
+                lf_tcp.pack_forget()
+            else:
+                lf_serial.pack_forget()
+                lf_tcp.pack(fill=X, pady=10)
+
+        frame_radios = ttk.Frame(tab_conn)
+        frame_radios.pack(fill=X, pady=(0, 15))
+        ttk.Radiobutton(frame_radios, text="TCP/IP (Ethernet/Wifi)", variable=conn_type_var, value="TCP", command=toggle_connection_options).pack(side=LEFT, padx=(0, 20))
+        ttk.Radiobutton(frame_radios, text="Serial (USB)", variable=conn_type_var, value="SERIAL", command=toggle_connection_options).pack(side=LEFT)
+        
+        # Serial Options (Manual)
+        ttk.Label(lf_serial, text="Puerto COM:").pack(anchor="w")
+        entry_serial = ttk.Entry(lf_serial)
+        entry_serial.insert(0, current_config["serial_port"])
+        entry_serial.pack(fill=X, pady=(5, 0))
+        
+        # TCP Options
+        ttk.Label(lf_tcp, text="Dirección IP:").pack(anchor="w")
+        entry_ip = ttk.Entry(lf_tcp)
+        entry_ip.insert(0, current_config["tcp_ip"])
+        entry_ip.pack(fill=X, pady=(5, 10))
+        
+        ttk.Label(lf_tcp, text="Puerto TCP:").pack(anchor="w")
+        entry_tcp_port = ttk.Entry(lf_tcp)
+        entry_tcp_port.insert(0, current_config["tcp_port"])
+        entry_tcp_port.pack(fill=X, pady=(5, 0))
+
+        # Inicializar estado visual
+        toggle_connection_options()
+
+        # Tab Nodos
+        tab_nodes = ttk.Frame(notebook, padding=20)
+        notebook.add(tab_nodes, text="Sensores")
+        
+        node_entries = {}
+        
+        # Crear campos para cada nodo
+        sensor_labels = {
+            "celda_sup_izq": "Celda Superior Izquierda",
+            "celda_sup_der": "Celda Superior Derecha",
+            "celda_inf_izq": "Celda Inferior Izquierda",
+            "celda_inf_der": "Celda Inferior Derecha"
+        }
+        
+        # Usar Grid para mejor alineación
+        nodes_container = ttk.Frame(tab_nodes)
+        nodes_container.pack(fill=BOTH, expand=YES)
+        
+        row = 0
+        for key, label_text in sensor_labels.items():
+            lf_node = ttk.LabelFrame(nodes_container, text=label_text, padding=10)
+            lf_node.pack(fill=X, pady=5)
+            
+            current_node_data = current_config["nodes"].get(key, {"id": 0, "ch": "ch1"})
+            
+            f_inputs = ttk.Frame(lf_node)
+            f_inputs.pack(fill=X)
+            
+            # ID
+            ttk.Label(f_inputs, text="Node ID:", width=10).pack(side=LEFT)
+            e_id = ttk.Entry(f_inputs, width=15)
+            e_id.insert(0, str(current_node_data["id"]))
+            e_id.pack(side=LEFT, padx=(0, 20))
+            
+            # Channel
+            ttk.Label(f_inputs, text="Canal:", width=8).pack(side=LEFT)
+            e_ch = ttk.Entry(f_inputs, width=10)
+            e_ch.insert(0, str(current_node_data["ch"]))
+            e_ch.pack(side=LEFT)
+            
+            node_entries[key] = {"id": e_id, "ch": e_ch}
+            row += 1
+
+        # Botones de Acción
+        btn_frame = ttk.Frame(dialog, padding=20)
+        btn_frame.pack(fill=X, side=BOTTOM)
+        
+        def save_config():
+            new_config = {
+                "connection_type": conn_type_var.get(),
+                "serial_port": entry_serial.get(),
+                "tcp_ip": entry_ip.get(),
+                "tcp_port": entry_tcp_port.get(),
+                "nodes": {}
+            }
+            
+            for key, inputs in node_entries.items():
+                try:
+                    nid = int(inputs["id"].get())
+                except:
+                    nid = 0
+                new_config["nodes"][key] = {
+                    "id": nid,
+                    "ch": inputs["ch"].get()
+                }
+            
+            try:
+                with open(config_path, 'w') as f:
+                    json.dump(new_config, f, indent=4)
+                
+                from tkinter import messagebox
+                messagebox.showinfo("Guardado", "Configuración guardada.\nReinicie la aplicación para aplicar cambios.", parent=dialog)
+                dialog.destroy()
+            except Exception as e:
+                from tkinter import messagebox
+                messagebox.showerror("Error", f"No se pudo guardar: {e}", parent=dialog)
+
+        ttk.Button(btn_frame, text="Guardar Configuración", bootstyle="primary", command=save_config).pack(side=RIGHT)
+        ttk.Button(btn_frame, text="Cancelar", bootstyle="secondary", command=dialog.destroy).pack(side=RIGHT, padx=10)
+
+        dialog.transient(self)
+        dialog.grab_set()
+        self.wait_window(dialog)
