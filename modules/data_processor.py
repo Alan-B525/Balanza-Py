@@ -1,126 +1,113 @@
+from collections import deque
+from typing import Dict, List, Any
 import time
-from config import MAX_SENSORS
 
 class DataProcessor:
-    def __init__(self, logger):
-        self.logger = logger
-        # Stores the latest raw value for each sensor: {(node_id, channel_name): value}
-        self.raw_data = {}
+    """
+    Maneja la lógica de negocio: filtrado, mapeo y tara matemática.
+    """
+    def __init__(self, nodos_config: Dict, window_size: int = 10):
+        self.nodos_config = nodos_config
+        self.window_size = window_size
         
-        # Stores metadata for each node: {node_id: {'rssi': val, 'last_seen': timestamp}}
-        self.node_stats = {}
+        # Buffers para promedio móvil: {node_id: deque([val1, val2...])}
+        self._buffers = {}
         
-        # Maps display slots (0 to 3) to sensor keys (node_id, channel_name)
-        self.display_slots = [None] * MAX_SENSORS
+        # Valores de tara actuales: {node_id: float}
+        self._tares = {}
         
-        # Stores the tare value for each slot
-        self.tare_values = [0.0] * MAX_SENSORS
+        # Última vez que se vio cada nodo: {node_id: timestamp}
+        self._last_seen = {}
         
-        # Calibration factors (Slope) for each slot. Default 1.0
-        self.calibration_factors = [1.0] * MAX_SENSORS
+        # Estado de conexión previo para evitar spam de logs
+        self._node_connected_state = {}
 
-    def process_incoming_data(self, node_id, data_dict, rssi):
+        # Inicializar estructuras
+        for key, cfg in self.nodos_config.items():
+            nid = cfg['id']
+            self._buffers[nid] = deque(maxlen=window_size)
+            self._tares[nid] = 0.0
+            self._last_seen[nid] = 0.0
+            self._node_connected_state[nid] = False
+
+    def procesar(self, raw_data: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        Updates raw data and assigns new sensors to empty slots.
-        Returns a list of updates for the UI if needed.
+        Recibe lista de datos crudos, aplica filtros y mapea a nombres lógicos.
+        Retorna un diccionario con el estado actual del sistema y logs.
         """
-        # Update Node Stats
-        self.node_stats[node_id] = {
-            'rssi': rssi,
-            'last_seen': time.time()
+        resultado = {
+            'sensores': {},
+            'total': 0.0,
+            'total_tare': 0.0,
+            'logs': []
         }
-
-        updated_keys = []
-        for ch_name, value in data_dict.items():
-            key = (node_id, ch_name)
-            self.raw_data[key] = value
-            updated_keys.append(key)
-            
-            # Auto-assign to slot if new
-            if key not in self.display_slots:
-                if None in self.display_slots:
-                    idx = self.display_slots.index(None)
-                    self.display_slots[idx] = key
-                    self.logger.log(f"Assigned Node {node_id}:{ch_name} to Slot {idx+1}")
         
-        return updated_keys
-
-    def get_display_values(self):
-        """
-        Calculates net values (Raw - Tare) for all slots.
-        Returns:
-            net_values: List of floats [val1, val2, val3, val4]
-            total_net: Float (sum of net_values)
-            total_tare: Float (sum of current tares)
-            slot_info: List of strings ["Node X - chY", ...]
-            slot_status: List of dicts [{'rssi': val, 'stale': bool}, ...]
-        """
-        net_values = []
-        slot_info = []
-        slot_status = []
-        total_net = 0.0
+        current_time = time.time()
+        
+        # Organizar datos por nodo para procesamiento rápido
+        datos_por_nodo = {d['node_id']: d['value'] for d in raw_data}
+        
+        # Actualizar timestamps
+        for d in raw_data:
+            nid = d['node_id']
+            self._last_seen[nid] = current_time
+            if not self._node_connected_state.get(nid, False):
+                self._node_connected_state[nid] = True
+                resultado['logs'].append(f"Nodo {nid} reconectado/detectado.")
+        
+        total_peso = 0.0
         total_tare = 0.0
         
-        now = time.time()
-
-        for i in range(MAX_SENSORS):
-            key = self.display_slots[i]
-            raw = 0.0
-            info = "Aguardando..."
-            status = {'rssi': -999, 'stale': True}
+        for nombre_logico, cfg in self.nodos_config.items():
+            node_id = cfg['id']
             
-            if key and key in self.raw_data:
-                raw = self.raw_data[key]
-                info = f"Nó {key[0]} - {key[1]}"
-                
-                # Check stats
-                if key[0] in self.node_stats:
-                    stats = self.node_stats[key[0]]
-                    status['rssi'] = stats['rssi']
-                    # Consider stale if no data for > 3 seconds
-                    if now - stats['last_seen'] < 3.0:
-                        status['stale'] = False
+            # Verificar Timeout (ej. 3 segundos)
+            is_connected = True
+            if current_time - self._last_seen.get(node_id, 0) > 3.0:
+                is_connected = False
+                if self._node_connected_state.get(node_id, False):
+                    self._node_connected_state[node_id] = False
+                    resultado['logs'].append(f"ALERTA: Nodo {node_id} ({nombre_logico}) perdió conexión.")
             
-            # CRITICAL: Tare is always calculated from raw data
-            # Formula: Net = (Raw * Slope) - Tare
-            # Note: Usually Tare is applied after Slope, or Raw is Tared then Sloped.
-            # Standard: Net = (Raw - Tare_Raw) * Slope
-            # But here we stored Tare as the value at that moment.
-            # Let's assume Tare is in the same units as Raw (unscaled).
+            # Obtener valor crudo si llegó en este ciclo
+            if node_id in datos_por_nodo:
+                val_crudo = datos_por_nodo[node_id]
+                self._buffers[node_id].append(val_crudo)
             
-            tare = self.tare_values[i]
-            slope = self.calibration_factors[i]
-            
-            # We will apply slope to the difference
-            net = (raw - tare) * slope
-            
-            net_values.append(net)
-            slot_info.append(info)
-            slot_status.append(status)
-            
-            total_net += net
-            # For total tare display, we might want to show it scaled too?
-            # Or just show the raw tare sum? Let's show scaled tare contribution.
-            # Tare contribution = Tare * Slope
-            total_tare += (tare * slope)
-
-        return net_values, total_net, total_tare, slot_info, slot_status
-
-    def set_tare(self):
-        """
-        Sets the current raw values as the new tare values.
-        """
-        for i in range(MAX_SENSORS):
-            key = self.display_slots[i]
-            if key and key in self.raw_data:
-                self.tare_values[i] = self.raw_data[key]
+            # Calcular promedio móvil (si hay datos)
+            if self._buffers[node_id]:
+                promedio = sum(self._buffers[node_id]) / len(self._buffers[node_id])
             else:
-                self.tare_values[i] = 0.0
-        self.logger.log("Tare set. Values zeroed.")
+                promedio = 0.0
+                
+            # Aplicar Tara
+            tara_actual = self._tares.get(node_id, 0.0)
+            valor_neto = promedio - tara_actual
+            
+            # Sumar al total (solo si está conectado para no sumar basura o ceros engañosos)
+            if is_connected:
+                total_peso += valor_neto
+                total_tare += tara_actual
+            
+            resultado['sensores'][nombre_logico] = {
+                'valor': valor_neto,
+                'raw': promedio, # Promedio sin tara
+                'id': node_id,
+                'connected': is_connected
+            }
+            
+        resultado['total'] = total_peso
+        resultado['total_tare'] = total_tare
+        return resultado
 
-    def reset_tare(self):
-        """
-        Resets all tare values to 0.0.
-        """
-        self.tare_values = [0.0] * MAX_SENSORS
-        self.logger.log("Tare reset.")
+    def set_tara(self):
+        """Establece la tara actual basada en el último promedio conocido."""
+        for nid, buffer in self._buffers.items():
+            if buffer:
+                # La nueva tara es el promedio actual
+                self._tares[nid] = sum(buffer) / len(buffer)
+                
+    def reset_tara(self):
+        """Reinicia las taras a 0."""
+        for nid in self._tares:
+            self._tares[nid] = 0.0

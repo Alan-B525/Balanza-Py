@@ -1,25 +1,23 @@
-import os
-import sys
+# Configuración del Sistema de Pesaje
 
-# Application Constants
-APP_TITLE = "Sistema de Pesagem - MSCL"
+# Modo de ejecución: "MOCK" (Simulación) o "REAL" (Hardware MSCL)
+MODO_EJECUCION = "MOCK" 
+
+# Configuración Serial (Solo para modo REAL)
+PUERTO_COM = "COM3" # Ajustar según el puerto real
+BAUDRATE = 921600
+
+# Mapeo de Nodos Físicos a Posiciones Lógicas
+# ID: Identificador único del nodo SG-Link-200
+# CH: Canal de datos (usualmente "ch1" para strain gauge)
+NODOS_CONFIG = {
+    "celda_sup_izq": {"id": 11111, "ch": "ch1"},
+    "celda_sup_der": {"id": 22222, "ch": "ch1"},
+    "celda_inf_izq": {"id": 67890, "ch": "ch1"},
+    "celda_inf_der": {"id": 12345, "ch": "ch1"},
+}
+
+# Configuración de la Interfaz
+APP_TITLE = "Sistema de Pesaje Industrial (Balanza-Py)"
 APP_SIZE = "1280x800"
 THEME_NAME = "litera"
-
-# MSCL Configuration
-if getattr(sys, 'frozen', False):
-    # If running as a PyInstaller bundle
-    CURRENT_DIR = sys._MEIPASS
-else:
-    # If running as a script
-    CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-
-MSCL_DIR = os.path.join(CURRENT_DIR, "MSCL", "x64", "Release")
-
-# Connection Settings
-DEFAULT_PORTS = ["COM3", "COM4", "COM5", "COM6", "COM7", "COM8"]
-BAUD_RATE = 921600 # Default for MSCL BaseStation usually
-SIMULATION_MODE = True # Set to True to force simulated sensors without hardware
-
-# Data Settings
-MAX_SENSORS = 4
