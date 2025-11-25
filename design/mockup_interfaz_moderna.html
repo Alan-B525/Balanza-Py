@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitor de Celdas MSCL - Modern UI</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-body: #f0f2f5;
+            --bg-card: #ffffff;
+            --primary: #2563eb;
+            --primary-dark: #1d4ed8;
+            --secondary: #64748b;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+            --border-color: #e2e8f0;
+            --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+            --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+            --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+            --radius: 12px;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            margin: 0;
+            padding: 20px;
+            height: 100vh;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Header Moderno */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background-color: var(--bg-card);
+            padding: 15px 25px;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow-sm);
+            margin-bottom: 20px;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .logo-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 20px;
+        }
+
+        .app-title {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--text-main);
+            letter-spacing: -0.5px;
+        }
+
+        .app-subtitle {
+            font-size: 12px;
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn {
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-family: 'Inter', sans-serif;
+            font-weight: 600;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn:active { transform: scale(0.98); }
+
+        .btn-connect {
+            background-color: var(--success);
+            color: white;
+            padding: 10px 20px;
+            font-size: 14px;
+            box-shadow: 0 2px 4px rgba(16, 185, 129, 0.2);
+        }
+        .btn-connect:hover { background-color: #059669; }
+
+        .btn-exit {
+            background-color: #fee2e2;
+            color: var(--danger);
+            width: 40px;
+            height: 40px;
+            font-size: 18px;
+        }
+        .btn-exit:hover { background-color: #fecaca; }
+
+        /* Layout Principal */
+        .main-grid {
+            display: grid;
+            grid-template-columns: 1fr 380px 1fr;
+            grid-template-rows: 1fr 1fr;
+            gap: 20px;
+            flex-grow: 1;
+            margin-bottom: 20px;
+        }
+
+        /* Tarjetas de Sensores */
+        .sensor-card {
+            background-color: var(--bg-card);
+            border-radius: var(--radius);
+            padding: 20px;
+            box-shadow: var(--shadow-md);
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            border: 1px solid var(--border-color);
+            transition: transform 0.2s;
+        }
+        
+        .sensor-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-lg); }
+
+        .sensor-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .sensor-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .signal-badge {
+            font-size: 11px;
+            padding: 4px 8px;
+            border-radius: 20px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .signal-good { background-color: #d1fae5; color: #059669; }
+        .signal-mid { background-color: #fef3c7; color: #d97706; }
+        .signal-bad { background-color: #fee2e2; color: #dc2626; }
+
+        .sensor-value-container {
+            flex-grow: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-color: #f8fafc;
+            border-radius: 8px;
+            border: 1px solid #f1f5f9;
+        }
+
+        .sensor-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 42px;
+            font-weight: 700;
+            color: var(--text-main);
+        }
+        .unit { font-size: 16px; color: var(--text-muted); margin-left: 5px; }
+
+        /* Panel Central */
+        .control-panel {
+            grid-column: 2;
+            grid-row: 1 / span 2;
+            background: white;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow-lg);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            border: 1px solid var(--border-color);
+        }
+
+        .total-section {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: white;
+            padding: 40px 20px;
+            text-align: center;
+        }
+
+        .total-label {
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            opacity: 0.9;
+            margin-bottom: 10px;
+        }
+
+        .total-amount {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 64px;
+            font-weight: 700;
+            line-height: 1;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .actions-section {
+            padding: 30px;
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            gap: 20px;
+        }
+
+        .btn-tare {
+            background-color: var(--warning);
+            color: white;
+            font-size: 24px;
+            padding: 25px;
+            box-shadow: 0 4px 6px rgba(245, 158, 11, 0.3);
+        }
+        .btn-tare:hover { background-color: #d97706; transform: translateY(-1px); }
+
+        .tare-display {
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 14px;
+            background-color: #f8fafc;
+            padding: 10px;
+            border-radius: 6px;
+            border: 1px dashed var(--border-color);
+        }
+
+        .btn-reset {
+            background-color: white;
+            color: var(--text-muted);
+            border: 2px solid #e2e8f0;
+            padding: 15px;
+            font-size: 16px;
+        }
+        .btn-reset:hover { border-color: var(--text-muted); color: var(--text-main); }
+
+        /* Log Area */
+        .log-panel {
+            background-color: var(--bg-card);
+            border-radius: var(--radius);
+            padding: 15px;
+            height: 120px;
+            box-shadow: var(--shadow-sm);
+            border: 1px solid var(--border-color);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: var(--text-muted);
+            overflow-y: auto;
+        }
+        
+        .log-entry { margin-bottom: 4px; border-bottom: 1px solid #f1f5f9; padding-bottom: 2px; }
+        .log-time { color: var(--primary); font-weight: bold; margin-right: 8px; }
+
+        /* Responsive Grid Placement */
+        .cell-1 { grid-column: 1; grid-row: 1; }
+        .cell-2 { grid-column: 3; grid-row: 1; }
+        .cell-3 { grid-column: 1; grid-row: 2; }
+        .cell-4 { grid-column: 3; grid-row: 2; }
+
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <div class="brand">
+            <div class="logo-icon">M</div>
+            <div>
+                <div class="app-title">Sistema de Pesaje Industrial</div>
+                <div class="app-subtitle">v2.0.1 &bull; Conectado a BaseStation</div>
+            </div>
+        </div>
+        <div class="header-actions">
+            <button class="btn btn-connect">
+                <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                Sistema Online
+            </button>
+            <button class="btn btn-exit">✕</button>
+        </div>
+    </div>
+
+    <div class="main-grid">
+        <!-- Celda 1 -->
+        <div class="sensor-card cell-1">
+            <div class="sensor-header">
+                <div class="sensor-name">Nodo 12345 - CH1</div>
+                <div class="signal-badge signal-good">
+                    <svg width="12" height="12" fill="currentColor" viewBox="0 0 20 20"><path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zm6-4a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7zm6-3a1 1 0 011-1h2a1 1 0 011 1v12a1 1 0 01-1 1h-2a1 1 0 01-1-1V4z"/></svg>
+                    -45 dBm
+                </div>
+            </div>
+            <div class="sensor-value-container">
+                <div class="sensor-value">1,250.5<span class="unit">kg</span></div>
+            </div>
+        </div>
+
+        <!-- Celda 2 -->
+        <div class="sensor-card cell-2">
+            <div class="sensor-header">
+                <div class="sensor-name">Nodo 67890 - CH1</div>
+                <div class="signal-badge signal-mid">
+                    <svg width="12" height="12" fill="currentColor" viewBox="0 0 20 20"><path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zm6-4a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7z"/></svg>
+                    -72 dBm
+                </div>
+            </div>
+            <div class="sensor-value-container">
+                <div class="sensor-value">1,248.0<span class="unit">kg</span></div>
+            </div>
+        </div>
+
+        <!-- Panel Central -->
+        <div class="control-panel">
+            <div class="total-section">
+                <div class="total-label">Peso Neto Total</div>
+                <div class="total-amount">5,002.1 <span style="font-size: 24px; opacity: 0.8;">kg</span></div>
+            </div>
+            
+            <div class="actions-section">
+                <button class="btn btn-tare">TARA</button>
+                <div class="tare-display">Tara Acumulada: <strong>120.5 kg</strong></div>
+                <button class="btn btn-reset">Reiniciar Tara</button>
+            </div>
+        </div>
+
+        <!-- Celda 3 -->
+        <div class="sensor-card cell-3">
+            <div class="sensor-header">
+                <div class="sensor-name">Nodo 11111 - CH1</div>
+                <div class="signal-badge signal-good">
+                    <svg width="12" height="12" fill="currentColor" viewBox="0 0 20 20"><path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zm6-4a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7zm6-3a1 1 0 011-1h2a1 1 0 011-1h2a1 1 0 011 1v12a1 1 0 01-1 1h-2a1 1 0 01-1-1V4z"/></svg>
+                    -50 dBm
+                </div>
+            </div>
+            <div class="sensor-value-container">
+                <div class="sensor-value">1,251.2<span class="unit">kg</span></div>
+            </div>
+        </div>
+
+        <!-- Celda 4 -->
+        <div class="sensor-card cell-4">
+            <div class="sensor-header">
+                <div class="sensor-name">Nodo 22222 - CH1</div>
+                <div class="signal-badge signal-bad">
+                    <svg width="12" height="12" fill="currentColor" viewBox="0 0 20 20"><path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5z"/></svg>
+                    -85 dBm
+                </div>
+            </div>
+            <div class="sensor-value-container">
+                <div class="sensor-value">1,252.4<span class="unit">kg</span></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="log-panel">
+        <div class="log-entry"><span class="log-time">10:00:00</span> Sistema iniciado correctamente.</div>
+        <div class="log-entry"><span class="log-time">10:00:02</span> Conectado a BaseStation en COM3.</div>
+        <div class="log-entry"><span class="log-time">10:00:05</span> Nodo 12345 detectado (RSSI: -45 dBm).</div>
+        <div class="log-entry"><span class="log-time">10:00:06</span> Nodo 67890 detectado (RSSI: -72 dBm).</div>
+        <div class="log-entry"><span class="log-time">10:00:06</span> Nodo 11111 detectado (RSSI: -50 dBm).</div>
+        <div class="log-entry"><span class="log-time">10:00:07</span> Nodo 22222 detectado (RSSI: -85 dBm).</div>
+    </div>
+
+</body>
+</html>
