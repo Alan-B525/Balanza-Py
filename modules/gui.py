@@ -414,8 +414,8 @@ class BalanzaGUI(ttk.Window):
         conn_type_var = tk.StringVar(value=current_config["connection_type"])
         
         # Contenedores para opciones
-        lf_serial = ttk.LabelFrame(tab_conn, text="Configuración Serial", padding=15)
-        lf_tcp = ttk.LabelFrame(tab_conn, text="Configuración TCP/IP", padding=15)
+        lf_serial = ttk.Labelframe(tab_conn, text="Configuración Serial", padding=15)
+        lf_tcp = ttk.Labelframe(tab_conn, text="Configuración TCP/IP", padding=15)
 
         # Función para alternar visibilidad
         def toggle_connection_options():
@@ -432,21 +432,23 @@ class BalanzaGUI(ttk.Window):
         ttk.Radiobutton(frame_radios, text="Serial (USB)", variable=conn_type_var, value="SERIAL", command=toggle_connection_options).pack(side=LEFT)
         
         # Serial Options (Manual)
-        ttk.Label(lf_serial, text="Puerto COM:").pack(anchor="w")
-        entry_serial = ttk.Entry(lf_serial)
+        ttk.Label(lf_serial, text="Puerto COM:", font=("Segoe UI", 11)).pack(anchor="w")
+        entry_serial = ttk.Entry(lf_serial, font=("Segoe UI", 14))
         entry_serial.insert(0, current_config["serial_port"])
-        entry_serial.pack(fill=X, pady=(5, 0))
+        entry_serial.pack(fill=X, pady=(5, 0), ipady=8)
         
         # TCP Options
-        ttk.Label(lf_tcp, text="Dirección IP:").pack(anchor="w")
-        entry_ip = ttk.Entry(lf_tcp)
+        ttk.Label(lf_tcp, text="Dirección IP:", font=("Segoe UI", 11)).pack(anchor="w")
+        entry_ip = ttk.Entry(lf_tcp, font=("Segoe UI", 14))
+        entry_ip.delete(0, END)
         entry_ip.insert(0, current_config["tcp_ip"])
-        entry_ip.pack(fill=X, pady=(5, 10))
+        entry_ip.pack(fill=X, pady=(5, 10), ipady=8)
         
-        ttk.Label(lf_tcp, text="Puerto TCP:").pack(anchor="w")
-        entry_tcp_port = ttk.Entry(lf_tcp)
+        ttk.Label(lf_tcp, text="Puerto TCP:", font=("Segoe UI", 11)).pack(anchor="w")
+        entry_tcp_port = ttk.Entry(lf_tcp, font=("Segoe UI", 14))
+        entry_tcp_port.delete(0, END)
         entry_tcp_port.insert(0, current_config["tcp_port"])
-        entry_tcp_port.pack(fill=X, pady=(5, 0))
+        entry_tcp_port.pack(fill=X, pady=(5, 0), ipady=8)
 
         # Inicializar estado visual
         toggle_connection_options()
@@ -471,7 +473,7 @@ class BalanzaGUI(ttk.Window):
         
         row = 0
         for key, label_text in sensor_labels.items():
-            lf_node = ttk.LabelFrame(nodes_container, text=label_text, padding=10)
+            lf_node = ttk.Labelframe(nodes_container, text=label_text, padding=10)
             lf_node.pack(fill=X, pady=5)
             
             current_node_data = current_config["nodes"].get(key, {"id": 0, "ch": "ch1"})
