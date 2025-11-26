@@ -1,15 +1,27 @@
-# Configuración del Sistema de Pesaje
+# Configuração do Sistema de Pesagem
+import sys
+import os
 
-# Modo de ejecución: "MOCK" (Simulación) o "REAL" (Hardware MSCL)
+# Configurar path do MSCL antes de qualquer import
+# O MSCL está em: D:\Carpeta Becario 19\Nueva carpeta (2)\Balanza\MSCL\x64\Release
+_MSCL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MSCL", "x64", "Release")
+if os.path.exists(_MSCL_PATH) and _MSCL_PATH not in sys.path:
+    sys.path.insert(0, _MSCL_PATH)
+    print(f"[CONFIG] MSCL path adicionado: {_MSCL_PATH}")
+
+# Modo de execução:
+#   "MOCK"      - Simulação simples sem MSCL (desenvolvimento rápido)
+#   "MSCL_MOCK" - Simulação usando estruturas MSCL (teste de integração)
+#   "REAL"      - Hardware real com MSCL
 MODO_EJECUCION = "MOCK" 
 
-# Configuración Serial (Solo para modo REAL)
-PUERTO_COM = "COM3" # Ajustar según el puerto real
+# Configuração Serial (Somente para modo REAL)
+PUERTO_COM = "COM3" # Ajustar conforme a porta real
 BAUDRATE = 921600
 
-# Mapeo de Nodos Físicos a Posiciones Lógicas
-# ID: Identificador único del nodo SG-Link-200
-# CH: Canal de datos (usualmente "ch1" para strain gauge)
+# Mapeamento de Nós Físicos para Posições Lógicas
+# ID: Identificador único do nó SG-Link-200
+# CH: Canal de dados (geralmente "ch1" para strain gauge)
 NODOS_CONFIG = {
     "celda_sup_izq": {"id": 11111, "ch": "ch1"},
     "celda_sup_der": {"id": 22222, "ch": "ch1"},
@@ -17,7 +29,12 @@ NODOS_CONFIG = {
     "celda_inf_der": {"id": 12345, "ch": "ch1"},
 }
 
-# Configuración de la Interfaz
-APP_TITLE = "Sistema de Pesaje Industrial (Balanza-Py)"
+# Configuração de robustez (para modo REAL)
+RECONNECT_ATTEMPTS = 3
+NODE_TIMEOUT_SECONDS = 5.0
+DATA_TIMEOUT_MS = 100
+
+# Configuração da Interface
+APP_TITLE = "Sistema de Pesagem Industrial (Balanza-Py)"
 APP_SIZE = "1280x800"
 THEME_NAME = "litera"

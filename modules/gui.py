@@ -478,13 +478,24 @@ class BalanzaGUI(ttk.Window):
             self.destroy()
 
     def show_configuration_dialog(self):
-        """Abre un diálogo para configurar conexión y nodos."""
+        """Abre um diálogo para configurar conexão, modo e nós."""
         import json
         import os
         
-        # Cargar configuración actual o usar defaults
-        config_path = "settings.json"
+        # Verificar disponibilidade do MSCL
+        try:
+            from modules.factory import check_mscl_installation, get_available_modes
+            mscl_info = check_mscl_installation()
+            available_modes = get_available_modes()
+        except:
+            mscl_info = {"installed": False}
+            available_modes = {"MOCK": {"available": True}, "MSCL_MOCK": {"available": False}, "REAL": {"available": False}}
+        
+        # Carregar configuração atual ou usar defaults
+        # Usar caminho absoluto para garantir que funcione de qualquer diretório
+        config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "settings.json")
         current_config = {
+            "execution_mode": "MOCK",
             "connection_type": "TCP",
             "serial_port": "COM3",
             "tcp_ip": "192.168.0.100",
@@ -503,20 +514,20 @@ class BalanzaGUI(ttk.Window):
         # Criar janela modal - Maior para tablet
         dialog = ttk.Toplevel(self)
         dialog.title("⚙ Configuração do Sistema")
-        dialog.geometry("900x800")
+        dialog.geometry("900x850")
         dialog.resizable(False, False)
         
         # Centrar
         try:
             x = self.winfo_x() + (self.winfo_width() // 2) - 450
-            y = self.winfo_y() + (self.winfo_height() // 2) - 400
+            y = self.winfo_y() + (self.winfo_height() // 2) - 425
             dialog.geometry(f"+{x}+{y}")
         except:
             pass
 
         # Estilos personalizados para abas grandes
         style = ttk.Style()
-        style.configure('BigTab.TNotebook.Tab', font=('Segoe UI', 14, 'bold'), padding=(30, 15))
+        style.configure('BigTab.TNotebook.Tab', font=('Segoe UI', 14, 'bold'), padding=(25, 12))
         style.configure('BigRadio.TRadiobutton', font=('Segoe UI', 14))
 
         # Container principal
@@ -527,6 +538,90 @@ class BalanzaGUI(ttk.Window):
         notebook = ttk.Notebook(main_frame, style='BigTab.TNotebook')
         notebook.pack(fill=BOTH, expand=YES)
         
+        # ==================== Tab MODO ====================
+        tab_mode = ttk.Frame(notebook, padding=30)
+        notebook.add(tab_mode, text="   🔧 MODO   ")
+        
+        ttk.Label(tab_mode, text="Modo de Execução", font=("Segoe UI", 18, "bold")).pack(anchor="w", pady=(0, 20))
+        
+        # Info sobre MSCL
+        mscl_frame = ttk.Labelframe(tab_mode, text="Status da Biblioteca MSCL", padding=20)
+        mscl_frame.pack(fill=X, pady=(0, 25))
+        
+        if mscl_info["installed"]:
+            mscl_status = "✅ MSCL Instalado e Disponível"
+            mscl_color = "#22c55e"
+        else:
+            mscl_status = "❌ MSCL Não Encontrado (modos REAL e MSCL_MOCK indisponíveis)"
+            mscl_color = "#ef4444"
+        
+        ttk.Label(mscl_frame, text=mscl_status, font=("Segoe UI", 14), foreground=mscl_color).pack(anchor="w")
+        
+        # Selector de modo
+        mode_var = tk.StringVar(value=current_config.get("execution_mode", "MOCK"))
+        
+        modes_frame = ttk.Frame(tab_mode)
+        modes_frame.pack(fill=X, pady=15)
+        
+        # MOCK Mode
+        mode_mock_frame = ttk.Labelframe(modes_frame, text="", padding=20)
+        mode_mock_frame.pack(fill=X, pady=10)
+        
+        rb_mock = ttk.Radiobutton(
+            mode_mock_frame,
+            text="   MOCK - Simulação Simples",
+            variable=mode_var,
+            value="MOCK",
+            style='BigRadio.TRadiobutton'
+        )
+        rb_mock.pack(anchor="w", ipady=8)
+        ttk.Label(
+            mode_mock_frame, 
+            text="     Simulação básica para desenvolvimento. Não requer hardware nem MSCL.",
+            font=("Segoe UI", 11),
+            foreground="#64748b"
+        ).pack(anchor="w", padx=(30, 0))
+        
+        # MSCL_MOCK Mode
+        mode_mscl_mock_frame = ttk.Labelframe(modes_frame, text="", padding=20)
+        mode_mscl_mock_frame.pack(fill=X, pady=10)
+        
+        rb_mscl_mock = ttk.Radiobutton(
+            mode_mscl_mock_frame,
+            text="   MSCL_MOCK - Simulação com Estruturas MSCL",
+            variable=mode_var,
+            value="MSCL_MOCK",
+            style='BigRadio.TRadiobutton',
+            state="normal" if available_modes.get("MSCL_MOCK", {}).get("available", False) else "disabled"
+        )
+        rb_mscl_mock.pack(anchor="w", ipady=8)
+        ttk.Label(
+            mode_mscl_mock_frame, 
+            text="     Teste de integração usando estruturas MSCL simuladas. Requer biblioteca MSCL.",
+            font=("Segoe UI", 11),
+            foreground="#64748b"
+        ).pack(anchor="w", padx=(30, 0))
+        
+        # REAL Mode
+        mode_real_frame = ttk.Labelframe(modes_frame, text="", padding=20)
+        mode_real_frame.pack(fill=X, pady=10)
+        
+        rb_real = ttk.Radiobutton(
+            mode_real_frame,
+            text="   REAL - Hardware MicroStrain",
+            variable=mode_var,
+            value="REAL",
+            style='BigRadio.TRadiobutton',
+            state="normal" if available_modes.get("REAL", {}).get("available", False) else "disabled"
+        )
+        rb_real.pack(anchor="w", ipady=8)
+        ttk.Label(
+            mode_real_frame, 
+            text="     Conexão real com BaseStation e nós SG-Link. Requer hardware e MSCL.",
+            font=("Segoe UI", 11),
+            foreground="#64748b"
+        ).pack(anchor="w", padx=(30, 0))
+
         # ==================== Tab Conexão ====================
         tab_conn = ttk.Frame(notebook, padding=30)
         notebook.add(tab_conn, text="   🔌 CONEXÃO   ")
@@ -678,11 +773,20 @@ class BalanzaGUI(ttk.Window):
             node_entries[key] = {"id": e_id, "ch": e_ch}
 
         # ==================== Botões de Ação ====================
-        btn_frame = ttk.Frame(dialog, padding=30)
-        btn_frame.pack(fill=X, side=BOTTOM)
+        # Frame de botões fixo na parte inferior com borda superior
+        btn_frame = ttk.Frame(dialog, padding=(30, 20))
+        btn_frame.pack(fill=X, side=BOTTOM, before=main_frame)
+        
+        # Separador visual
+        ttk.Separator(btn_frame, orient="horizontal").pack(fill=X, pady=(0, 15))
+        
+        # Container para botões
+        btn_container = ttk.Frame(btn_frame)
+        btn_container.pack(fill=X)
         
         def save_config():
             new_config = {
+                "execution_mode": mode_var.get(),
                 "connection_type": conn_type_var.get(),
                 "serial_port": entry_serial.get(),
                 "tcp_ip": entry_ip.get(),
@@ -711,24 +815,24 @@ class BalanzaGUI(ttk.Window):
                 from tkinter import messagebox
                 messagebox.showerror("Erro", f"Não foi possível salvar: {e}", parent=dialog)
 
-        # Botões GRANDES para tablet
-        ttk.Button(
-            btn_frame, 
+        # Botões GRANDES para tablet - más visibles
+        btn_salvar = ttk.Button(
+            btn_container, 
             text="💾  SALVAR  ", 
             bootstyle="success", 
             command=save_config,
-            padding=(40, 20),
-            width=16
-        ).pack(side=RIGHT)
+            padding=(50, 18)
+        )
+        btn_salvar.pack(side=RIGHT, ipadx=20, ipady=5)
         
-        ttk.Button(
-            btn_frame, 
+        btn_cancelar = ttk.Button(
+            btn_container, 
             text="  CANCELAR  ", 
-            bootstyle="secondary", 
+            bootstyle="secondary-outline", 
             command=dialog.destroy,
-            padding=(40, 20),
-            width=16
-        ).pack(side=RIGHT, padx=20)
+            padding=(50, 18)
+        )
+        btn_cancelar.pack(side=RIGHT, padx=25, ipadx=20, ipady=5)
 
         dialog.transient(self)
         dialog.grab_set()
