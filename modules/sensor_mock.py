@@ -6,27 +6,27 @@ from .interfaces import ISistemaPesaje
 
 class MockPesaje(ISistemaPesaje):
     """
-    Simulação do sistema de pesagem para desenvolvimento sem hardware.
-    Gera dados com ruído e simula latência de rede.
+    Simulación del sistema de pesaje para desarrollo sin hardware.
+    Genera datos con ruido y simula latencia de red.
     """
     
     def __init__(self, nodos_config: Dict):
         self.nodos_config = nodos_config
         self._conectado = False
-        self._tares = {} # Armazena o valor de tara para cada nó/canal
-        self._base_values = {} # Valores base simulados para cada nó
+        self._tares = {} # Almacena el valor de tara para cada nodo/canal
+        self._base_values = {} # Valores base simulados para cada nodo
         
-        # Inicializar valores base aleatórios para simular carga inicial
+        # Inicializar valores base aleatorios para simular carga inicial
         for key, cfg in self.nodos_config.items():
             node_id = cfg['id']
             self._base_values[node_id] = random.uniform(5.0, 15.0) # Carga inicial simulada
             self._tares[node_id] = 0.0
 
     def conectar(self, puerto: str) -> bool:
-        print(f"[MOCK] Tentando conectar em {puerto}...")
-        time.sleep(1.5) # Simular latência de conexão
+        print(f"[MOCK] Intentando conectar en {puerto}...")
+        time.sleep(1.5) # Simular latencia de conexión
         self._conectado = True
-        print("[MOCK] Conexão bem-sucedida.")
+        print("[MOCK] Conexión exitosa.")
         return True
 
     def desconectar(self) -> None:
@@ -39,7 +39,7 @@ class MockPesaje(ISistemaPesaje):
             return []
 
         datos = []
-        # Simular latência de leitura do hardware
+        # Simular latencia de lectura de hardware
         time.sleep(0.05) 
 
         timestamp = time.time()
@@ -48,7 +48,7 @@ class MockPesaje(ISistemaPesaje):
             node_id = cfg['id']
             ch_name = cfg['ch']
             
-            # Gerar valor: Base + Ruído - Tara
+            # Generar valor: Base + Ruido - Tara
             ruido = random.uniform(-0.05, 0.05)
             valor_bruto = self._base_values[node_id] + ruido
             valor_neto = valor_bruto - self._tares.get(node_id, 0.0)
@@ -57,7 +57,7 @@ class MockPesaje(ISistemaPesaje):
                 'node_id': node_id,
                 'ch_name': ch_name,
                 'value': valor_neto,
-                'rssi': random.randint(-80, -40), # Simular sinal forte
+                'rssi': random.randint(-80, -40), # Simular señal fuerte
                 'timestamp': timestamp
             })
             
@@ -65,12 +65,12 @@ class MockPesaje(ISistemaPesaje):
 
     def tarar(self, node_id: int = None) -> None:
         """
-        No Mock, 'tarar' significa salvar o valor base atual como offset.
+        En el Mock, 'tarar' significa guardar el valor base actual como offset.
         """
         if node_id:
-            # Tarar um nó específico (simplificado: usa o valor base atual)
+            # Tarar un nodo específico (simplificado: usa el valor base actual)
             self._tares[node_id] = self._base_values[node_id]
-            print(f"[MOCK] Tara aplicada ao nó {node_id}")
+            print(f"[MOCK] Tara aplicada a nodo {node_id}")
         else:
             # Tarar todos
             for nid in self._base_values:
@@ -79,7 +79,7 @@ class MockPesaje(ISistemaPesaje):
 
     def reset_tarar(self) -> None:
         self._tares = {nid: 0.0 for nid in self._tares}
-        print("[MOCK] Tara reiniciada.")
+        print("[MOCK] Tara reseteada.")
 
     def esta_conectado(self) -> bool:
         return self._conectado
