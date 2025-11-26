@@ -72,29 +72,43 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
                 
                 if cmd == 'CONNECT':
                     try:
-                        # Usar la configuración activa
+                        # Usar a configuração ativa
                         connected = sistema_pesaje.conectar(ACTIVE_COM)
                         data_queue.put({'type': 'STATUS', 'payload': connected})
                         if connected:
-                            data_queue.put({'type': 'LOG', 'payload': f"Conectado exitosamente a {ACTIVE_COM}"})
+                            data_queue.put({'type': 'LOG', 'payload': f"Conectado com sucesso a {ACTIVE_COM}"})
                         else:
-                            data_queue.put({'type': 'LOG', 'payload': f"Fallo al conectar a {ACTIVE_COM}"})
+                            data_queue.put({'type': 'LOG', 'payload': f"Falha ao conectar a {ACTIVE_COM}"})
                     except Exception as e:
                         data_queue.put({'type': 'ERROR', 'payload': str(e)})
                     
                 elif cmd == 'DISCONNECT':
                     sistema_pesaje.desconectar()
                     data_queue.put({'type': 'STATUS', 'payload': False})
-                    data_queue.put({'type': 'LOG', 'payload': "Sistema desconectado por el usuario."})
+                    data_queue.put({'type': 'LOG', 'payload': "Sistema desconectado pelo usuário."})
                     
                 elif cmd == 'TARE':
                     procesador.set_tara()
                     data_queue.put({'type': 'LOG', 'payload': "Tara aplicada."})
-                    # Opcional: sistema_pesaje.tarar() si fuera hardware
+                    # Opcional: sistema_pesaje.tarar() se for hardware
                     
                 elif cmd == 'RESET_TARE':
                     procesador.reset_tara()
-                    data_queue.put({'type': 'LOG', 'payload': "Tara reiniciada a 0."})
+                    data_queue.put({'type': 'LOG', 'payload': "Tara reiniciada para 0."})
+                    
+                elif cmd == 'DISCOVER_NODES':
+                    # Descobrir nós usando MSCL
+                    if hasattr(sistema_pesaje, 'descubrir_nodos'):
+                        try:
+                            nodos = sistema_pesaje.descubrir_nodos()
+                            if nodos:
+                                data_queue.put({'type': 'LOG', 'payload': f"Nós encontrados: {nodos}"})
+                            else:
+                                data_queue.put({'type': 'LOG', 'payload': "Nenhum nó encontrado. Verifique a conexão."})
+                        except Exception as e:
+                            data_queue.put({'type': 'LOG', 'payload': f"Erro buscando nós: {e}"})
+                    else:
+                        data_queue.put({'type': 'LOG', 'payload': "Descoberta não disponível em modo simulação."})
                     
                 elif cmd == 'EXIT':
                     running = False
@@ -103,43 +117,43 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
         except queue.Empty:
             pass
             
-        # 2. Adquisición de Datos (Si está conectado)
+        # 2. Aquisição de Dados (Se está conectado)
         if sistema_pesaje.esta_conectado():
             try:
                 raw_data = sistema_pesaje.obtener_datos()
                 
-                # Siempre procesamos para verificar timeouts, incluso si raw_data está vacío
-                # (DataProcessor maneja el tiempo)
+                # Sempre processamos para verificar timeouts, mesmo se raw_data está vazio
+                # (DataProcessor gerencia o tempo)
                 datos_procesados = procesador.procesar(raw_data)
                 
-                # Extraer logs del procesador y enviarlos
+                # Extrair logs do processador e enviar
                 if 'logs' in datos_procesados:
                     for log_msg in datos_procesados['logs']:
                         data_queue.put({'type': 'LOG', 'payload': log_msg})
                 
-                # 4. Enviar a GUI
+                # 4. Enviar à GUI
                 data_queue.put({'type': 'DATA', 'payload': datos_procesados})
             except Exception as e:
-                data_queue.put({'type': 'LOG', 'payload': f"Error en adquisición: {e}"})
+                data_queue.put({'type': 'LOG', 'payload': f"Erro na aquisição: {e}"})
         
-        # Pequeña pausa para no saturar CPU
+        # Pequena pausa para não saturar CPU
         time.sleep(0.05)
 
 def main():
-    # Cargar configuración personalizada
+    # Carregar configuração personalizada
     load_custom_settings()
 
-    # Colas de comunicación thread-safe
+    # Filas de comunicação thread-safe
     data_queue = queue.Queue()
     command_queue = queue.Queue()
     
-    # Inicializar Lógica de Negocio
+    # Inicializar Lógica de Negócio
     procesador = DataProcessor(ACTIVE_NODOS)
     
-    # Inicializar Hardware (Mock o Real)
+    # Inicializar Hardware (Mock ou Real)
     sistema_pesaje = crear_sistema_pesaje(MODO_EJECUCION, ACTIVE_NODOS)
     
-    # Iniciar Hilo de Backend
+    # Iniciar Thread de Backend
     backend_thread = threading.Thread(
         target=hilo_adquisicion,
         args=(data_queue, command_queue, sistema_pesaje, procesador),
@@ -147,7 +161,7 @@ def main():
     )
     backend_thread.start()
     
-    # Iniciar GUI (Hilo Principal)
+    # Iniciar GUI (Thread Principal)
     app = BalanzaGUI(data_queue, command_queue)
     app.mainloop()
 

@@ -1,3 +1,4 @@
 ttkbootstrap
 Pillow
 pyinstaller
+# MSCL se incluye localmente en carpeta MSCL/

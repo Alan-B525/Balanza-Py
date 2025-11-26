@@ -47,13 +47,13 @@ class DataProcessor:
         # Organizar datos por nodo para procesamiento rápido
         datos_por_nodo = {d['node_id']: d['value'] for d in raw_data}
         
-        # Actualizar timestamps
+        # Atualizar timestamps
         for d in raw_data:
             nid = d['node_id']
             self._last_seen[nid] = current_time
             if not self._node_connected_state.get(nid, False):
                 self._node_connected_state[nid] = True
-                resultado['logs'].append(f"Nodo {nid} reconectado/detectado.")
+                resultado['logs'].append(f"Nó {nid} reconectado/detectado.")
         
         total_peso = 0.0
         total_tare = 0.0
@@ -61,20 +61,20 @@ class DataProcessor:
         for nombre_logico, cfg in self.nodos_config.items():
             node_id = cfg['id']
             
-            # Verificar Timeout (ej. 3 segundos)
+            # Verificar Timeout (ex. 3 segundos)
             is_connected = True
             if current_time - self._last_seen.get(node_id, 0) > 3.0:
                 is_connected = False
                 if self._node_connected_state.get(node_id, False):
                     self._node_connected_state[node_id] = False
-                    resultado['logs'].append(f"ALERTA: Nodo {node_id} ({nombre_logico}) perdió conexión.")
+                    resultado['logs'].append(f"ALERTA: Nó {node_id} ({nombre_logico}) perdeu conexão.")
             
-            # Obtener valor crudo si llegó en este ciclo
+            # Obter valor bruto se chegou neste ciclo
             if node_id in datos_por_nodo:
                 val_crudo = datos_por_nodo[node_id]
                 self._buffers[node_id].append(val_crudo)
             
-            # Calcular promedio móvil (si hay datos)
+            # Calcular média móvel (se há dados)
             if self._buffers[node_id]:
                 promedio = sum(self._buffers[node_id]) / len(self._buffers[node_id])
             else:
