@@ -12,6 +12,7 @@ import os
 import time
 import threading
 import queue
+import random
 from typing import Dict
 
 # Garantir que os modulos podem ser importados
@@ -140,6 +141,90 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
                 elif cmd == 'EXIT':
                     running = False
                     sistema_pesaje.desconectar()
+                
+                # === Comandos de TEST (solo en modo MOCK) ===
+                elif cmd == 'TEST_SENSOR_OFFLINE':
+                    node_id = cmd_msg.get('node_id')
+                    if hasattr(sistema_pesaje, 'simular_desconexao_no'):
+                        sistema_pesaje.simular_desconexao_no(node_id)
+                        data_queue.put({'type': 'LOG', 'payload': f"[TEST] Sensor {node_id} marcado como offline"})
+                    else:
+                        data_queue.put({'type': 'LOG', 'payload': "[TEST] Comando não disponível neste modo"})
+                
+                elif cmd == 'TEST_SENSOR_ONLINE':
+                    node_id = cmd_msg.get('node_id')
+                    if hasattr(sistema_pesaje, 'simular_reconexao_no'):
+                        sistema_pesaje.simular_reconexao_no(node_id)
+                        data_queue.put({'type': 'LOG', 'payload': f"[TEST] Sensor {node_id} reconectado"})
+                
+                elif cmd == 'TEST_RAMP_UP':
+                    weight = cmd_msg.get('weight', 50.0)
+                    # Soportar MSCL_MOCK con _mock_nodes
+                    if hasattr(sistema_pesaje, '_mock_nodes'):
+                        per_node = weight / len(sistema_pesaje._mock_nodes)
+                        for node in sistema_pesaje._mock_nodes.values():
+                            if hasattr(node, 'apply_load'):
+                                node.apply_load(per_node)
+                        data_queue.put({'type': 'LOG', 'payload': f"[TEST] Rampa de carga: +{weight}t distribuídos"})
+                    # Soportar MOCK simple con _base_values
+                    elif hasattr(sistema_pesaje, '_base_values'):
+                        per_node = weight / len(sistema_pesaje._base_values)
+                        for node_id in sistema_pesaje._base_values:
+                            sistema_pesaje._base_values[node_id] += per_node
+                        data_queue.put({'type': 'LOG', 'payload': f"[TEST] Rampa de carga: +{weight}t distribuídos"})
+                
+                elif cmd == 'TEST_RAMP_DOWN':
+                    if hasattr(sistema_pesaje, '_mock_nodes'):
+                        for node in sistema_pesaje._mock_nodes.values():
+                            if hasattr(node, 'reset_to_base'):
+                                node.reset_to_base(5.0)
+                        data_queue.put({'type': 'LOG', 'payload': "[TEST] Descarga simulada"})
+                    elif hasattr(sistema_pesaje, '_base_values'):
+                        for node_id in sistema_pesaje._base_values:
+                            sistema_pesaje._base_values[node_id] = random.uniform(5.0, 8.0)
+                        data_queue.put({'type': 'LOG', 'payload': "[TEST] Descarga simulada"})
+                
+                elif cmd == 'TEST_SPIKE':
+                    magnitude = cmd_msg.get('magnitude', 10.0)
+                    if hasattr(sistema_pesaje, '_mock_nodes'):
+                        per_node = magnitude / len(sistema_pesaje._mock_nodes)
+                        for node in sistema_pesaje._mock_nodes.values():
+                            if hasattr(node, 'apply_modifiers'):
+                                node.apply_modifiers({'spike': per_node})
+                        data_queue.put({'type': 'LOG', 'payload': f"[TEST] Impacto: +{magnitude}t"})
+                    elif hasattr(sistema_pesaje, '_base_values'):
+                        # Para MOCK simple, solo incrementar temporalmente
+                        per_node = magnitude / len(sistema_pesaje._base_values)
+                        for node_id in sistema_pesaje._base_values:
+                            sistema_pesaje._base_values[node_id] += per_node
+                        data_queue.put({'type': 'LOG', 'payload': f"[TEST] Impacto: +{magnitude}t"})
+                
+                elif cmd == 'TEST_NOISE':
+                    if hasattr(sistema_pesaje, '_mock_nodes'):
+                        for node in sistema_pesaje._mock_nodes.values():
+                            if hasattr(node, 'apply_modifiers'):
+                                node.apply_modifiers({'noise': 0.5})
+                        data_queue.put({'type': 'LOG', 'payload': "[TEST] Alto ruído activado"})
+                    elif hasattr(sistema_pesaje, '_test_modifiers') or hasattr(sistema_pesaje, '_base_values'):
+                        sistema_pesaje._test_modifiers = {nid: {'noise': 0.5} for nid in sistema_pesaje._base_values}
+                        data_queue.put({'type': 'LOG', 'payload': "[TEST] Alto ruído activado"})
+                
+                elif cmd == 'TEST_RESET_ALL':
+                    if hasattr(sistema_pesaje, '_mock_nodes'):
+                        for node in sistema_pesaje._mock_nodes.values():
+                            if hasattr(node, 'set_offline'):
+                                node.set_offline(False)
+                            if hasattr(node, 'apply_modifiers'):
+                                node.apply_modifiers({})
+                            if hasattr(node, 'reset_to_base'):
+                                node.reset_to_base()
+                        data_queue.put({'type': 'LOG', 'payload': "[TEST] Todos os testes resetados"})
+                    elif hasattr(sistema_pesaje, '_base_values'):
+                        sistema_pesaje._offline_nodes = set()
+                        sistema_pesaje._test_modifiers = {}
+                        for node_id in sistema_pesaje._base_values:
+                            sistema_pesaje._base_values[node_id] = random.uniform(5.0, 15.0)
+                        data_queue.put({'type': 'LOG', 'payload': "[TEST] Todos os testes resetados"})
                     
         except queue.Empty:
             pass

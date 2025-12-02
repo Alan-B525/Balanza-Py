@@ -169,12 +169,30 @@ class MSCLMockPesaje(ISistemaPesaje):
         """
         # Este método seria usado em testes unitários
         pass
+    
+    def apply_test_modifiers(self, modifiers: Dict[int, Dict[str, float]]) -> None:
+        """
+        Aplica modificadores de escenarios de prueba.
+        
+        Args:
+            modifiers: Dict {node_id: {modifier_name: value}}
+        """
+        for node_id, mods in modifiers.items():
+            if node_id in self._mock_nodes:
+                self._mock_nodes[node_id].apply_modifiers(mods)
 
 
 class MockNodeSimulator:
     """
     Simula o comportamento de um nó SG-Link wireless.
     Gera dados realistas incluindo ruído, drift e falhas ocasionais.
+    
+    Soporta modificadores externos para escenarios de prueba:
+    - noise: amplitud de ruido adicional
+    - drift_accumulated: deriva acumulada
+    - spike: valor adicional momentáneo
+    - ramp_offset: offset de rampa de carga
+    - offline: forzar estado offline
     """
 
     def __init__(self, node_id: int, channel: str, base_value: float):
@@ -189,30 +207,65 @@ class MockNodeSimulator:
         self.noise_level = 0.02  # ±2% de ruído
         self.drift_rate = 0.001  # Drift lento
         self._drift_direction = random.choice([-1, 1])
+        
+        # Modificadores externos (de escenarios de prueba)
+        self._external_modifiers: Dict[str, float] = {}
+
+    def apply_modifiers(self, modifiers: Dict[str, float]) -> None:
+        """Aplica modificadores de escenario de prueba."""
+        self._external_modifiers = modifiers
+        
+        # Aplicar offline si está en modificadores
+        if 'offline' in modifiers:
+            self._offline = modifiers['offline']
 
     def generate_sweep(self) -> Dict[str, Any]:
         """Gera um sweep de dados simulado."""
-        if self._offline:
+        # Verificar offline (interno o externo)
+        if self._offline or self._external_modifiers.get('offline', False):
             return None
         
-        # Aplicar drift lento
+        # Aplicar drift lento (natural)
         self.base_value += self.drift_rate * self._drift_direction
         
         # Inverter direção ocasionalmente
         if random.random() < 0.01:
             self._drift_direction *= -1
         
-        # Calcular valor com ruído
-        noise = random.gauss(0, self.noise_level * self.base_value)
+        # Calcular valor con ruido base
+        noise_amp = self.noise_level
+        
+        # Añadir ruido extra de escenario
+        if 'noise' in self._external_modifiers:
+            noise_amp += self._external_modifiers['noise']
+        
+        noise = random.gauss(0, noise_amp * self.base_value)
         self.current_value = self.base_value + noise
         
+        # Añadir drift de escenario
+        if 'drift_accumulated' in self._external_modifiers:
+            self.current_value += self._external_modifiers['drift_accumulated']
+        
+        # Añadir spike
+        if 'spike' in self._external_modifiers:
+            self.current_value += self._external_modifiers['spike']
+        
+        # Añadir offset de rampa
+        if 'ramp_offset' in self._external_modifiers:
+            self.current_value += self._external_modifiers['ramp_offset']
+        
         self._tick += 1
+        
+        # RSSI afectado por modificadores
+        rssi = random.randint(-75, -45)
+        if 'rssi' in self._external_modifiers:
+            rssi = int(self._external_modifiers['rssi'])
         
         return {
             'node_id': self.node_id,
             'channel': self.channel,
-            'value': self.current_value,
-            'rssi': random.randint(-75, -45),
+            'value': max(0, self.current_value),  # No valores negativos
+            'rssi': rssi,
             'sample_rate': 256,
             'tick': self._tick
         }
@@ -228,6 +281,14 @@ class MockNodeSimulator:
         """
         self.base_value += additional_weight
         print(f"[MockNode {self.node_id}] Carga aplicada: +{additional_weight}. Novo base: {self.base_value:.2f}")
+    
+    def reset_to_base(self, new_base: float = None) -> None:
+        """Resetea el sensor a un valor base."""
+        if new_base is not None:
+            self.base_value = new_base
+        self.current_value = self.base_value
+        self._external_modifiers.clear()
+        print(f"[MockNode {self.node_id}] Reset a valor base: {self.base_value:.2f}")
 
 
 # ============================================================

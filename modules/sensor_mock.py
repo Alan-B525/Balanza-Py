@@ -43,20 +43,40 @@ class MockPesaje(ISistemaPesaje):
         time.sleep(0.05) 
 
         timestamp = time.time()
+        
+        # Obtener nodos offline
+        offline_nodes = getattr(self, '_offline_nodes', set())
+        # Obtener modificadores de test
+        test_modifiers = getattr(self, '_test_modifiers', {})
 
         for key, cfg in self.nodos_config.items():
             node_id = cfg['id']
             ch_name = cfg['ch']
             
+            # Saltar nodos offline
+            if node_id in offline_nodes:
+                continue
+            
             # Generar valor: Base + Ruido - Tara
             ruido = random.uniform(-0.05, 0.05)
+            
+            # Aplicar modificadores de ruido de test
+            node_mods = test_modifiers.get(node_id, {})
+            if 'noise' in node_mods:
+                ruido += random.gauss(0, node_mods['noise'])
+            
             valor_bruto = self._base_values[node_id] + ruido
+            
+            # Aplicar spike si existe
+            if 'spike' in node_mods:
+                valor_bruto += node_mods['spike']
+            
             valor_neto = valor_bruto - self._tares.get(node_id, 0.0)
 
             datos.append({
                 'node_id': node_id,
                 'ch_name': ch_name,
-                'value': valor_neto,
+                'value': max(0, valor_neto),  # No valores negativos
                 'rssi': random.randint(-80, -40), # Simular señal fuerte
                 'timestamp': timestamp
             })
@@ -83,3 +103,30 @@ class MockPesaje(ISistemaPesaje):
 
     def esta_conectado(self) -> bool:
         return self._conectado
+
+    # ============ Métodos de Testing ============
+    
+    def simular_desconexao_no(self, node_id: int) -> None:
+        """Simula desconexión de un nodo específico."""
+        if node_id not in self._offline_nodes:
+            self._offline_nodes = getattr(self, '_offline_nodes', set())
+        self._offline_nodes.add(node_id)
+        print(f"[MOCK] Nodo {node_id} marcado como offline")
+
+    def simular_reconexao_no(self, node_id: int) -> None:
+        """Simula reconexión de un nodo."""
+        self._offline_nodes = getattr(self, '_offline_nodes', set())
+        self._offline_nodes.discard(node_id)
+        print(f"[MOCK] Nodo {node_id} reconectado")
+
+    def apply_test_load(self, node_id: int, additional_weight: float) -> None:
+        """Aplica carga adicional a un nodo para testing."""
+        if node_id in self._base_values:
+            self._base_values[node_id] += additional_weight
+            print(f"[MOCK] Carga +{additional_weight}t aplicada a nodo {node_id}")
+
+    def reset_node_base(self, node_id: int, new_base: float = None) -> None:
+        """Resetea el valor base de un nodo."""
+        if node_id in self._base_values:
+            self._base_values[node_id] = new_base if new_base is not None else random.uniform(5.0, 15.0)
+            print(f"[MOCK] Nodo {node_id} reseteado a {self._base_values[node_id]:.2f}t")
