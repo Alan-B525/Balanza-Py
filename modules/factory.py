@@ -58,18 +58,12 @@ def _create_mscl_mock(nodos_config: Dict) -> ISistemaPesaje:
 
 
 def _create_real(nodos_config: Dict) -> ISistemaPesaje:
-    """Cria sistema Real com MSCL."""
+    """Cria sistema Real com MSCL usando o driver unificado."""
     try:
-        # Tentar usar a versão robusta v2 primeiro
-        try:
-            from .sensor_real_v2 import RealPesaje
-            print("[FACTORY] Criando sistema RealPesaje v2 (versão robusta)")
-            return RealPesaje(nodos_config)
-        except ImportError:
-            # Fallback para versão original
-            from .sensor_real import RealPesaje
-            print("[FACTORY] Criando sistema RealPesaje (versão original)")
-            return RealPesaje()
+        # Usar o novo driver unificado (sensor_driver.py)
+        from .sensor_driver import MSCLDriver
+        print("[FACTORY] Criando sistema MSCLDriver (driver unificado)")
+        return MSCLDriver(nodos_config)
             
     except ImportError as e:
         print(f"[FACTORY] ERRO: Não foi possível criar sistema Real: {e}")
