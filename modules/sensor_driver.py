@@ -2,15 +2,19 @@
 sensor_driver.py - Driver Unificado para Hardware MSCL MicroStrain
 
 Módulo consolidado y robusto para conexión con nodos SG-Link-200 usando
-la biblioteca MSCL. Reemplaza sensor_real.py, sensor_real_v2.py y sensor_manager.py.
+la biblioteca MSCL. 
 
 Características principales:
 - Frame Aggregator: Sincronización de lecturas de 4 celdas por timestamp
 - SyncSamplingNetwork: Alineamiento de relojes (±50µs) entre nodos
+- Configuración Forzada: Aplica configuración determinista a cada nodo
 - Beacon Monitor: Vigilancia y recuperación automática del beacon
 - Auto-discovery: Detección automática de puertos COM
 - Reconexión robusta: Manejo avanzado de errores y recuperación
 - Thread-safe: Operaciones seguras en ambiente multi-thread
+
+NOTA: Este driver entrega valores CRUDOS (calibrados por hardware).
+      La tara de sesión se maneja en DataProcessor, NO aquí.
 
 Referencia: MSCL API Documentation - LORD MicroStrain
 Autor: Balanza-Py Team
@@ -25,7 +29,6 @@ from typing import List, Dict, Any, Optional, Tuple, Set
 from collections import deque, defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
-from abc import ABC, abstractmethod
 
 # Interface del sistema de pesaje
 from .interfaces import ISistemaPesaje
@@ -53,7 +56,7 @@ class ConnectionState(Enum):
     DISCONNECTED = "disconnected"
     CONNECTING = "connecting"
     CONNECTED = "connected"
-    SAMPLING = "sampling"  # Nuevo: muestreo sincronizado activo
+    SAMPLING = "sampling"  # Muestreo sincronizado activo
     RECONNECTING = "reconnecting"
     ERROR = "error"
 
@@ -66,7 +69,11 @@ class ConnectionType(Enum):
 
 @dataclass
 class NodeStatus:
-    """Estado detallado de un nodo individual."""
+    """
+    Estado detallado de un nodo individual.
+    
+    NOTA: No incluye tare_offset - la tara se maneja en DataProcessor.
+    """
     node_id: int
     channel: str = "ch1"
     is_online: bool = False
@@ -76,7 +83,6 @@ class NodeStatus:
     last_rssi: int = 0
     packet_count: int = 0
     error_count: int = 0
-    tare_offset: float = 0.0
     
     # Estadísticas de calidad
     avg_rssi: float = 0.0
@@ -87,7 +93,7 @@ class NodeStatus:
 class AggregatedFrame:
     """Frame de datos agregado con lecturas sincronizadas de todos los nodos."""
     timestamp_ns: int  # Timestamp en nanosegundos
-    readings: Dict[int, float] = field(default_factory=dict)  # node_id -> valor
+    readings: Dict[int, float] = field(default_factory=dict)  # node_id -> valor CRUDO
     rssi_map: Dict[int, int] = field(default_factory=dict)   # node_id -> rssi
     complete: bool = False
     creation_time: float = field(default_factory=time.time)
@@ -95,6 +101,20 @@ class AggregatedFrame:
     def is_complete(self, expected_nodes: Set[int]) -> bool:
         """Verifica si tiene lecturas de todos los nodos esperados."""
         return set(self.readings.keys()) == expected_nodes
+
+
+# =============================================================================
+# EXCEPCIONES PERSONALIZADAS
+# =============================================================================
+
+class SyncNetworkError(Exception):
+    """Error crítico en la configuración de SyncSamplingNetwork."""
+    pass
+
+
+class NodeConfigurationError(Exception):
+    """Error al configurar un nodo."""
+    pass
 
 
 # =============================================================================
@@ -107,14 +127,18 @@ class MSCLDriver(ISistemaPesaje):
     
     Implementa la interfaz ISistemaPesaje con características avanzadas:
     - Frame Aggregator para sincronización de 4 celdas
-    - SyncSamplingNetwork para alineamiento de relojes
+    - SyncSamplingNetwork para alineamiento de relojes (±50µs)
+    - Configuración forzada de nodos (32Hz, sync mode)
     - Beacon Monitor para vigilancia de conexión
     - Auto-discovery de puertos
+    
+    IMPORTANTE: Este driver entrega valores CRUDOS. La tara se aplica
+    en DataProcessor para evitar duplicación de lógica.
     
     Uso típico:
         driver = MSCLDriver(nodos_config)
         driver.conectar("COM3")  # o "192.168.1.100:5000"
-        datos = driver.obtener_datos()  # Retorna solo frames completos
+        datos = driver.obtener_datos()  # Retorna solo frames completos con valores CRUDOS
     """
     
     # =========================================================================
@@ -131,16 +155,21 @@ class MSCLDriver(ISistemaPesaje):
     RECONNECT_DELAY_S = 2.0
     MAX_RECONNECT_ATTEMPTS = 5
     
-    # Validación de datos
-    DATA_VALIDATION_MIN = -10000.0  # Valor mínimo (puede ser negativo por tara)
+    # Validación de datos (valores crudos, pueden ser negativos por calibración)
+    DATA_VALIDATION_MIN = -50000.0  # Valor mínimo en kg
     DATA_VALIDATION_MAX = 50000.0   # Valor máximo en kg
     
     # Cache
     VALUE_CACHE_SIZE = 10
     FRAME_BUFFER_SIZE = 100         # Máximo frames pendientes
     
-    # Timestamp tolerance para agrupar (50ms = 50_000_000 ns)
-    TIMESTAMP_TOLERANCE_NS = 50_000_000
+    # Timestamp tolerance para agrupar lecturas (10ms = 10_000_000 ns)
+    # Con protocolo LXRS la sincronización es ±50µs, 10ms es margen seguro
+    # A 32Hz (periodo ~31ms), esto evita agrupar muestras de distintos ciclos
+    TIMESTAMP_TOLERANCE_NS = 10_000_000
+    
+    # Configuración de muestreo forzada
+    TARGET_SAMPLE_RATE_HZ = 32
     
     # =========================================================================
     # INICIALIZACIÓN
@@ -173,6 +202,9 @@ class MSCLDriver(ISistemaPesaje):
         self._base_station: Optional[mscl.BaseStation] = None
         self._sync_network: Optional[mscl.SyncSamplingNetwork] = None
         
+        # Referencias a nodos para configuración
+        self._wireless_nodes: Dict[int, 'mscl.WirelessNode'] = {}
+        
         # Estado
         self._state = ConnectionState.DISCONNECTED
         self._state_lock = threading.RLock()
@@ -189,7 +221,7 @@ class MSCLDriver(ISistemaPesaje):
         self._frame_buffer: Dict[int, AggregatedFrame] = {}
         self._completed_frames: deque = deque(maxlen=self.FRAME_BUFFER_SIZE)
         
-        # Cache de últimos valores por nodo
+        # Cache de últimos valores por nodo (valores CRUDOS)
         self._value_cache: Dict[int, deque] = {}
         
         # Beacon Monitor
@@ -273,6 +305,9 @@ class MSCLDriver(ISistemaPesaje):
         
         Returns:
             True si la conexión fue exitosa, False en caso contrario
+            
+        Raises:
+            SyncNetworkError: Si no se puede iniciar el muestreo sincronizado
         """
         self._connection_string = puerto
         self._set_state(ConnectionState.CONNECTING)
@@ -290,19 +325,27 @@ class MSCLDriver(ISistemaPesaje):
                 self._set_state(ConnectionState.ERROR)
                 return False
             
-            # Inicializar red sincronizada
+            # Inicializar red sincronizada - OBLIGATORIO para esta balanza
             if not self._initialize_sync_network():
-                self._log("WARNING", "SyncSamplingNetwork no configurada. Usando modo legacy.")
+                self._log("ERROR", "FALLO CRÍTICO: No se pudo inicializar SyncSamplingNetwork")
+                self._set_state(ConnectionState.ERROR)
+                raise SyncNetworkError(
+                    "No se pudo iniciar el muestreo sincronizado. "
+                    "Una red desincronizada es inaceptable para esta balanza."
+                )
             
             # Iniciar beacon monitor
             self._start_beacon_monitor()
             
             self._stats['start_time'] = time.time()
-            self._set_state(ConnectionState.CONNECTED)
+            # Estado ya está en SAMPLING después de _initialize_sync_network exitoso
             
             self._log("INFO", "✓ Conexión completada exitosamente")
             return True
             
+        except SyncNetworkError:
+            # Re-lanzar excepciones de sincronización
+            raise
         except mscl.Error_Connection as e:
             self._log("ERROR", f"Error de conexión MSCL: {e}")
             self._stats['last_error'] = f"Connection: {e}"
@@ -321,7 +364,6 @@ class MSCLDriver(ISistemaPesaje):
     
     def _is_tcp_address(self, address: str) -> bool:
         """Determina si la dirección es TCP/IP."""
-        # TCP si contiene : y NO es un puerto COM de Windows
         if ":" in address:
             if "COM" in address.upper():
                 return False  # Es COM con baud rate
@@ -334,16 +376,11 @@ class MSCLDriver(ISistemaPesaje):
         
         try:
             self._log("INFO", f"Conectando Serial: {puerto}")
-            
-            # Intentar conexión al puerto especificado
             self._connection = mscl.Connection.Serial(puerto)
-            
             return self._initialize_base_station()
             
         except mscl.Error_Connection as e:
             self._log("WARNING", f"Puerto {puerto} falló: {e}")
-            
-            # Intentar auto-discovery como fallback
             self._log("INFO", "Intentando auto-detección de puertos...")
             return self._connect_auto_discover()
     
@@ -376,11 +413,9 @@ class MSCLDriver(ISistemaPesaje):
         self._connection_type = ConnectionType.SERIAL
         self._log("INFO", "Iniciando auto-detección de puertos...")
         
-        # Obtener lista de puertos
         ports_to_try = []
         
         try:
-            # Intentar usar MSCL listPorts
             if hasattr(mscl, 'Devices') and hasattr(mscl.Devices, 'listPorts'):
                 device_list = mscl.Devices.listPorts()
                 for device in device_list:
@@ -389,18 +424,13 @@ class MSCLDriver(ISistemaPesaje):
         except Exception as e:
             self._log("WARNING", f"listPorts no disponible: {e}")
         
-        # Agregar puertos comunes si no se encontraron
         if not ports_to_try:
-            # Windows
             ports_to_try.extend([f"COM{i}" for i in range(1, 20)])
         
-        # Intentar cada puerto
         for port in ports_to_try:
             try:
                 self._log("INFO", f"Probando puerto: {port}")
                 self._connection = mscl.Connection.Serial(port)
-                
-                # Crear BaseStation temporal para ping
                 temp_base = mscl.BaseStation(self._connection)
                 
                 if temp_base.ping():
@@ -411,10 +441,9 @@ class MSCLDriver(ISistemaPesaje):
                 else:
                     self._connection.disconnect()
                     
-            except mscl.Error as e:
-                # Puerto no válido, continuar
+            except mscl.Error:
                 pass
-            except Exception as e:
+            except Exception:
                 pass
         
         self._log("ERROR", "No se encontró BaseStation en ningún puerto")
@@ -425,7 +454,6 @@ class MSCLDriver(ISistemaPesaje):
         try:
             self._base_station = mscl.BaseStation(self._connection)
             
-            # Ping para verificar comunicación
             self._log("INFO", "Verificando comunicación (ping)...")
             ping_ok = False
             try:
@@ -445,7 +473,6 @@ class MSCLDriver(ISistemaPesaje):
     def _post_base_station_init(self) -> bool:
         """Configuración post-inicialización de BaseStation."""
         try:
-            # Habilitar Beacon para sincronización de nodos
             self._log("INFO", "Habilitando Beacon...")
             try:
                 beacon_time = self._base_station.enableBeacon()
@@ -453,7 +480,6 @@ class MSCLDriver(ISistemaPesaje):
             except mscl.Error as e:
                 self._log("WARNING", f"No se pudo habilitar Beacon: {e}")
             
-            # Limpiar buffer de datos antiguos
             try:
                 old_data = self._base_station.getData(100)
                 if old_data:
@@ -469,6 +495,68 @@ class MSCLDriver(ISistemaPesaje):
             return False
     
     # =========================================================================
+    # CONFIGURACIÓN FORZADA DE NODOS
+    # =========================================================================
+    
+    def _apply_node_config(self, node: 'mscl.WirelessNode') -> bool:
+        """
+        Aplica configuración determinista a un nodo.
+        
+        Establece:
+        - Modo de muestreo: Sync Sampling
+        - Sample Rate: 32 Hz
+        - Filtros: Confía en configuración de hardware
+        
+        Args:
+            node: Objeto WirelessNode de MSCL
+            
+        Returns:
+            True si la configuración fue exitosa
+            
+        Raises:
+            NodeConfigurationError: Si no se puede configurar el nodo
+        """
+        node_id = node.nodeAddress()
+        self._log("INFO", f"  Configurando nodo {node_id}...")
+        
+        try:
+            # Crear objeto de configuración
+            config = mscl.WirelessNodeConfig()
+            
+            # Establecer modo de muestreo sincronizado
+            # samplingMode_sync = muestreo sincronizado con beacon
+            config.samplingMode(mscl.WirelessTypes.samplingMode_sync)
+            
+            # Establecer sample rate a 32 Hz
+            # Esto garantiza uniformidad en toda la red
+            sample_rate = mscl.SampleRate.Hertz(self.TARGET_SAMPLE_RATE_HZ)
+            config.sampleRate(sample_rate)
+            
+            # TODO: Configurar filtros analógicos/digitales si es necesario
+            # Los SG-Link-200 tienen filtros configurables:
+            # - config.lowPassFilter(mscl.WirelessTypes.filter_33hz)
+            # - config.highPassFilter(mscl.WirelessTypes.highPass_off)
+            # Por ahora, confiamos en la configuración de hardware existente
+            
+            # Aplicar configuración al nodo
+            node.applyConfig(config)
+            
+            self._log("INFO", f"  Nodo {node_id}: Configurado (Sync, {self.TARGET_SAMPLE_RATE_HZ}Hz)")
+            return True
+            
+        except mscl.Error_NodeCommunication as e:
+            self._log("ERROR", f"  Nodo {node_id}: Error de comunicación - {e}")
+            raise NodeConfigurationError(f"No se pudo comunicar con nodo {node_id}: {e}")
+        except mscl.Error_InvalidNodeConfig as e:
+            self._log("ERROR", f"  Nodo {node_id}: Configuración inválida - {e}")
+            raise NodeConfigurationError(f"Configuración inválida para nodo {node_id}: {e}")
+        except mscl.Error as e:
+            self._log("WARNING", f"  Nodo {node_id}: Error aplicando config - {e}")
+            # Algunos nodos pueden no soportar todas las opciones
+            # Intentamos continuar con configuración por defecto
+            return False
+    
+    # =========================================================================
     # SYNC SAMPLING NETWORK
     # =========================================================================
     
@@ -479,12 +567,25 @@ class MSCLDriver(ISistemaPesaje):
         Esto garantiza:
         - Alineamiento de relojes entre nodos (±50µs)
         - Sincronización de timestamps
-        - Configuración uniforme de sampling rate
+        - Configuración uniforme de sampling rate (32Hz)
+        
+        IMPORTANTE: Si falla, NO continúa en modo legacy.
+        Una red desincronizada es inaceptable para esta balanza.
+        
+        Returns:
+            True si el muestreo sincronizado inició correctamente
+            
+        Raises:
+            SyncNetworkError: Si no se puede iniciar el muestreo
         """
         if not self._base_station or not self._expected_node_ids:
             return False
         
+        self._log("INFO", "=" * 50)
         self._log("INFO", "Configurando SyncSamplingNetwork...")
+        self._log("INFO", f"  Target Sample Rate: {self.TARGET_SAMPLE_RATE_HZ} Hz")
+        self._log("INFO", f"  Timestamp Tolerance: {self.TIMESTAMP_TOLERANCE_NS / 1e6:.1f} ms")
+        self._log("INFO", "=" * 50)
         
         try:
             # Crear red de muestreo sincronizado
@@ -497,6 +598,7 @@ class MSCLDriver(ISistemaPesaje):
                 try:
                     # Crear objeto WirelessNode
                     node = mscl.WirelessNode(node_id, self._base_station)
+                    self._wireless_nodes[node_id] = node
                     
                     # Verificar que el nodo responde
                     try:
@@ -504,6 +606,14 @@ class MSCLDriver(ISistemaPesaje):
                         self._log("INFO", f"  Nodo {node_id}: ping OK")
                     except mscl.Error:
                         self._log("WARNING", f"  Nodo {node_id}: no responde a ping")
+                        # Continuar de todos modos
+                    
+                    # APLICAR CONFIGURACIÓN FORZADA antes de agregar a la red
+                    try:
+                        self._apply_node_config(node)
+                    except NodeConfigurationError as e:
+                        self._log("WARNING", f"  Nodo {node_id}: {e}")
+                        # Intentar continuar con configuración existente
                     
                     # Agregar nodo a la red sincronizada
                     self._sync_network.addNode(node)
@@ -513,47 +623,53 @@ class MSCLDriver(ISistemaPesaje):
                     if node_id in self._node_status:
                         self._node_status[node_id].is_configured = True
                     
-                    self._log("INFO", f"  Nodo {node_id}: agregado a SyncNetwork")
+                    self._log("INFO", f"  Nodo {node_id}: agregado a SyncNetwork ✓")
                     
                 except mscl.Error as e:
-                    self._log("WARNING", f"  Nodo {node_id}: error - {e}")
+                    self._log("ERROR", f"  Nodo {node_id}: error crítico - {e}")
                     nodes_failed.append(node_id)
             
             if nodes_added == 0:
-                self._log("ERROR", "No se pudo agregar ningún nodo a SyncNetwork")
-                return False
+                raise SyncNetworkError("No se pudo agregar ningún nodo a SyncNetwork")
+            
+            if nodes_added < len(self._expected_node_ids):
+                self._log("WARNING", f"Solo {nodes_added}/{len(self._expected_node_ids)} nodos agregados")
+                self._log("WARNING", f"Nodos fallidos: {nodes_failed}")
             
             # Verificar estado de la red
             try:
                 if self._sync_network.ok():
-                    self._log("INFO", "✓ SyncSamplingNetwork: OK")
+                    self._log("INFO", "✓ SyncSamplingNetwork: Configuración OK")
                 else:
-                    self._log("WARNING", "SyncSamplingNetwork: Configuración incompleta")
-                    # Obtener problemas de configuración
-                    # issues = self._sync_network.getConfigurationIssues()
-                    # for issue in issues:
-                    #     self._log("WARNING", f"  - {issue.description()}")
-            except:
-                pass
+                    self._log("WARNING", "SyncSamplingNetwork: Hay problemas de configuración")
+                    # Intentar obtener detalles de los problemas
+                    try:
+                        issues = self._sync_network.getConfigurationIssues()
+                        for issue in issues:
+                            self._log("WARNING", f"  - {issue.description()}")
+                    except:
+                        pass
+            except Exception as e:
+                self._log("WARNING", f"No se pudo verificar estado de red: {e}")
             
-            # Iniciar muestreo sincronizado
-            try:
-                self._log("INFO", "Iniciando muestreo sincronizado...")
-                self._sync_network.startSampling()
-                self._set_state(ConnectionState.SAMPLING)
-                self._log("INFO", f"✓ Muestreo iniciado con {nodes_added} nodos")
-                return True
-            except mscl.Error as e:
-                self._log("WARNING", f"startSampling falló: {e}")
-                self._log("INFO", "Continuando en modo legacy (sin SyncNetwork)")
-                return False
+            # Iniciar muestreo sincronizado - SIN CAPTURA DE EXCEPCIÓN
+            # Si falla, la excepción se propaga hacia arriba
+            self._log("INFO", "Iniciando muestreo sincronizado...")
+            self._sync_network.startSampling()
+            
+            self._set_state(ConnectionState.SAMPLING)
+            self._log("INFO", f"✓ Muestreo sincronizado iniciado con {nodes_added} nodos")
+            self._log("INFO", "=" * 50)
+            return True
             
         except mscl.Error as e:
-            self._log("WARNING", f"SyncSamplingNetwork no disponible: {e}")
-            return False
+            self._log("ERROR", f"Error MSCL en SyncNetwork: {e}")
+            raise SyncNetworkError(f"Fallo al iniciar SyncSamplingNetwork: {e}")
+        except SyncNetworkError:
+            raise
         except Exception as e:
-            self._log("WARNING", f"Error configurando SyncNetwork: {e}")
-            return False
+            self._log("ERROR", f"Error inesperado en SyncNetwork: {e}")
+            raise SyncNetworkError(f"Error inesperado: {e}")
     
     # =========================================================================
     # BEACON MONITOR
@@ -589,11 +705,9 @@ class MSCLDriver(ISistemaPesaje):
                 if not self._base_station:
                     continue
                 
-                # Verificar estado del beacon
                 try:
                     beacon_status = self._base_station.beaconStatus()
                     
-                    # Si el beacon no está activo, reactivarlo
                     if not beacon_status.enabled():
                         self._log("WARNING", "⚠ Beacon desactivado! Reactivando...")
                         self._base_station.enableBeacon()
@@ -601,7 +715,6 @@ class MSCLDriver(ISistemaPesaje):
                         self._log("INFO", "✓ Beacon reactivado")
                         
                 except mscl.Error as e:
-                    # Si falla la verificación, intentar reactivar
                     self._log("WARNING", f"Error verificando beacon: {e}")
                     try:
                         self._base_station.enableBeacon()
@@ -620,16 +733,18 @@ class MSCLDriver(ISistemaPesaje):
         """
         Obtiene datos sincronizados de todos los nodos.
         
-        IMPORTANTE: Solo retorna frames COMPLETOS (con datos de las 4 celdas)
-        para evitar errores de suma en la balanza.
+        IMPORTANTE: 
+        - Solo retorna frames COMPLETOS (con datos de las 4 celdas)
+        - Los valores son CRUDOS (calibrados por hardware, sin tara de sesión)
+        - La tara se aplica en DataProcessor
         
         Returns:
             Lista de diccionarios con formato:
             [
                 {
                     'timestamp': float,
-                    'values': {node_id: valor, ...},
-                    'total': float,  # Suma de todas las celdas
+                    'values': {node_id: valor_crudo, ...},
+                    'total': float,  # Suma de valores crudos
                     'rssi': {node_id: rssi, ...}
                 },
                 ...
@@ -641,17 +756,12 @@ class MSCLDriver(ISistemaPesaje):
         current_time = time.time()
         
         try:
-            # Obtener sweeps disponibles del buffer
             sweeps = self._base_station.getData(self.DATA_TIMEOUT_MS)
             
-            # Procesar cada sweep y agregarlo al buffer de frames
             for sweep in sweeps:
                 self._process_sweep_to_frame(sweep, current_time)
             
-            # Limpiar frames expirados y obtener completos
             complete_frames = self._collect_complete_frames(current_time)
-            
-            # Verificar timeouts de nodos
             self._check_node_timeouts(current_time)
             
             return complete_frames
@@ -670,6 +780,8 @@ class MSCLDriver(ISistemaPesaje):
     def _process_sweep_to_frame(self, sweep: 'mscl.DataSweep', current_time: float) -> None:
         """
         Procesa un sweep y lo agrega al frame correspondiente según su timestamp.
+        
+        NOTA: Los valores se almacenan CRUDOS, sin aplicar tara.
         """
         self._stats['total_packets'] += 1
         
@@ -678,46 +790,36 @@ class MSCLDriver(ISistemaPesaje):
             rssi = sweep.nodeRssi()
             timestamp_ns = sweep.timestamp().nanoseconds()
             
-            # Actualizar status del nodo
             self._update_node_status(node_id, rssi, current_time)
             
-            # Procesar datos del sweep
             for data_point in sweep.data():
-                # Validar punto de datos
                 if hasattr(data_point, 'valid') and not data_point.valid():
                     self._stats['invalid_packets'] += 1
                     if node_id in self._node_status:
                         self._node_status[node_id].error_count += 1
                     continue
                 
-                # Obtener valor
                 try:
-                    valor_bruto = data_point.as_float()
+                    valor_crudo = data_point.as_float()
                 except:
                     try:
-                        valor_bruto = data_point.as_double()
+                        valor_crudo = data_point.as_double()
                     except:
                         continue
                 
-                # Validar valor
-                if not self._validate_value(valor_bruto):
+                if not self._validate_value(valor_crudo):
                     self._stats['invalid_packets'] += 1
                     continue
                 
-                # Guardar en cache
+                # Guardar valor CRUDO en cache
                 if node_id in self._value_cache:
-                    self._value_cache[node_id].append(valor_bruto)
+                    self._value_cache[node_id].append(valor_crudo)
                 
-                # Actualizar último valor del nodo
                 if node_id in self._node_status:
-                    self._node_status[node_id].last_value = valor_bruto
+                    self._node_status[node_id].last_value = valor_crudo
                 
-                # Aplicar tara
-                tare = self._node_status[node_id].tare_offset if node_id in self._node_status else 0.0
-                valor_neto = valor_bruto - tare
-                
-                # Agregar al frame correspondiente
-                self._add_to_frame(timestamp_ns, node_id, valor_neto, rssi)
+                # Agregar valor CRUDO al frame (SIN aplicar tara)
+                self._add_to_frame(timestamp_ns, node_id, valor_crudo, rssi)
                 
                 self._stats['valid_packets'] += 1
                 
@@ -728,35 +830,28 @@ class MSCLDriver(ISistemaPesaje):
     def _add_to_frame(self, timestamp_ns: int, node_id: int, value: float, rssi: int) -> None:
         """
         Agrega una lectura al frame correspondiente.
-        Agrupa por timestamp con tolerancia definida.
+        Agrupa por timestamp con tolerancia de 10ms.
         """
         with self._data_lock:
-            # Buscar frame existente con timestamp cercano
             frame_key = self._find_frame_key(timestamp_ns)
             
             if frame_key is None:
-                # Crear nuevo frame
                 frame_key = timestamp_ns
                 self._frame_buffer[frame_key] = AggregatedFrame(timestamp_ns=timestamp_ns)
             
-            # Agregar lectura al frame
             frame = self._frame_buffer[frame_key]
             frame.readings[node_id] = value
             frame.rssi_map[node_id] = rssi
     
     def _find_frame_key(self, timestamp_ns: int) -> Optional[int]:
-        """
-        Busca un frame existente con timestamp dentro de la tolerancia.
-        """
+        """Busca un frame existente con timestamp dentro de la tolerancia (10ms)."""
         for key in self._frame_buffer:
             if abs(key - timestamp_ns) <= self.TIMESTAMP_TOLERANCE_NS:
                 return key
         return None
     
     def _collect_complete_frames(self, current_time: float) -> List[Dict[str, Any]]:
-        """
-        Recolecta frames completos y limpia frames expirados.
-        """
+        """Recolecta frames completos y limpia frames expirados."""
         complete_frames = []
         frames_to_remove = []
         
@@ -764,46 +859,36 @@ class MSCLDriver(ISistemaPesaje):
         
         with self._data_lock:
             for key, frame in list(self._frame_buffer.items()):
-                # Verificar si el frame está completo
                 if frame.is_complete(self._expected_node_ids):
                     frame.complete = True
                     complete_frames.append(self._format_frame(frame))
                     frames_to_remove.append(key)
                     self._stats['frames_complete'] += 1
-                    
-                # Verificar si el frame expiró
                 elif frame.creation_time < timeout_threshold:
-                    # Frame incompleto pero expirado
-                    # Opción: descartar o enviar parcial
-                    # Por robustez, descartamos frames incompletos
                     frames_to_remove.append(key)
                     self._stats['frames_incomplete'] += 1
             
-            # Limpiar frames procesados/expirados
             for key in frames_to_remove:
                 del self._frame_buffer[key]
         
         return complete_frames
     
     def _format_frame(self, frame: AggregatedFrame) -> Dict[str, Any]:
-        """
-        Formatea un frame completo para retorno.
-        """
+        """Formatea un frame completo para retorno."""
         total = sum(frame.readings.values())
         
         return {
-            'timestamp': frame.timestamp_ns / 1e9,  # Convertir a segundos
+            'timestamp': frame.timestamp_ns / 1e9,
             'timestamp_ns': frame.timestamp_ns,
             'values': dict(frame.readings),
             'rssi': dict(frame.rssi_map),
-            'total': total,
+            'total': total,  # Suma de valores CRUDOS
             'complete': frame.complete
         }
     
     def _update_node_status(self, node_id: int, rssi: int, current_time: float) -> None:
         """Actualiza el status de un nodo."""
         if node_id not in self._node_status:
-            # Nodo no configurado pero detectado
             self._node_status[node_id] = NodeStatus(node_id=node_id)
             self._value_cache[node_id] = deque(maxlen=self.VALUE_CACHE_SIZE)
             self._log("INFO", f"Nuevo nodo detectado: {node_id}")
@@ -814,7 +899,6 @@ class MSCLDriver(ISistemaPesaje):
         status.packet_count += 1
         status.is_online = True
         
-        # Actualizar historial de RSSI
         status.rssi_history.append(rssi)
         if status.rssi_history:
             status.avg_rssi = sum(status.rssi_history) / len(status.rssi_history)
@@ -851,14 +935,14 @@ class MSCLDriver(ISistemaPesaje):
             time.sleep(self.RECONNECT_DELAY_S)
             
             try:
-                # Desconectar limpiamente
                 self._cleanup_connection()
                 
-                # Intentar reconectar
                 if self.conectar(self._connection_string):
                     self._log("INFO", "✓ Reconexión exitosa!")
                     return
                     
+            except SyncNetworkError as e:
+                self._log("ERROR", f"Falló intento {attempt + 1}: {e}")
             except Exception as e:
                 self._log("ERROR", f"Falló intento {attempt + 1}: {e}")
         
@@ -874,6 +958,8 @@ class MSCLDriver(ISistemaPesaje):
                 except:
                     pass
                 self._sync_network = None
+            
+            self._wireless_nodes.clear()
             
             if self._base_station:
                 try:
@@ -900,13 +986,9 @@ class MSCLDriver(ISistemaPesaje):
         """Cierra la conexión de forma segura."""
         self._log("INFO", "Iniciando desconexión...")
         
-        # Detener beacon monitor
         self._stop_beacon_monitor()
-        
-        # Limpiar conexión
         self._cleanup_connection()
         
-        # Limpiar buffers
         with self._data_lock:
             self._frame_buffer.clear()
             self._completed_frames.clear()
@@ -915,60 +997,29 @@ class MSCLDriver(ISistemaPesaje):
         self._log("INFO", "✓ Desconectado")
     
     # =========================================================================
-    # TARA
+    # TARA - DELEGADA A DataProcessor
     # =========================================================================
     
     def tarar(self, node_id: int = None) -> None:
         """
-        Aplica tara (cero) a los nodos.
-        
-        Args:
-            node_id: ID específico del nodo, o None para todos
+        NOTA: La tara se maneja en DataProcessor, no en el driver.
+        Este método existe solo para compatibilidad con la interfaz.
         """
-        if node_id is not None:
-            self._apply_tare_to_node(node_id)
-        else:
-            for nid in self._node_status:
-                self._apply_tare_to_node(nid)
-    
-    def _apply_tare_to_node(self, node_id: int) -> None:
-        """Aplica tara a un nodo específico."""
-        if node_id not in self._value_cache:
-            return
-        
-        cache = self._value_cache[node_id]
-        if not cache:
-            self._log("WARNING", f"Nodo {node_id}: sin datos para tara")
-            return
-        
-        # Calcular promedio de últimos valores
-        avg = sum(cache) / len(cache)
-        
-        if node_id in self._node_status:
-            self._node_status[node_id].tare_offset = avg
-        
-        self._log("INFO", f"Tara aplicada al nodo {node_id}: {avg:.4f}")
+        self._log("WARNING", "tarar() llamado en driver - la tara se maneja en DataProcessor")
     
     def reset_tarar(self) -> None:
-        """Resetea todas las taras a cero."""
-        for status in self._node_status.values():
-            status.tare_offset = 0.0
-        self._log("INFO", "Todas las taras reseteadas")
+        """
+        NOTA: La tara se maneja en DataProcessor, no en el driver.
+        Este método existe solo para compatibilidad con la interfaz.
+        """
+        self._log("WARNING", "reset_tarar() llamado en driver - la tara se maneja en DataProcessor")
     
     # =========================================================================
     # DESCUBRIMIENTO DE NODOS
     # =========================================================================
     
     def descubrir_nodos(self, timeout_ms: int = 5000) -> List[Dict[str, Any]]:
-        """
-        Descubre nodos wireless en la red.
-        
-        Args:
-            timeout_ms: Timeout para descubrimiento en milisegundos
-            
-        Returns:
-            Lista de nodos encontrados con sus informaciones
-        """
+        """Descubre nodos wireless en la red."""
         if not self.esta_conectado() or not self._base_station:
             self._log("WARNING", "Sin conexión activa para descubrir nodos")
             return []
@@ -1032,8 +1083,7 @@ class MSCLDriver(ISistemaPesaje):
             'last_rssi': status.last_rssi,
             'avg_rssi': status.avg_rssi,
             'packet_count': status.packet_count,
-            'error_count': status.error_count,
-            'tare_offset': status.tare_offset
+            'error_count': status.error_count
         }
     
     def get_all_node_status(self) -> Dict[int, Dict[str, Any]]:
@@ -1057,14 +1107,13 @@ class MSCLDriver(ISistemaPesaje):
             'nodes_online': sum(1 for s in self._node_status.values() if s.is_online),
             'nodes_configured': len(self._expected_node_ids),
             'nodes_total': len(self._node_status),
-            'frame_buffer_size': len(self._frame_buffer)
+            'frame_buffer_size': len(self._frame_buffer),
+            'sample_rate_hz': self.TARGET_SAMPLE_RATE_HZ,
+            'timestamp_tolerance_ms': self.TIMESTAMP_TOLERANCE_NS / 1e6
         }
     
     def get_last_cached_value(self, node_id: int) -> Optional[float]:
-        """
-        Retorna el último valor en cache para un nodo.
-        Útil cuando hay pérdida temporal de datos.
-        """
+        """Retorna el último valor CRUDO en cache para un nodo."""
         if node_id in self._value_cache and self._value_cache[node_id]:
             return self._value_cache[node_id][-1]
         return None
@@ -1074,7 +1123,6 @@ class MSCLDriver(ISistemaPesaje):
 # ALIAS PARA COMPATIBILIDAD
 # =============================================================================
 
-# Alias para compatibilidad con código existente
 RealPesaje = MSCLDriver
 
 
@@ -1083,18 +1131,7 @@ RealPesaje = MSCLDriver
 # =============================================================================
 
 def create_driver(nodos_config: Optional[Dict] = None) -> MSCLDriver:
-    """
-    Función factory para crear el driver.
-    
-    Args:
-        nodos_config: Configuración de nodos
-        
-    Returns:
-        Instancia de MSCLDriver
-        
-    Raises:
-        ImportError: Si MSCL no está disponible
-    """
+    """Función factory para crear el driver."""
     if not MSCL_AVAILABLE:
         raise ImportError(
             "MSCL no está disponible. "
