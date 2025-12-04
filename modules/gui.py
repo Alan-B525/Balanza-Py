@@ -72,6 +72,12 @@ class BalanzaGUI(ttk.Window):
         self.style.configure('TotalValue.TLabel', background=PRIMARY, foreground="white", font=(FONT_MONO, 140, "bold"))
         self.style.configure('TotalUnit.TLabel', background=PRIMARY, foreground="white", font=(FONT_MAIN, 32))
         
+        # Total Panel DANGER - Cuando hay sensor desconectado (ROJO)
+        self.style.configure('TotalPanelDanger.TFrame', background=DANGER)
+        self.style.configure('TotalLabelDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MAIN, 28, "bold"))
+        self.style.configure('TotalValueDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MONO, 140, "bold"))
+        self.style.configure('TotalUnitDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MAIN, 32))
+        
         # Tara Info - Más visible
         self.style.configure('TareInfo.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, 18, "bold"))
         
@@ -281,19 +287,22 @@ class BalanzaGUI(ttk.Window):
         control_panel.grid_propagate(False)  # Tamaño fijo
         
         # Sección TOTAL con fondo azul - MUY GRANDE Y PROMINENTE
-        total_section = ttk.Frame(control_panel, style='TotalPanel.TFrame', padding=35)
-        total_section.pack(fill=BOTH, expand=YES)
+        # Guardar referencia para poder cambiar color en caso de desconexión
+        self.total_section = ttk.Frame(control_panel, style='TotalPanel.TFrame', padding=35)
+        self.total_section.pack(fill=BOTH, expand=YES)
         
-        ttk.Label(total_section, text="PESO TOTAL", style='TotalLabel.TLabel', anchor="center").pack(fill=X)
+        self.lbl_total_title = ttk.Label(self.total_section, text="PESO TOTAL", style='TotalLabel.TLabel', anchor="center")
+        self.lbl_total_title.pack(fill=X)
         self.lbl_total = ttk.Label(
-            total_section, 
+            self.total_section, 
             text="0.00", 
             style='TotalValue.TLabel', 
             anchor="center",
             width=10  # Ancho fijo para evitar cambios
         )
         self.lbl_total.pack(fill=X, pady=20)
-        ttk.Label(total_section, text="toneladas", style='TotalUnit.TLabel', anchor="center").pack()
+        self.lbl_total_unit = ttk.Label(self.total_section, text="toneladas", style='TotalUnit.TLabel', anchor="center")
+        self.lbl_total_unit.pack()
         
         # Separador dentro del panel
         ttk.Separator(control_panel, orient=HORIZONTAL).pack(fill=X, pady=15)
@@ -404,6 +413,22 @@ class BalanzaGUI(ttk.Window):
                     self.log_message(f"[ERRO] {msg['payload']}")
                 elif msg['type'] == 'LOG':
                     self.log_message(msg['payload'])
+                elif msg['type'] == 'SENSOR_DISCONNECT':
+                    # Mostrar dialogo de alerta de sensor desconectado
+                    payload = msg['payload']
+                    self._show_sensor_disconnect_dialog(payload)
+                elif msg['type'] == 'SENSOR_RECONNECTED':
+                    # Cerrar dialogo si esta abierto y notificar
+                    payload = msg['payload']
+                    self._handle_sensor_reconnected(payload)
+                elif msg['type'] == 'RECONNECT_PROGRESS':
+                    # Actualizar progreso de reconexion en el dialogo
+                    payload = msg['payload']
+                    self._update_reconnect_progress(payload)
+                elif msg['type'] == 'RECONNECT_FAILED':
+                    # Notificar fallo de reconexion
+                    payload = msg['payload']
+                    self._handle_reconnect_failed(payload)
                 
         except queue.Empty:
             pass
@@ -428,6 +453,30 @@ class BalanzaGUI(ttk.Window):
         # Actualizar Tara Acumulada
         if 'total_tare' in data:
             self.lbl_tare_info.configure(text=f"Tara Acumulada: {data['total_tare']:.2f} t")
+        
+        # Verificar si hay sensores desconectados para cambiar color del panel
+        any_disconnected = data.get('any_disconnected', False)
+        
+        # También verificar manualmente en los sensores
+        if not any_disconnected:
+            for sensor_info in data.get('sensores', {}).values():
+                if not sensor_info.get('connected', True):
+                    any_disconnected = True
+                    break
+        
+        # Cambiar color del panel TOTAL según estado de sensores
+        if any_disconnected:
+            # ROJO - Hay sensor(es) desconectado(s)
+            self.total_section.configure(style='TotalPanelDanger.TFrame')
+            self.lbl_total_title.configure(style='TotalLabelDanger.TLabel')
+            self.lbl_total.configure(style='TotalValueDanger.TLabel')
+            self.lbl_total_unit.configure(style='TotalUnitDanger.TLabel')
+        else:
+            # AZUL - Todos los sensores conectados (normal)
+            self.total_section.configure(style='TotalPanel.TFrame')
+            self.lbl_total_title.configure(style='TotalLabel.TLabel')
+            self.lbl_total.configure(style='TotalValue.TLabel')
+            self.lbl_total_unit.configure(style='TotalUnit.TLabel')
         
         # Actualizar Sensores Individuales
         sensores = data['sensores']
@@ -611,6 +660,209 @@ class BalanzaGUI(ttk.Window):
             self.log_message("Tara zerada com sucesso.")
         else:
             self.log_message("Operação cancelada.")
+
+    # =========================================================================
+    # DIALOGO DE DESCONEXION DE SENSOR
+    # =========================================================================
+    
+    def _show_sensor_disconnect_dialog(self, payload):
+        """
+        Muestra dialogo de alerta cuando un sensor se desconecta.
+        Permite reconexion manual o esperar reconexion automatica.
+        """
+        node_id = payload['node_id']
+        nombre = payload['nombre']
+        max_attempts = payload.get('max_attempts', 5)
+        
+        # Si ya hay un dialogo abierto para este nodo, no crear otro
+        if hasattr(self, '_disconnect_dialogs') and node_id in self._disconnect_dialogs:
+            return
+        
+        if not hasattr(self, '_disconnect_dialogs'):
+            self._disconnect_dialogs = {}
+        
+        # Crear dialogo de alerta
+        dialog = ttk.Toplevel(self)
+        dialog.overrideredirect(True)
+        dialog.geometry("600x400")
+        
+        # Centrar
+        try:
+            x = self.winfo_x() + (self.winfo_width() // 2) - 300
+            y = self.winfo_y() + (self.winfo_height() // 2) - 200
+            dialog.geometry(f"+{x}+{y}")
+        except:
+            pass
+        
+        dialog.lift()
+        dialog.attributes('-topmost', True)
+        
+        # Guardar referencia
+        self._disconnect_dialogs[node_id] = {
+            'dialog': dialog,
+            'progress_label': None,
+            'attempt_label': None
+        }
+        
+        # Container con borde rojo
+        outer_frame = ttk.Frame(dialog, bootstyle="danger", padding=4)
+        outer_frame.pack(fill=BOTH, expand=YES)
+        
+        frame = ttk.Frame(outer_frame, padding=30)
+        frame.pack(fill=BOTH, expand=YES)
+        
+        # Icono y titulo
+        title_lbl = ttk.Label(
+            frame, 
+            text="⚠️  SENSOR DESCONECTADO", 
+            font=("Segoe UI", 20, "bold"), 
+            foreground="#dc2626"
+        )
+        title_lbl.pack(pady=(0, 20))
+        
+        # Mensaje principal
+        msg_text = f"El sensor '{nombre}' (ID: {node_id}) ha perdido la conexión.\n\n" \
+                   f"La adquisición de datos está pausada."
+        msg_lbl = ttk.Label(
+            frame, 
+            text=msg_text, 
+            font=("Segoe UI", 14), 
+            wraplength=520, 
+            justify="center"
+        )
+        msg_lbl.pack(pady=(10, 20))
+        
+        # Frame de progreso de reconexion
+        progress_frame = ttk.Frame(frame)
+        progress_frame.pack(fill=X, pady=10)
+        
+        progress_lbl = ttk.Label(
+            progress_frame,
+            text="Reconexión automática en progreso...",
+            font=("Segoe UI", 12),
+            foreground="#f59e0b"
+        )
+        progress_lbl.pack()
+        
+        attempt_lbl = ttk.Label(
+            progress_frame,
+            text=f"Intento 0 de {max_attempts}",
+            font=("Segoe UI", 11),
+            foreground="#64748b"
+        )
+        attempt_lbl.pack(pady=(5, 0))
+        
+        # Guardar referencias para actualizar
+        self._disconnect_dialogs[node_id]['progress_label'] = progress_lbl
+        self._disconnect_dialogs[node_id]['attempt_label'] = attempt_lbl
+        
+        # Botones
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill=X, pady=(25, 10))
+        
+        def on_manual_reconnect():
+            self.command_queue.put({'cmd': 'MANUAL_RECONNECT', 'node_id': node_id})
+            progress_lbl.configure(text="Reconexión manual iniciada...", foreground="#22c55e")
+            attempt_lbl.configure(text="Esperando respuesta del sensor...")
+        
+        def on_continue_anyway():
+            # Continuar sin el sensor
+            self.command_queue.put({'cmd': 'RESUME_ACQUISITION'})
+            self._close_disconnect_dialog(node_id)
+            self.log_message(f"Continuando sin sensor {nombre} (ID: {node_id})")
+        
+        def on_pause():
+            # Pausar y cerrar dialogo
+            self.command_queue.put({'cmd': 'PAUSE_ACQUISITION'})
+            self._close_disconnect_dialog(node_id)
+        
+        # Boton reconectar manual
+        btn_reconnect = ttk.Button(
+            btn_frame, 
+            text="🔄 RECONECTAR AHORA", 
+            bootstyle="warning",
+            command=on_manual_reconnect,
+            padding=(20, 15),
+            width=20
+        )
+        btn_reconnect.pack(side=LEFT, padx=10, expand=YES)
+        
+        # Boton continuar sin sensor
+        btn_continue = ttk.Button(
+            btn_frame, 
+            text="➡️ CONTINUAR SIN SENSOR", 
+            bootstyle="secondary",
+            command=on_continue_anyway,
+            padding=(20, 15),
+            width=22
+        )
+        btn_continue.pack(side=LEFT, padx=10, expand=YES)
+        
+        dialog.transient(self)
+        # No usar grab_set para permitir que otros eventos lleguen
+    
+    def _update_reconnect_progress(self, payload):
+        """Actualiza el progreso de reconexion en el dialogo."""
+        node_id = payload['node_id']
+        attempt = payload['attempt']
+        max_attempts = payload['max_attempts']
+        
+        if hasattr(self, '_disconnect_dialogs') and node_id in self._disconnect_dialogs:
+            dialog_info = self._disconnect_dialogs[node_id]
+            if dialog_info['attempt_label']:
+                dialog_info['attempt_label'].configure(
+                    text=f"Intento {attempt} de {max_attempts}"
+                )
+    
+    def _handle_sensor_reconnected(self, payload):
+        """Maneja cuando un sensor se reconecta exitosamente."""
+        node_id = payload['node_id']
+        
+        # Mostrar mensaje de exito y cerrar dialogo
+        self.log_message(f"✓ Sensor {node_id} reconectado exitosamente")
+        
+        # Actualizar dialogo si existe
+        if hasattr(self, '_disconnect_dialogs') and node_id in self._disconnect_dialogs:
+            dialog_info = self._disconnect_dialogs[node_id]
+            if dialog_info['progress_label']:
+                dialog_info['progress_label'].configure(
+                    text="✓ RECONECTADO EXITOSAMENTE",
+                    foreground="#22c55e"
+                )
+            if dialog_info['attempt_label']:
+                dialog_info['attempt_label'].configure(text="")
+            
+            # Cerrar dialogo despues de 1.5 segundos
+            self.after(1500, lambda: self._close_disconnect_dialog(node_id))
+    
+    def _handle_reconnect_failed(self, payload):
+        """Maneja cuando falla la reconexion automatica."""
+        node_id = payload['node_id']
+        attempts = payload['attempts']
+        
+        self.log_message(f"✗ Falló reconexión del sensor {node_id} después de {attempts} intentos")
+        
+        # Actualizar dialogo
+        if hasattr(self, '_disconnect_dialogs') and node_id in self._disconnect_dialogs:
+            dialog_info = self._disconnect_dialogs[node_id]
+            if dialog_info['progress_label']:
+                dialog_info['progress_label'].configure(
+                    text=f"✗ RECONEXIÓN FALLIDA ({attempts} intentos)",
+                    foreground="#dc2626"
+                )
+            if dialog_info['attempt_label']:
+                dialog_info['attempt_label'].configure(
+                    text="Use 'Reconectar Ahora' o continúe sin el sensor"
+                )
+    
+    def _close_disconnect_dialog(self, node_id):
+        """Cierra el dialogo de desconexion para un nodo especifico."""
+        if hasattr(self, '_disconnect_dialogs') and node_id in self._disconnect_dialogs:
+            dialog_info = self._disconnect_dialogs.pop(node_id)
+            try:
+                dialog_info['dialog'].destroy()
+            except:
+                pass
 
     def toggle_connection(self):
         if not self.connected:

@@ -22,6 +22,15 @@ class SensorData:
     last_seen: float = 0.0
 
 
+@dataclass
+class SensorDisconnectEvent:
+    """Evento de desconexión de sensor para notificar a la GUI."""
+    node_id: int
+    nombre_logico: str
+    timestamp: float
+    was_connected: bool = True  # True si estaba conectado antes
+
+
 class DataProcessor:
     """
     Procesador de datos para sistema de pesaje industrial.
@@ -30,7 +39,7 @@ class DataProcessor:
     - Filtro hibrido: Mediana (elimina picos) + EMA (suavizado)
     - Tara matematica de sesion
     - Mapeo de nodos a posiciones logicas
-    - Deteccion de desconexion de sensores
+    - Deteccion de desconexion de sensores con eventos
     """
     
     MEDIAN_WINDOW_SIZE = 5
@@ -50,6 +59,9 @@ class DataProcessor:
         self._tares: Dict[int, float] = {}
         self._last_seen: Dict[int, float] = {}
         self._node_connected_state: Dict[int, bool] = {}
+        
+        # Cola de eventos de desconexión pendientes
+        self._disconnect_events: List[SensorDisconnectEvent] = []
         
         self._initialize_structures()
     
@@ -99,7 +111,9 @@ class DataProcessor:
             "sensores": {},
             "total": 0.0,
             "total_tare": 0.0,
-            "logs": []
+            "logs": [],
+            "disconnect_events": [],  # Eventos de desconexión para la GUI
+            "any_disconnected": False  # Flag rápido para verificar desconexiones
         }
         
         current_time = time.time()
@@ -135,6 +149,8 @@ class DataProcessor:
             if is_connected:
                 total_peso += valor_neto
                 total_tare += tara_actual
+            else:
+                resultado["any_disconnected"] = True
             
             resultado["sensores"][nombre_logico] = {
                 "valor": round(valor_neto, 3),
@@ -147,6 +163,14 @@ class DataProcessor:
         
         resultado["total"] = round(total_peso, 3)
         resultado["total_tare"] = round(total_tare, 3)
+        
+        # Incluir eventos de desconexión pendientes
+        disconnect_events = self.get_disconnect_events()
+        if disconnect_events:
+            resultado["disconnect_events"] = [
+                {"node_id": e.node_id, "nombre": e.nombre_logico, "timestamp": e.timestamp}
+                for e in disconnect_events
+            ]
         
         return resultado
     
@@ -171,8 +195,43 @@ class DataProcessor:
             self._node_connected_state[node_id] = False
             nombre = self._node_to_name.get(node_id, f"Nodo {node_id}")
             resultado["logs"].append(f"ALERTA: {nombre} (ID:{node_id}) perdio conexion")
+            
+            # Generar evento de desconexión
+            event = SensorDisconnectEvent(
+                node_id=node_id,
+                nombre_logico=nombre,
+                timestamp=current_time,
+                was_connected=True
+            )
+            self._disconnect_events.append(event)
         
         return is_connected
+    
+    def get_disconnect_events(self) -> List[SensorDisconnectEvent]:
+        """Retorna y limpia los eventos de desconexión pendientes."""
+        events = self._disconnect_events.copy()
+        self._disconnect_events.clear()
+        return events
+    
+    def get_disconnected_sensors(self) -> List[Dict[str, Any]]:
+        """Retorna lista de sensores actualmente desconectados."""
+        disconnected = []
+        current_time = time.time()
+        for nombre_logico, cfg in self.nodos_config.items():
+            node_id = cfg["id"]
+            if not self._node_connected_state.get(node_id, False):
+                disconnected.append({
+                    "node_id": node_id,
+                    "nombre": nombre_logico,
+                    "last_seen": self._last_seen.get(node_id, 0.0),
+                    "offline_seconds": current_time - self._last_seen.get(node_id, 0.0)
+                })
+        return disconnected
+    
+    def mark_sensor_reconnected(self, node_id: int) -> None:
+        """Marca un sensor como reconectado (para uso externo)."""
+        self._node_connected_state[node_id] = True
+        self._last_seen[node_id] = time.time()
     
     def set_tara(self) -> Dict[int, float]:
         taras_aplicadas = {}

@@ -89,8 +89,14 @@ def show_startup_info():
 def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
     """
     Thread secundaria (Backend) que gerencia o hardware e o processamento.
+    Incluye manejo de desconexión de sensores y reconexión automática.
     """
     running = True
+    acquisition_paused = False      # Flag para pausar adquisición
+    reconnecting_nodes = set()      # Nodos en proceso de reconexión
+    reconnect_attempts = {}         # {node_id: intentos}
+    MAX_AUTO_RECONNECT = 5          # Máximo intentos automáticos
+    reconnect_check_counter = {}    # Contador para espaciar notificaciones
     
     while running:
         # 1. Processar Comandos da GUI
@@ -106,6 +112,9 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
                         data_queue.put({'type': 'STATUS', 'payload': connected})
                         if connected:
                             data_queue.put({'type': 'LOG', 'payload': f"Conectado com sucesso a {ACTIVE_COM}"})
+                            acquisition_paused = False
+                            reconnecting_nodes.clear()
+                            reconnect_attempts.clear()
                         else:
                             data_queue.put({'type': 'LOG', 'payload': f"Falha ao conectar a {ACTIVE_COM}"})
                     except Exception as e:
@@ -115,6 +124,24 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
                     sistema_pesaje.desconectar()
                     data_queue.put({'type': 'STATUS', 'payload': False})
                     data_queue.put({'type': 'LOG', 'payload': "Sistema desconectado pelo usuario."})
+                    acquisition_paused = True
+                
+                elif cmd == 'PAUSE_ACQUISITION':
+                    acquisition_paused = True
+                    data_queue.put({'type': 'LOG', 'payload': "Aquisição pausada - aguardando reconexão"})
+                
+                elif cmd == 'RESUME_ACQUISITION':
+                    acquisition_paused = False
+                    reconnecting_nodes.clear()
+                    reconnect_attempts.clear()
+                    data_queue.put({'type': 'LOG', 'payload': "Aquisição retomada"})
+                
+                elif cmd == 'MANUAL_RECONNECT':
+                    node_id = cmd_msg.get('node_id')
+                    data_queue.put({'type': 'LOG', 'payload': f"Reconexão manual solicitada para sensor {node_id}"})
+                    reconnect_attempts[node_id] = 0
+                    reconnecting_nodes.discard(node_id)
+                    acquisition_paused = False
                     
                 elif cmd == 'TARE':
                     procesador.set_tara()
@@ -229,8 +256,8 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
         except queue.Empty:
             pass
             
-        # 2. Aquisicao de Dados (Se esta conectado)
-        if sistema_pesaje.esta_conectado():
+        # 2. Aquisicao de Dados (Se esta conectado e nao pausado)
+        if sistema_pesaje.esta_conectado() and not acquisition_paused:
             try:
                 raw_data = sistema_pesaje.obtener_datos()
                 
@@ -242,8 +269,87 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
                     for log_msg in datos_procesados['logs']:
                         data_queue.put({'type': 'LOG', 'payload': log_msg})
                 
-                # 4. Enviar a GUI
+                # === DETECCION DE DESCONEXION DE SENSORES ===
+                if datos_procesados.get('disconnect_events'):
+                    for event in datos_procesados['disconnect_events']:
+                        node_id = event['node_id']
+                        nombre = event['nombre']
+                        
+                        # Notificar a la GUI sobre desconexion
+                        data_queue.put({
+                            'type': 'SENSOR_DISCONNECT',
+                            'payload': {
+                                'node_id': node_id,
+                                'nombre': nombre,
+                                'timestamp': event['timestamp'],
+                                'max_attempts': MAX_AUTO_RECONNECT
+                            }
+                        })
+                        
+                        # Iniciar reconexion automatica
+                        if node_id not in reconnecting_nodes:
+                            reconnecting_nodes.add(node_id)
+                            reconnect_attempts[node_id] = 0
+                            reconnect_check_counter[node_id] = 0
+                
+                # === MANEJO DE RECONEXION AUTOMATICA ===
+                for node_id in list(reconnecting_nodes):
+                    attempts = reconnect_attempts.get(node_id, 0)
+                    reconnect_check_counter[node_id] = reconnect_check_counter.get(node_id, 0) + 1
+                    
+                    # Verificar si el nodo volvio a conectarse
+                    is_connected = False
+                    for sensor_data in datos_procesados.get('sensores', {}).values():
+                        if sensor_data.get('id') == node_id and sensor_data.get('connected'):
+                            is_connected = True
+                            break
+                    
+                    if is_connected:
+                        # Sensor reconectado exitosamente
+                        reconnecting_nodes.discard(node_id)
+                        reconnect_attempts.pop(node_id, None)
+                        reconnect_check_counter.pop(node_id, None)
+                        data_queue.put({
+                            'type': 'SENSOR_RECONNECTED',
+                            'payload': {'node_id': node_id}
+                        })
+                        data_queue.put({
+                            'type': 'LOG',
+                            'payload': f"Sensor {node_id} reconectado exitosamente"
+                        })
+                    elif reconnect_check_counter[node_id] >= 20:  # Cada ~1 segundo (20 * 50ms)
+                        reconnect_check_counter[node_id] = 0
+                        reconnect_attempts[node_id] = attempts + 1
+                        
+                        if attempts + 1 < MAX_AUTO_RECONNECT:
+                            # Notificar progreso
+                            data_queue.put({
+                                'type': 'RECONNECT_PROGRESS',
+                                'payload': {
+                                    'node_id': node_id,
+                                    'attempt': attempts + 1,
+                                    'max_attempts': MAX_AUTO_RECONNECT
+                                }
+                            })
+                        else:
+                            # Maximo de intentos alcanzado
+                            reconnecting_nodes.discard(node_id)
+                            reconnect_check_counter.pop(node_id, None)
+                            data_queue.put({
+                                'type': 'RECONNECT_FAILED',
+                                'payload': {
+                                    'node_id': node_id,
+                                    'attempts': MAX_AUTO_RECONNECT
+                                }
+                            })
+                            data_queue.put({
+                                'type': 'LOG',
+                                'payload': f"Fallo reconexion de sensor {node_id} despues de {MAX_AUTO_RECONNECT} intentos"
+                            })
+                
+                # Enviar datos a GUI
                 data_queue.put({'type': 'DATA', 'payload': datos_procesados})
+                
             except Exception as e:
                 data_queue.put({'type': 'LOG', 'payload': f"Erro na aquisicao: {e}"})
         
