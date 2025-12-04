@@ -988,52 +988,13 @@ class BalanzaGUI(ttk.Window):
         
         ttk.Label(mscl_frame, text=mscl_status, font=("Segoe UI", 14), foreground=mscl_color).pack(anchor="w")
         
-        # Selector de modo
-        mode_var = tk.StringVar(value=current_config.get("execution_mode", "MOCK"))
+        # Selector de modo - SOLO REAL para producción
+        mode_var = tk.StringVar(value="REAL")
         
         modes_frame = ttk.Frame(tab_mode)
         modes_frame.pack(fill=X, pady=15)
         
-        # MOCK Mode
-        mode_mock_frame = ttk.Labelframe(modes_frame, text="", padding=20)
-        mode_mock_frame.pack(fill=X, pady=10)
-        
-        rb_mock = ttk.Radiobutton(
-            mode_mock_frame,
-            text="   MOCK - Simulação Simples",
-            variable=mode_var,
-            value="MOCK",
-            style='BigRadio.TRadiobutton'
-        )
-        rb_mock.pack(anchor="w", ipady=8)
-        ttk.Label(
-            mode_mock_frame, 
-            text="     Simulação básica para desenvolvimento. Não requer hardware nem MSCL.",
-            font=("Segoe UI", 11),
-            foreground="#64748b"
-        ).pack(anchor="w", padx=(30, 0))
-        
-        # MSCL_MOCK Mode
-        mode_mscl_mock_frame = ttk.Labelframe(modes_frame, text="", padding=20)
-        mode_mscl_mock_frame.pack(fill=X, pady=10)
-        
-        rb_mscl_mock = ttk.Radiobutton(
-            mode_mscl_mock_frame,
-            text="   MSCL_MOCK - Simulação com Estruturas MSCL",
-            variable=mode_var,
-            value="MSCL_MOCK",
-            style='BigRadio.TRadiobutton',
-            state="normal" if available_modes.get("MSCL_MOCK", {}).get("available", False) else "disabled"
-        )
-        rb_mscl_mock.pack(anchor="w", ipady=8)
-        ttk.Label(
-            mode_mscl_mock_frame, 
-            text="     Teste de integração usando estruturas MSCL simuladas. Requer biblioteca MSCL.",
-            font=("Segoe UI", 11),
-            foreground="#64748b"
-        ).pack(anchor="w", padx=(30, 0))
-        
-        # REAL Mode
+        # REAL Mode (único modo disponible en producción)
         mode_real_frame = ttk.Labelframe(modes_frame, text="", padding=20)
         mode_real_frame.pack(fill=X, pady=10)
         
@@ -1042,8 +1003,7 @@ class BalanzaGUI(ttk.Window):
             text="   REAL - Hardware MicroStrain",
             variable=mode_var,
             value="REAL",
-            style='BigRadio.TRadiobutton',
-            state="normal" if available_modes.get("REAL", {}).get("available", False) else "disabled"
+            style='BigRadio.TRadiobutton'
         )
         rb_real.pack(anchor="w", ipady=8)
         ttk.Label(
@@ -1215,100 +1175,6 @@ class BalanzaGUI(ttk.Window):
         
         # Indicador visual de la balanza
         ttk.Label(tab_nodes, text="↑ Frente da balança ↑", font=("Segoe UI", 11, "italic"), foreground="#64748b").pack(pady=(15, 5))
-
-        # ==================== Tab TESTES (Solo en modo MOCK) ====================
-        tab_tests = ttk.Frame(notebook, padding=30)
-        notebook.add(tab_tests, text="   🧪 TESTES   ")
-        
-        ttk.Label(tab_tests, text="Simulação de Cenários", font=("Segoe UI", 18, "bold")).pack(anchor="w", pady=(0, 15))
-        
-        ttk.Label(tab_tests, 
-                  text="Use estes controles para simular falhas e condições de teste.\nDisponível apenas em modo MOCK/MSCL_MOCK.",
-                  font=("Segoe UI", 12), foreground="#64748b").pack(anchor="w", pady=(0, 20))
-        
-        # Frame para escenarios de fallo
-        fail_frame = ttk.Labelframe(tab_tests, text="Falhas de Sensores", padding=20)
-        fail_frame.pack(fill=X, pady=(0, 15))
-        
-        # Botones para cada sensor (grid 2x2)
-        sensor_btns_frame = ttk.Frame(fail_frame)
-        sensor_btns_frame.pack(fill=X)
-        sensor_btns_frame.columnconfigure(0, weight=1)
-        sensor_btns_frame.columnconfigure(1, weight=1)
-        
-        self._test_sensor_states = {key: tk.BooleanVar(value=False) for key in NODOS_CONFIG.keys()}
-        
-        def toggle_sensor_offline(key):
-            is_offline = self._test_sensor_states[key].get()
-            node_id = NODOS_CONFIG[key]['id']
-            if is_offline:
-                self.command_queue.put({'cmd': 'TEST_SENSOR_OFFLINE', 'node_id': node_id})
-            else:
-                self.command_queue.put({'cmd': 'TEST_SENSOR_ONLINE', 'node_id': node_id})
-        
-        sensor_labels = {
-            "celda_sup_izq": "Sensor Sup. Esq.",
-            "celda_sup_der": "Sensor Sup. Dir.",
-            "celda_inf_izq": "Sensor Inf. Esq.",
-            "celda_inf_der": "Sensor Inf. Dir."
-        }
-        
-        positions = [("celda_sup_izq", 0, 0), ("celda_sup_der", 0, 1), 
-                     ("celda_inf_izq", 1, 0), ("celda_inf_der", 1, 1)]
-        
-        for key, row, col in positions:
-            btn = ttk.Checkbutton(
-                sensor_btns_frame,
-                text=f"❌ {sensor_labels[key]} Offline",
-                variable=self._test_sensor_states[key],
-                command=lambda k=key: toggle_sensor_offline(k),
-                bootstyle="danger-outline-toolbutton",
-                width=25,
-                padding=(15, 12)
-            )
-            btn.grid(row=row, column=col, padx=10, pady=8, sticky="ew")
-        
-        # Frame para escenarios de carga
-        load_frame = ttk.Labelframe(tab_tests, text="Simulação de Carga", padding=20)
-        load_frame.pack(fill=X, pady=(0, 15))
-        
-        load_btns = ttk.Frame(load_frame)
-        load_btns.pack(fill=X)
-        
-        def send_test_command(cmd, **kwargs):
-            self.command_queue.put({'cmd': cmd, **kwargs})
-        
-        ttk.Button(load_btns, text="📈 Rampa +50t", bootstyle="info", padding=(20, 12),
-                   command=lambda: send_test_command('TEST_RAMP_UP', weight=50.0)).pack(side=LEFT, padx=5)
-        
-        ttk.Button(load_btns, text="📉 Descarga", bootstyle="info-outline", padding=(20, 12),
-                   command=lambda: send_test_command('TEST_RAMP_DOWN')).pack(side=LEFT, padx=5)
-        
-        ttk.Button(load_btns, text="💥 Impacto 10t", bootstyle="warning", padding=(20, 12),
-                   command=lambda: send_test_command('TEST_SPIKE', magnitude=10.0)).pack(side=LEFT, padx=5)
-        
-        ttk.Button(load_btns, text="⚡ Alto Ruído", bootstyle="warning-outline", padding=(20, 12),
-                   command=lambda: send_test_command('TEST_NOISE')).pack(side=LEFT, padx=5)
-        
-        # Frame para control
-        ctrl_frame = ttk.Labelframe(tab_tests, text="Controle", padding=20)
-        ctrl_frame.pack(fill=X, pady=(0, 15))
-        
-        ctrl_btns = ttk.Frame(ctrl_frame)
-        ctrl_btns.pack(fill=X)
-        
-        def reset_all_tests():
-            for key in self._test_sensor_states:
-                self._test_sensor_states[key].set(False)
-            send_test_command('TEST_RESET_ALL')
-        
-        ttk.Button(ctrl_btns, text="🔄 Reset Todos os Testes", bootstyle="success", padding=(25, 15),
-                   command=reset_all_tests).pack(side=LEFT, padx=5)
-        
-        # Status de escenarios activos
-        self._test_status_var = tk.StringVar(value="Nenhum cenário ativo")
-        ttk.Label(ctrl_btns, textvariable=self._test_status_var, 
-                  font=("Segoe UI", 11), foreground="#64748b").pack(side=LEFT, padx=20)
 
         # ==================== Botões de Ação ====================
         # Frame de botões fixo na parte inferior con borda superior

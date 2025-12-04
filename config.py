@@ -9,11 +9,9 @@ if os.path.exists(_MSCL_PATH) and _MSCL_PATH not in sys.path:
     sys.path.insert(0, _MSCL_PATH)
     print(f"[CONFIG] MSCL path adicionado: {_MSCL_PATH}")
 
-# Modo de execução:
-#   "MOCK"      - Simulação simples sem MSCL (desenvolvimento rápido)
-#   "MSCL_MOCK" - Simulação usando estruturas MSCL (teste de integração)
-#   "REAL"      - Hardware real com MSCL
-MODO_EJECUCION = "MOCK" 
+# Modo de execução - Versão de Produção
+# Apenas modo REAL disponível
+MODO_EJECUCION = "REAL" 
 
 # Configuração Serial (Somente para modo REAL)
 PUERTO_COM = "COM3" # Ajustar conforme a porta real

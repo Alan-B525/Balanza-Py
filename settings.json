@@ -1,5 +1,5 @@
 {
-    "execution_mode": "MSCL_MOCK",
+    "execution_mode": "REAL",
     "connection_type": "TCP",
     "serial_port": "COM3",
     "tcp_ip": "192.168.0.100",
