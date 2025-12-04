@@ -1,4 +1,6 @@
 import queue
+import threading
+import time
 import tkinter as tk
 from tkinter import filedialog, BOTH, YES, NO, X, Y, LEFT, RIGHT, END, HORIZONTAL, BOTTOM, TOP
 from PIL import Image, ImageTk
@@ -30,6 +32,10 @@ class BalanzaGUI(ttk.Window):
         
         self.connected = False
         
+        # Variables para conexión asíncrona
+        self._connection_thread = None
+        self._cancel_connection = False
+        
         # Handle window close event
         self.protocol("WM_DELETE_WINDOW", self.quit_app)
         
@@ -38,6 +44,9 @@ class BalanzaGUI(ttk.Window):
         
         # Start update loop
         self.after(50, self.actualizar_gui)
+        
+        # Iniciar conexão automaticamente após a UI carregar
+        self.after(500, self._auto_connect_on_startup)
 
     def _configure_styles(self):
         # Colors
@@ -413,6 +422,10 @@ class BalanzaGUI(ttk.Window):
                     self.log_message(f"[ERRO] {msg['payload']}")
                 elif msg['type'] == 'LOG':
                     self.log_message(msg['payload'])
+                elif msg['type'] == 'CONNECTION_PROGRESS':
+                    # Actualizar dialogo de conexion con progreso
+                    payload = msg['payload']
+                    self._update_connection_progress(payload)
                 elif msg['type'] == 'SENSOR_DISCONNECT':
                     # Mostrar dialogo de alerta de sensor desconectado
                     payload = msg['payload']
@@ -866,9 +879,202 @@ class BalanzaGUI(ttk.Window):
 
     def toggle_connection(self):
         if not self.connected:
-            self.command_queue.put({'cmd': 'CONNECT'})
+            self._show_connection_dialog()
         else:
             self.command_queue.put({'cmd': 'DISCONNECT'})
+
+    def _auto_connect_on_startup(self):
+        """Inicia conexão automaticamente quando o programa abre."""
+        if not self.connected:
+            self._show_connection_dialog()
+
+    def _show_connection_dialog(self):
+        """Mostra diálogo de conexão - 100% não bloqueante."""
+        self._connection_dialog_active = True
+        self._cancel_connection = False
+        
+        # Criar janela
+        dialog = ttk.Toplevel(self)
+        dialog.overrideredirect(True)
+        dialog.geometry("600x400")
+        
+        # Centralizar
+        x = self.winfo_x() + (self.winfo_width() // 2) - 300
+        y = self.winfo_y() + (self.winfo_height() // 2) - 200
+        dialog.geometry(f"+{x}+{y}")
+        
+        dialog.lift()
+        
+        # Container
+        outer_frame = ttk.Frame(dialog, bootstyle="secondary", padding=3)
+        outer_frame.pack(fill=BOTH, expand=YES)
+        
+        frame = ttk.Frame(outer_frame, padding=25)
+        frame.pack(fill=BOTH, expand=YES)
+        
+        # Título
+        ttk.Label(frame, text="CONECTANDO", font=("Segoe UI", 20, "bold"), 
+                  foreground="#1e293b").pack(pady=(5, 10))
+        
+        # Ícone
+        ttk.Label(frame, text="🔌", font=("Segoe UI", 44)).pack(pady=8)
+        
+        # Status
+        self._conn_status = ttk.Label(frame, text="Procurando sensor...", 
+                                       font=("Segoe UI", 16), wraplength=520)
+        self._conn_status.pack(pady=(8, 5))
+        
+        # Info
+        self._conn_info = ttk.Label(frame, text="Aguarde...", 
+                                     font=("Segoe UI", 12), foreground="#64748b")
+        self._conn_info.pack(pady=(0, 8))
+        
+        # Barra de progresso
+        self._conn_progress = ttk.Progressbar(frame, mode='indeterminate', 
+                                               bootstyle="info-striped", length=450)
+        self._conn_progress.pack(pady=8, fill=X, padx=30)
+        self._conn_progress.start(8)
+        
+        # Botones
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill=X, pady=(15, 5))
+        
+        self._conn_dialog = dialog
+        self._conn_btn = ttk.Button(btn_frame, text="CANCELAR", bootstyle="danger",
+                                     command=self._cancel_connection_dialog, padding=(30, 15))
+        self._conn_btn.pack(expand=YES, ipadx=20, ipady=5)
+        
+        dialog.transient(self)
+        dialog.update_idletasks()  # Forzar renderizado inmediato
+        dialog.after(20, lambda: dialog.grab_set())
+        
+        # Enviar comando y empezar a monitorear
+        self.command_queue.put({'cmd': 'CONNECT'})
+        self._conn_start_time = time.time()
+        self._conn_attempt = 1
+        dialog.after(100, self._check_connection_status)
+    
+    def _check_connection_status(self):
+        """Verifica estado - llamado via after(), nunca bloquea."""
+        if not self._connection_dialog_active:
+            return
+        
+        try:
+            if not self._conn_dialog.winfo_exists():
+                return
+        except:
+            return
+        
+        # Éxito
+        if self.connected:
+            self._conn_progress.stop()
+            self._conn_status.configure(text="✅ Conectado!", foreground="#22c55e")
+            self._conn_info.configure(text="")
+            self._conn_btn.configure(state='disabled')
+            self._connection_dialog_active = False
+            self._conn_dialog.after(800, self._safe_close_conn_dialog)
+            return
+        
+        # Cancelado
+        if self._cancel_connection:
+            return
+        
+        # Calcular tiempo
+        elapsed = time.time() - self._conn_start_time
+        
+        # Actualizar info cada 100ms
+        self._conn_info.configure(text=f"Tentativa {self._conn_attempt} • {int(elapsed)}s")
+        
+        # Timeout por intento (6 segundos)
+        if elapsed > 6 * self._conn_attempt:
+            if self._conn_attempt < 3:
+                self._conn_attempt += 1
+                self._conn_status.configure(text=f"Tentativa {self._conn_attempt}...")
+                self.command_queue.put({'cmd': 'CONNECT'})
+            else:
+                # Falló después de 3 intentos
+                self._conn_progress.stop()
+                self._conn_status.configure(
+                    text="❌ Sensor não encontrado", foreground="#ef4444")
+                self._conn_info.configure(text="Verifique a conexão e tente novamente")
+                self._conn_btn.configure(text="FECHAR", bootstyle="secondary",
+                                          command=self._safe_close_conn_dialog)
+                self._connection_dialog_active = False
+                return
+        
+        # Continuar verificando (nunca bloquea)
+        self._conn_dialog.after(100, self._check_connection_status)
+    
+    def _cancel_connection_dialog(self):
+        """Cancela conexión inmediatamente."""
+        self._cancel_connection = True
+        self._connection_dialog_active = False
+        self._conn_progress.stop()
+        self._conn_status.configure(text="Cancelado")
+        self._conn_dialog.after(300, self._safe_close_conn_dialog)
+    
+    def _safe_close_conn_dialog(self):
+        """Cierra diálogo de forma segura."""
+        try:
+            if hasattr(self, '_conn_dialog') and self._conn_dialog.winfo_exists():
+                self._conn_dialog.destroy()
+        except:
+            pass
+        
+    def _update_connection_progress(self, data):
+        """Atualiza o diálogo de conexão com o progresso."""
+        if not hasattr(self, '_connection_dialog') or not self._connection_dialog_active:
+            return
+            
+        try:
+            attempt = data.get('attempt', 1)
+            max_attempts = data.get('max_attempts', 3)
+            status = data.get('status', 'connecting')
+            message = data.get('message', 'Conectando...')
+            
+            self._connection_attempt_lbl.configure(
+                text=f"Tentativa {attempt} de {max_attempts}"
+            )
+            self._connection_status_lbl.configure(text=message)
+            
+            if status == 'success':
+                self._connection_progress.stop()
+                self._connection_status_lbl.configure(
+                    text="✅ Conexão estabelecida com sucesso!",
+                    foreground="#22c55e"
+                )
+                self._connection_btn_cancel.configure(state='disabled')
+                self._connection_dialog_active = False
+                self._connection_dialog.after(1000, self._connection_dialog.destroy)
+                
+            elif status == 'failed':
+                self._connection_progress.stop()
+                self._connection_status_lbl.configure(
+                    text="❌ " + message,
+                    foreground="#ef4444"
+                )
+                self._connection_btn_cancel.configure(text="FECHAR", state='normal')
+                self._connection_dialog_active = False
+                
+            elif status == 'cancelled':
+                self._connection_progress.stop()
+                self._connection_dialog_active = False
+                try:
+                    self._connection_dialog.destroy()
+                except:
+                    pass
+                    
+        except Exception as e:
+            print(f"[GUI] Erro atualizando progresso de conexão: {e}")
+    
+    def _close_connection_dialog(self):
+        """Fecha o diálogo de conexão se estiver aberto."""
+        self._connection_dialog_active = False
+        if hasattr(self, '_connection_dialog'):
+            try:
+                self._connection_dialog.destroy()
+            except:
+                pass
 
     def quit_app(self):
         if self.show_large_confirmation("Sair", "Deseja sair do sistema?"):

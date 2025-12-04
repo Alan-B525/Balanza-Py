@@ -97,6 +97,10 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
     MAX_AUTO_RECONNECT = 5          # Máximo intentos automáticos
     reconnect_check_counter = {}    # Contador para espaciar notificaciones
     
+    # Variables para conexión asíncrona
+    connection_thread = None
+    connection_in_progress = False
+    
     while running:
         # 1. Processar Comandos da GUI
         try:
@@ -105,19 +109,38 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
                 cmd = cmd_msg['cmd']
                 
                 if cmd == 'CONNECT':
-                    try:
-                        # Usar a configuracao ativa
-                        connected = sistema_pesaje.conectar(ACTIVE_COM)
-                        data_queue.put({'type': 'STATUS', 'payload': connected})
-                        if connected:
-                            data_queue.put({'type': 'LOG', 'payload': f"Conectado com sucesso a {ACTIVE_COM}"})
-                            acquisition_paused = False
-                            reconnecting_nodes.clear()
-                            reconnect_attempts.clear()
-                        else:
-                            data_queue.put({'type': 'LOG', 'payload': f"Falha ao conectar a {ACTIVE_COM}"})
-                    except Exception as e:
-                        data_queue.put({'type': 'ERROR', 'payload': str(e)})
+                    # Ejecutar conexión en hilo separado para no bloquear
+                    if not connection_in_progress:
+                        connection_in_progress = True
+                        
+                        def do_connect():
+                            nonlocal connection_in_progress, acquisition_paused
+                            try:
+                                connected = sistema_pesaje.conectar(ACTIVE_COM)
+                                data_queue.put({'type': 'STATUS', 'payload': connected})
+                                if connected:
+                                    data_queue.put({'type': 'LOG', 'payload': f"Conectado com sucesso a {ACTIVE_COM}"})
+                                    acquisition_paused = False
+                                    reconnecting_nodes.clear()
+                                    reconnect_attempts.clear()
+                                else:
+                                    data_queue.put({'type': 'LOG', 'payload': f"Falha ao conectar a {ACTIVE_COM}"})
+                            except Exception as e:
+                                data_queue.put({'type': 'STATUS', 'payload': False})
+                                data_queue.put({'type': 'LOG', 'payload': f"Erro: {str(e)}"})
+                            finally:
+                                connection_in_progress = False
+                        
+                        connection_thread = threading.Thread(target=do_connect, daemon=True)
+                        connection_thread.start()
+                
+                elif cmd == 'CONNECT_WITH_PROGRESS':
+                    # Mismo comportamiento que CONNECT
+                    pass
+                
+                elif cmd == 'CANCEL_CONNECT':
+                    # La cancelación se maneja en la GUI
+                    pass
                     
                 elif cmd == 'DISCONNECT':
                     sistema_pesaje.desconectar()
