@@ -37,6 +37,12 @@ from .interfaces import ISistemaPesaje
 # CONFIGURACIÓN DE MSCL
 # =============================================================================
 
+# Agregar ruta de MSCL al path del sistema
+import sys
+_mscl_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'MSCL', 'x64', 'Release')
+if _mscl_path not in sys.path:
+    sys.path.insert(0, _mscl_path)
+
 # Intentar importar MSCL
 try:
     import mscl

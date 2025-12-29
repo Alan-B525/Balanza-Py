@@ -310,6 +310,10 @@ def main():
     # Inicializar Logica de Negocio
     procesador = DataProcessor(ACTIVE_NODOS)
     
+    # Carregar estado de tara anterior (persistencia)
+    if procesador.load_tara_state():
+        print("[INFO] Estado de tara carregado de app_state.json")
+    
     # Inicializar Hardware (Mock ou Real) usando a factory e modo configurado
     print(f"[INFO] Criando sistema de pesagem no modo: {ACTIVE_MODE}")
     sistema_pesaje = criar_sistema_pesaje(ACTIVE_MODE, ACTIVE_NODOS)

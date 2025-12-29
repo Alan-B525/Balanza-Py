@@ -50,6 +50,13 @@ def check_mscl_installation() -> Dict[str, Any]:
         "error": None
     }
     
+    # Agregar ruta de MSCL al path del sistema
+    import os
+    import sys
+    _mscl_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'MSCL', 'x64', 'Release')
+    if _mscl_path not in sys.path:
+        sys.path.insert(0, _mscl_path)
+    
     try:
         import mscl
         result["installed"] = True

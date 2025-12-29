@@ -78,14 +78,14 @@ class BalanzaGUI(ttk.Window):
         # Total Panel - MUY PROMINENTE para énfasis máximo
         self.style.configure('TotalPanel.TFrame', background=PRIMARY)
         self.style.configure('TotalLabel.TLabel', background=PRIMARY, foreground="white", font=(FONT_MAIN, 28, "bold"))
-        self.style.configure('TotalValue.TLabel', background=PRIMARY, foreground="white", font=(FONT_MONO, 140, "bold"))
-        self.style.configure('TotalUnit.TLabel', background=PRIMARY, foreground="white", font=(FONT_MAIN, 32))
+        self.style.configure('TotalValue.TLabel', background=PRIMARY, foreground="white", font=(FONT_MONO, 120, "bold"))
+        self.style.configure('TotalUnit.TLabel', background=PRIMARY, foreground="white", font=(FONT_MAIN, 36))
         
         # Total Panel DANGER - Cuando hay sensor desconectado (ROJO)
         self.style.configure('TotalPanelDanger.TFrame', background=DANGER)
         self.style.configure('TotalLabelDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MAIN, 28, "bold"))
-        self.style.configure('TotalValueDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MONO, 140, "bold"))
-        self.style.configure('TotalUnitDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MAIN, 32))
+        self.style.configure('TotalValueDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MONO, 120, "bold"))
+        self.style.configure('TotalUnitDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MAIN, 36))
         
         # Tara Info - Más visible
         self.style.configure('TareInfo.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, 18, "bold"))
@@ -270,7 +270,7 @@ class BalanzaGUI(ttk.Window):
             # Unidad
             ttk.Label(
                 value_container, 
-                text="toneladas", 
+                text="kg", 
                 font=('Segoe UI', 15), 
                 foreground="#64748b",
                 background="#ffffff"
@@ -304,13 +304,14 @@ class BalanzaGUI(ttk.Window):
         self.lbl_total_title.pack(fill=X)
         self.lbl_total = ttk.Label(
             self.total_section, 
-            text="0.00", 
+            text="0", 
             style='TotalValue.TLabel', 
             anchor="center",
             width=10  # Ancho fijo para evitar cambios
         )
         self.lbl_total.pack(fill=X, pady=20)
-        self.lbl_total_unit = ttk.Label(self.total_section, text="toneladas", style='TotalUnit.TLabel', anchor="center")
+        self.lbl_total_unit = ttk.Label(self.total_section, text="kg", style='TotalUnit.TLabel', anchor="center")
+        self.lbl_total_unit.pack()
         self.lbl_total_unit.pack()
         
         # Separador dentro del panel
@@ -323,7 +324,7 @@ class BalanzaGUI(ttk.Window):
         # Info de Tara - MÁS GRANDE Y VISIBLE
         self.lbl_tare_info = ttk.Label(
             actions_section, 
-            text="Tara Acumulada: 0.00 t", 
+            text="Tara Acumulada: 0 kg", 
             style='TareInfo.TLabel',
             anchor="center"
         )
@@ -333,10 +334,10 @@ class BalanzaGUI(ttk.Window):
         btn_row = ttk.Frame(actions_section, style='CardNoBorder.TFrame')
         btn_row.pack(fill=X)
         
-        # Botón TARA - Grande y prominente
+        # Botón ZERAR (Tarar) - Grande y prominente
         btn_tare = ttk.Button(
             btn_row, 
-            text="TARA", 
+            text="ZERAR", 
             command=self.do_tare, 
             bootstyle="warning", 
             style='Tare.TButton', 
@@ -345,15 +346,15 @@ class BalanzaGUI(ttk.Window):
         )
         btn_tare.pack(side=LEFT, expand=YES, padx=5)
         
-        # Botón Reset Tara - MISMO TAMAÑO que TARA
+        # Botón Reset Tara - MISMO TAMAÑO que ZERAR
         btn_reset = ttk.Button(
             btn_row, 
             text="RESET TARA", 
             command=self.reset_tare, 
             bootstyle="secondary", 
-            style='Tare.TButton',  # Mismo estilo que TARA
+            style='Tare.TButton',  # Mismo estilo que ZERAR
             width=12, 
-            padding=(25, 18)  # Mismo padding que TARA
+            padding=(25, 18)  # Mismo padding que ZERAR
         )
         btn_reset.pack(side=LEFT, expand=YES, padx=5)
 
@@ -460,12 +461,10 @@ class BalanzaGUI(ttk.Window):
         self.log_text.text.configure(state='disabled')
 
     def _update_display(self, data):
-        # Actualizar Total
-        self.lbl_total.configure(text=f"{data['total']:.2f}")
-        
-        # Actualizar Tara Acumulada
+        # Actualizar Tara Acumulada en kg
         if 'total_tare' in data:
-            self.lbl_tare_info.configure(text=f"Tara Acumulada: {data['total_tare']:.2f} t")
+            tara_kg = int(round(data['total_tare'] * 1000))
+            self.lbl_tare_info.configure(text=f"Tara Acumulada: {tara_kg} kg")
         
         # Verificar si hay sensores desconectados para cambiar color del panel
         any_disconnected = data.get('any_disconnected', False)
@@ -477,19 +476,20 @@ class BalanzaGUI(ttk.Window):
                     any_disconnected = True
                     break
         
-        # Cambiar color del panel TOTAL según estado de sensores
+        # Cambiar color del panel TOTAL según estado de sensores - FAIL-SAFE
         if any_disconnected:
-            # ROJO - Hay sensor(es) desconectado(s)
+            # ROJO - Hay sensor(es) desconectado(s) - SISTEMA PARADO
             self.total_section.configure(style='TotalPanelDanger.TFrame')
-            self.lbl_total_title.configure(style='TotalLabelDanger.TLabel')
-            self.lbl_total.configure(style='TotalValueDanger.TLabel')
-            self.lbl_total_unit.configure(style='TotalUnitDanger.TLabel')
+            self.lbl_total_title.configure(text="ERRO DE COMUNICAÇÃO", style='TotalLabelDanger.TLabel')
+            self.lbl_total.configure(text="---", style='TotalValueDanger.TLabel')
+            self.lbl_total_unit.configure(text="SISTEMA PARADO", style='TotalUnitDanger.TLabel')
         else:
             # AZUL - Todos los sensores conectados (normal)
             self.total_section.configure(style='TotalPanel.TFrame')
-            self.lbl_total_title.configure(style='TotalLabel.TLabel')
-            self.lbl_total.configure(style='TotalValue.TLabel')
-            self.lbl_total_unit.configure(style='TotalUnit.TLabel')
+            self.lbl_total_title.configure(text="PESO TOTAL", style='TotalLabel.TLabel')
+            peso_kg = int(round(data['total'] * 1000))
+            self.lbl_total.configure(text=f"{peso_kg}", style='TotalValue.TLabel')
+            self.lbl_total_unit.configure(text="kg", style='TotalUnit.TLabel')
         
         # Actualizar Sensores Individuales
         sensores = data['sensores']
@@ -497,8 +497,9 @@ class BalanzaGUI(ttk.Window):
             if key in sensores:
                 info = sensores[key]
                 
-                # Actualizar valor
-                widgets['value'].configure(text=f"{info['valor']:.2f}")
+                # Actualizar valor - Mostrar en kg (entero)
+                valor_kg = int(round(info['valor'] * 1000))  # Convertir toneladas a kg
+                widgets['value'].configure(text=f"{valor_kg}")
                 
                 # Atualizar estado visual segundo conexão
                 if info.get('connected', True):
@@ -545,12 +546,12 @@ class BalanzaGUI(ttk.Window):
         # Criar janela secundária SIN BARRA DE TÍTULO
         dialog = ttk.Toplevel(self)
         dialog.overrideredirect(True)  # Quitar barra de Windows
-        dialog.geometry("550x320")
+        dialog.geometry("600x360")
         
         # Centralizar em relação à janela principal
         try:
-            x = self.winfo_x() + (self.winfo_width() // 2) - 275
-            y = self.winfo_y() + (self.winfo_height() // 2) - 160
+            x = self.winfo_x() + (self.winfo_width() // 2) - 300
+            y = self.winfo_y() + (self.winfo_height() // 2) - 180
             dialog.geometry(f"+{x}+{y}")
         except:
             pass
@@ -585,13 +586,13 @@ class BalanzaGUI(ttk.Window):
         def on_no():
             dialog.destroy()
             
-        btn_yes = ttk.Button(btn_frame, text="SIM", style="Large.success.TButton", width=14, 
+        btn_yes = ttk.Button(btn_frame, text="SIM", style="Large.success.TButton", width=12, 
                              command=on_yes, padding=(20, 15))
-        btn_yes.pack(side=LEFT, padx=20, expand=YES)
+        btn_yes.pack(side=LEFT, padx=20, expand=YES, fill=X)
         
-        btn_no = ttk.Button(btn_frame, text="NÃO", style="Large.danger.TButton", width=14, 
+        btn_no = ttk.Button(btn_frame, text="NÃO", style="Large.danger.TButton", width=12, 
                             command=on_no, padding=(20, 15))
-        btn_no.pack(side=RIGHT, padx=20, expand=YES)
+        btn_no.pack(side=RIGHT, padx=20, expand=YES, fill=X)
 
         dialog.transient(self)
         # Usar after para grab_set (evita conflicto con overrideredirect)
@@ -607,12 +608,12 @@ class BalanzaGUI(ttk.Window):
         # Criar janela SIN BARRA DE TÍTULO
         dialog = ttk.Toplevel(target)
         dialog.overrideredirect(True)
-        dialog.geometry("500x250")
+        dialog.geometry("550x300")
         
         # Centralizar
         try:
-            x = target.winfo_x() + (target.winfo_width() // 2) - 250
-            y = target.winfo_y() + (target.winfo_height() // 2) - 125
+            x = target.winfo_x() + (target.winfo_width() // 2) - 275
+            y = target.winfo_y() + (target.winfo_height() // 2) - 150
             dialog.geometry(f"+{x}+{y}")
         except:
             pass
@@ -697,12 +698,12 @@ class BalanzaGUI(ttk.Window):
         # Crear dialogo de alerta
         dialog = ttk.Toplevel(self)
         dialog.overrideredirect(True)
-        dialog.geometry("600x400")
+        dialog.geometry("700x480")
         
         # Centrar
         try:
-            x = self.winfo_x() + (self.winfo_width() // 2) - 300
-            y = self.winfo_y() + (self.winfo_height() // 2) - 200
+            x = self.winfo_x() + (self.winfo_width() // 2) - 350
+            y = self.winfo_y() + (self.winfo_height() // 2) - 240
             dialog.geometry(f"+{x}+{y}")
         except:
             pass
@@ -896,11 +897,11 @@ class BalanzaGUI(ttk.Window):
         # Criar janela
         dialog = ttk.Toplevel(self)
         dialog.overrideredirect(True)
-        dialog.geometry("600x400")
+        dialog.geometry("700x480")
         
         # Centralizar
-        x = self.winfo_x() + (self.winfo_width() // 2) - 300
-        y = self.winfo_y() + (self.winfo_height() // 2) - 200
+        x = self.winfo_x() + (self.winfo_width() // 2) - 350
+        y = self.winfo_y() + (self.winfo_height() // 2) - 240
         dialog.geometry(f"+{x}+{y}")
         
         dialog.lift()
@@ -1122,8 +1123,8 @@ class BalanzaGUI(ttk.Window):
         # Tamaño adaptativo según pantalla
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
-        dialog_w = min(1000, screen_w - 100)
-        dialog_h = min(850, screen_h - 100)
+        dialog_w = min(1100, screen_w - 80)
+        dialog_h = min(920, screen_h - 80)
         
         # Centrar en pantalla
         x = (screen_w - dialog_w) // 2

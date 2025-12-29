@@ -44,7 +44,7 @@ class DataProcessor:
     
     MEDIAN_WINDOW_SIZE = 5
     EMA_ALPHA = 0.3
-    SENSOR_TIMEOUT_S = 3.0
+    SENSOR_TIMEOUT_S = 5.0  # 5 segundos para sensores de 0.5Hz (1 dato cada 2s)
     
     def __init__(self, nodos_config: Dict[str, Dict[str, Any]], 
                  median_window: int = 5,
@@ -239,11 +239,63 @@ class DataProcessor:
             if ema_value is not None:
                 self._tares[node_id] = ema_value
                 taras_aplicadas[node_id] = ema_value
+        # Guardar tara en archivo de estado
+        self._save_tara_state()
         return taras_aplicadas
     
     def reset_tara(self) -> None:
         for node_id in self._tares:
             self._tares[node_id] = 0.0
+        # Guardar tara en archivo de estado
+        self._save_tara_state()
+    
+    def load_tara_state(self) -> bool:
+        """Carga el estado de tara desde app_state.json."""
+        import json
+        import os
+        state_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app_state.json")
+        
+        if os.path.exists(state_path):
+            try:
+                with open(state_path, 'r', encoding='utf-8') as f:
+                    state = json.load(f)
+                
+                if 'taras' in state:
+                    for node_id_str, tara_value in state['taras'].items():
+                        node_id = int(node_id_str)
+                        if node_id in self._tares:
+                            self._tares[node_id] = float(tara_value)
+                    return True
+            except Exception as e:
+                print(f"[DATA_PROCESSOR] Error cargando estado de tara: {e}")
+        return False
+    
+    def _save_tara_state(self) -> bool:
+        """Guarda el estado de tara en app_state.json."""
+        import json
+        import os
+        state_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app_state.json")
+        
+        try:
+            # Cargar estado existente si hay
+            state = {}
+            if os.path.exists(state_path):
+                try:
+                    with open(state_path, 'r', encoding='utf-8') as f:
+                        state = json.load(f)
+                except:
+                    pass
+            
+            # Actualizar taras (convertir keys a string para JSON)
+            state['taras'] = {str(k): v for k, v in self._tares.items()}
+            state['last_updated'] = time.strftime("%Y-%m-%d %H:%M:%S")
+            
+            with open(state_path, 'w', encoding='utf-8') as f:
+                json.dump(state, f, indent=2, ensure_ascii=False)
+            return True
+        except Exception as e:
+            print(f"[DATA_PROCESSOR] Error guardando estado de tara: {e}")
+            return False
     
     def get_tara(self, node_id: int) -> float:
         return self._tares.get(node_id, 0.0)

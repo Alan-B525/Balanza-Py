@@ -1875,10 +1875,6 @@ class WirelessModels(object):
     node_sgLink200_oem_qbridge_120_ufl = _mscl.WirelessModels_node_sgLink200_oem_qbridge_120_ufl
     node_sgLink200_oem_qbridge_350 = _mscl.WirelessModels_node_sgLink200_oem_qbridge_350
     node_sgLink200_oem_qbridge_350_ufl = _mscl.WirelessModels_node_sgLink200_oem_qbridge_350_ufl
-    node_sgLink200_oem_128hz = _mscl.WirelessModels_node_sgLink200_oem_128hz
-    node_sgLink200_oem_256hz = _mscl.WirelessModels_node_sgLink200_oem_256hz
-    node_sgLink200_oem_qbridge_350_128hz = _mscl.WirelessModels_node_sgLink200_oem_qbridge_350_128hz
-    node_sgLink200_oem_qbridge_350_256hz = _mscl.WirelessModels_node_sgLink200_oem_qbridge_350_256hz
     node_sgLink_rgd = _mscl.WirelessModels_node_sgLink_rgd
     node_shmLink = _mscl.WirelessModels_node_shmLink
     node_tcLink_1ch = _mscl.WirelessModels_node_tcLink_1ch
@@ -5511,7 +5507,8 @@ class DeviceCommPort(object):
     UART = _mscl.DeviceCommPort_UART
     USB = _mscl.DeviceCommPort_USB
     NONE = _mscl.DeviceCommPort_NONE
-    MIP = _mscl.DeviceCommPort_MIP
+    MIP_COMMANDS = _mscl.DeviceCommPort_MIP_COMMANDS
+    MIP_DATA = _mscl.DeviceCommPort_MIP_DATA
     NMEA = _mscl.DeviceCommPort_NMEA
     RTCM = _mscl.DeviceCommPort_RTCM
     SPARTN = _mscl.DeviceCommPort_SPARTN
@@ -6633,15 +6630,12 @@ class GnssSignalConfiguration(object):
     __repr__ = _swig_repr
     L1CA = _mscl.GnssSignalConfiguration_L1CA
     L2C = _mscl.GnssSignalConfiguration_L2C
-    L5 = _mscl.GnssSignalConfiguration_L5
     L1OF = _mscl.GnssSignalConfiguration_L1OF
     L2OF = _mscl.GnssSignalConfiguration_L2OF
     E1 = _mscl.GnssSignalConfiguration_E1
     E5B = _mscl.GnssSignalConfiguration_E5B
-    E5A = _mscl.GnssSignalConfiguration_E5A
     B1 = _mscl.GnssSignalConfiguration_B1
     B2 = _mscl.GnssSignalConfiguration_B2
-    B2A = _mscl.GnssSignalConfiguration_B2A
 
     def __init__(self):
         _mscl.GnssSignalConfiguration_swiginit(self, _mscl.new_GnssSignalConfiguration())
