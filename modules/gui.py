@@ -32,6 +32,12 @@ class BalanzaGUI(ttk.Window):
         
         self.connected = False
         
+        # Almacenar últimos datos para calibración
+        self._last_sensor_data = {}
+        
+        # Almacenar nodos descubiertos
+        self._discovered_nodes = []
+        
         # Variables para conexión asíncrona
         self._connection_thread = None
         self._cancel_connection = False
@@ -270,7 +276,7 @@ class BalanzaGUI(ttk.Window):
             # Unidad
             ttk.Label(
                 value_container, 
-                text="kg", 
+                text="ton", 
                 font=('Segoe UI', 15), 
                 foreground="#64748b",
                 background="#ffffff"
@@ -282,13 +288,17 @@ class BalanzaGUI(ttk.Window):
                 'status': status_lbl
             }
 
-        # Crear sensores en posiciones: izquierda y derecha (SENSOR en vez de CÉLULA)
+        # Crear sensores en posiciones: izquierda y derecha (numerados)
         keys = list(NODOS_CONFIG.keys())
         if len(keys) >= 4:
-            create_sensor_card(keys[0], "SENSOR SUP. ESQUERDO", 0, 0)
-            create_sensor_card(keys[1], "SENSOR SUP. DIREITO", 0, 2)
-            create_sensor_card(keys[2], "SENSOR INF. ESQUERDO", 1, 0)
-            create_sensor_card(keys[3], "SENSOR INF. DIREITO", 1, 2)
+            create_sensor_card(keys[0], "📦 CELDA 1", 0, 0)
+            create_sensor_card(keys[1], "📦 CELDA 2", 0, 2)
+            create_sensor_card(keys[2], "📦 CELDA 3", 1, 0)
+            create_sensor_card(keys[3], "📦 CELDA 4", 1, 2)
+        elif len(keys) >= 2:
+            # Fallback si solo hay 2 celdas configuradas
+            create_sensor_card(keys[0], "📦 CELDA 1", 0, 0)
+            create_sensor_card(keys[1], "📦 CELDA 2", 0, 2)
 
         # --- PANEL CENTRAL: TOTAL (MÁS GRANDE) ---
         control_panel = ttk.Frame(grid_area, style='Card.TFrame', padding=15)
@@ -310,7 +320,7 @@ class BalanzaGUI(ttk.Window):
             width=10  # Ancho fijo para evitar cambios
         )
         self.lbl_total.pack(fill=X, pady=20)
-        self.lbl_total_unit = ttk.Label(self.total_section, text="kg", style='TotalUnit.TLabel', anchor="center")
+        self.lbl_total_unit = ttk.Label(self.total_section, text="ton", style='TotalUnit.TLabel', anchor="center")
         self.lbl_total_unit.pack()
         self.lbl_total_unit.pack()
         
@@ -415,6 +425,7 @@ class BalanzaGUI(ttk.Window):
                 
                 if msg['type'] == 'DATA':
                     data = msg['payload']
+                    self._last_sensor_data = data  # Guardar para calibración
                     self._update_display(data)
                 elif msg['type'] == 'STATUS':
                     self._update_status(msg['payload'])
@@ -443,6 +454,10 @@ class BalanzaGUI(ttk.Window):
                     # Notificar fallo de reconexion
                     payload = msg['payload']
                     self._handle_reconnect_failed(payload)
+                elif msg['type'] == 'DISCOVERED_NODES':
+                    # Actualizar lista de nodos descubiertos en configuración
+                    payload = msg['payload']
+                    self._handle_discovered_nodes(payload)
                 
         except queue.Empty:
             pass
@@ -461,10 +476,10 @@ class BalanzaGUI(ttk.Window):
         self.log_text.text.configure(state='disabled')
 
     def _update_display(self, data):
-        # Actualizar Tara Acumulada en kg
+        # Actualizar Tara Acumulada en toneladas
         if 'total_tare' in data:
-            tara_kg = int(round(data['total_tare'] * 1000))
-            self.lbl_tare_info.configure(text=f"Tara Acumulada: {tara_kg} kg")
+            tara_ton = data['total_tare']  # Ya viene en toneladas del procesador
+            self.lbl_tare_info.configure(text=f"Tara Acumulada: {tara_ton:.2f} ton")
         
         # Verificar si hay sensores desconectados para cambiar color del panel
         any_disconnected = data.get('any_disconnected', False)
@@ -487,9 +502,9 @@ class BalanzaGUI(ttk.Window):
             # AZUL - Todos los sensores conectados (normal)
             self.total_section.configure(style='TotalPanel.TFrame')
             self.lbl_total_title.configure(text="PESO TOTAL", style='TotalLabel.TLabel')
-            peso_kg = int(round(data['total'] * 1000))
-            self.lbl_total.configure(text=f"{peso_kg}", style='TotalValue.TLabel')
-            self.lbl_total_unit.configure(text="kg", style='TotalUnit.TLabel')
+            peso_ton = data['total']  # Ya viene en toneladas del procesador
+            self.lbl_total.configure(text=f"{peso_ton:.2f}", style='TotalValue.TLabel')
+            self.lbl_total_unit.configure(text="ton", style='TotalUnit.TLabel')
         
         # Actualizar Sensores Individuales
         sensores = data['sensores']
@@ -497,9 +512,9 @@ class BalanzaGUI(ttk.Window):
             if key in sensores:
                 info = sensores[key]
                 
-                # Actualizar valor - Mostrar en kg (entero)
-                valor_kg = int(round(info['valor'] * 1000))  # Convertir toneladas a kg
-                widgets['value'].configure(text=f"{valor_kg}")
+                # Actualizar valor - Mostrar en toneladas con 2 decimales
+                valor_ton = info['valor']  # Ya viene en toneladas del procesador
+                widgets['value'].configure(text=f"{valor_ton:.2f}")
                 
                 # Atualizar estado visual segundo conexão
                 if info.get('connected', True):
@@ -579,12 +594,23 @@ class BalanzaGUI(ttk.Window):
         btn_frame = ttk.Frame(frame)
         btn_frame.pack(fill=X, pady=10)
         
+        # Función de cierre seguro
+        def safe_close():
+            try:
+                dialog.grab_release()
+            except:
+                pass
+            try:
+                dialog.destroy()
+            except:
+                pass
+        
         def on_yes():
             result['value'] = True
-            dialog.destroy()
+            safe_close()
             
         def on_no():
-            dialog.destroy()
+            safe_close()
             
         btn_yes = ttk.Button(btn_frame, text="SIM", style="Large.success.TButton", width=12, 
                              command=on_yes, padding=(20, 15))
@@ -594,9 +620,14 @@ class BalanzaGUI(ttk.Window):
                             command=on_no, padding=(20, 15))
         btn_no.pack(side=RIGHT, padx=20, expand=YES, fill=X)
 
+        # Configurar cierre con protocolo
+        dialog.protocol("WM_DELETE_WINDOW", on_no)
+        
         dialog.transient(self)
-        # Usar after para grab_set (evita conflicto con overrideredirect)
-        dialog.after(10, lambda: dialog.grab_set())
+        try:
+            dialog.grab_set()
+        except:
+            pass  # Ignorar si no se puede obtener el grab
         self.wait_window(dialog)
         
         return result['value']
@@ -649,13 +680,30 @@ class BalanzaGUI(ttk.Window):
                             wraplength=440, justify="center")
         msg_lbl.pack(pady=(10, 25), expand=YES)
         
+        # Función de cierre seguro
+        def close_dialog():
+            try:
+                dialog.grab_release()
+            except:
+                pass
+            try:
+                dialog.destroy()
+            except:
+                pass
+        
         # Botón OK
         btn_ok = ttk.Button(frame, text="OK", bootstyle=bootstyle, width=12,
-                            command=dialog.destroy, padding=(20, 12))
+                            command=close_dialog, padding=(20, 12))
         btn_ok.pack()
         
+        # Configurar cierre con X (si se pudiera)
+        dialog.protocol("WM_DELETE_WINDOW", close_dialog)
+        
         dialog.transient(target)
-        dialog.after(10, lambda: dialog.grab_set())
+        try:
+            dialog.grab_set()
+        except:
+            pass  # Ignorar si no se puede obtener el grab
         target.wait_window(dialog)
 
     def reset_tare(self):
@@ -877,6 +925,61 @@ class BalanzaGUI(ttk.Window):
                 dialog_info['dialog'].destroy()
             except:
                 pass
+    
+    def _handle_discovered_nodes(self, nodes_list):
+        """
+        Maneja la respuesta de descubrimiento de nodos.
+        Actualiza la UI con los nodos y canales encontrados.
+        
+        Args:
+            nodes_list: Lista de dicts con info de cada nodo:
+                [{
+                    'id': 12345,
+                    'rssi': -45,
+                    'model': 'SG-Link-200',
+                    'channels': [{'channel': 'ch1', 'type': 'strain', 'value': 0.0}, ...],
+                    'sample_rate': '32 Hz'
+                }, ...]
+        """
+        # Guardar nodos descubiertos
+        self._discovered_nodes = nodes_list
+        
+        # Actualizar label de status
+        if hasattr(self, '_discovered_nodes_var'):
+            if nodes_list:
+                total_channels = sum(len(n.get('channels', [])) for n in nodes_list)
+                self._discovered_nodes_var.set(
+                    f"✅ Encontrados {len(nodes_list)} nodo(s) com {total_channels} canal(is)"
+                )
+            else:
+                self._discovered_nodes_var.set("⚠️ Nenhum nó encontrado")
+        
+        # Actualizar treeview si existe
+        if hasattr(self, '_disc_tree'):
+            try:
+                # Limpiar treeview
+                for item in self._disc_tree.get_children():
+                    self._disc_tree.delete(item)
+                
+                # Agregar nodos y canales
+                for node in nodes_list:
+                    node_id = node.get('id', 0)
+                    rssi = node.get('rssi', 0)
+                    channels = node.get('channels', [])
+                    
+                    for ch_info in channels:
+                        ch_name = ch_info.get('channel', 'ch1')
+                        ch_value = ch_info.get('value', 0.0)
+                        
+                        self._disc_tree.insert("", "end", values=(
+                            node_id,
+                            ch_name,
+                            f"{rssi} dBm",
+                            f"{ch_value:.4f}",
+                            "✅ Activo"
+                        ))
+            except Exception as e:
+                self.log_message(f"Erro atualizando lista de nós: {e}")
 
     def toggle_connection(self):
         if not self.connected:
@@ -1083,28 +1186,16 @@ class BalanzaGUI(ttk.Window):
             self.destroy()
 
     def show_configuration_dialog(self):
-        """Abre um diálogo para configurar conexão, modo e nós."""
+        """Abre um diálogo para configurar sensores e calibração."""
         import json
         import os
         
-        # Verificar disponibilidade do MSCL
-        try:
-            from modules.factory import check_mscl_installation, get_available_modes
-            mscl_info = check_mscl_installation()
-            available_modes = get_available_modes()
-        except:
-            mscl_info = {"installed": False}
-            available_modes = {"MOCK": {"available": True}, "MSCL_MOCK": {"available": False}, "REAL": {"available": False}}
-        
         # Carregar configuração atual ou usar defaults
-        # Usar caminho absoluto para garantir que funcione de qualquer diretório
         config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "settings.json")
         current_config = {
-            "execution_mode": "MOCK",
-            "connection_type": "TCP",
+            "execution_mode": "REAL",
+            "connection_type": "SERIAL",
             "serial_port": "COM3",
-            "tcp_ip": "192.168.0.100",
-            "tcp_port": "5000",
             "nodes": NODOS_CONFIG
         }
         
@@ -1116,272 +1207,247 @@ class BalanzaGUI(ttk.Window):
             except:
                 pass
 
-        # Criar janela modal - SIN BARRA DE TÍTULO (frameless)
+        # Criar janela modal - SEM BARRA DE TÍTULO
         dialog = ttk.Toplevel(self)
-        dialog.overrideredirect(True)  # Quitar barra de Windows
+        dialog.overrideredirect(True)
         
-        # Tamaño adaptativo según pantalla
+        # Tamanho quase tela cheia para tablet
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
-        dialog_w = min(1100, screen_w - 80)
-        dialog_h = min(920, screen_h - 80)
-        
-        # Centrar en pantalla
-        x = (screen_w - dialog_w) // 2
-        y = (screen_h - dialog_h) // 2
+        dialog_w = screen_w - 40
+        dialog_h = screen_h - 40
+        x = 20
+        y = 20
         dialog.geometry(f"{dialog_w}x{dialog_h}+{x}+{y}")
         
-        # Forzar que aparezca arriba
         dialog.lift()
         dialog.focus_force()
 
-        # Estilos personalizados para abas MUY GRANDES (touch-friendly)
+        # Estilos para abas grandes (touch-friendly)
         style = ttk.Style()
         style.configure('BigTab.TNotebook.Tab', 
                         font=('Segoe UI', 22, 'bold'), 
-                        padding=(50, 25))  # Muy grande para tocar con el dedo
-        style.configure('BigRadio.TRadiobutton', font=('Segoe UI', 14))
+                        padding=(50, 25))
+        
+        # Função de fechamento seguro
+        def safe_close_dialog():
+            try:
+                dialog.grab_release()
+            except:
+                pass
+            try:
+                dialog.destroy()
+            except:
+                pass
 
-        # === BORDE FUERTE para delimitar la ventana ===
+        # === BORDA para delimitar a janela ===
         border_frame = ttk.Frame(dialog, bootstyle="dark", padding=4)
         border_frame.pack(fill=BOTH, expand=YES)
         
-        # Container principal con título propio (dentro del borde)
         main_frame = ttk.Frame(border_frame, padding=20)
         main_frame.pack(fill=BOTH, expand=YES)
         
-        # Título personalizado (reemplaza la barra de Windows)
+        # Título
         title_frame = ttk.Frame(main_frame, style='Header.TFrame', padding=10)
         title_frame.pack(fill=X, pady=(0, 15))
         
         ttk.Label(title_frame, text="⚙  CONFIGURAÇÃO DO SISTEMA", 
-                  font=("Segoe UI", 20, "bold"), 
+                  font=("Segoe UI", 26, "bold"), 
                   foreground="#1e293b", 
                   background="#ffffff").pack(side=LEFT)
         
-        # Botón X para cerrar - MÁS GRANDE
         btn_close = ttk.Button(title_frame, text="✕ FECHAR", 
                                bootstyle="danger", 
-                               command=dialog.destroy,
-                               width=10,
-                               padding=(15, 10))
+                               command=safe_close_dialog,
+                               width=12,
+                               padding=(20, 12))
         btn_close.pack(side=RIGHT)
 
-        # --- Contenedor con SCROLL ---
+        # --- Container com SCROLL ---
         from ttkbootstrap.scrolled import ScrolledFrame
         scroll_container = ScrolledFrame(main_frame, autohide=True)
         scroll_container.pack(fill=BOTH, expand=YES)
         
-        # --- Abas com estilo grande (dentro del scroll) ---
+        # --- Abas ---
         notebook = ttk.Notebook(scroll_container, style='BigTab.TNotebook')
         notebook.pack(fill=BOTH, expand=YES)
         
-        # ==================== Tab MODO ====================
-        tab_mode = ttk.Frame(notebook, padding=30)
-        notebook.add(tab_mode, text="   🔧 MODO   ")
-        
-        ttk.Label(tab_mode, text="Modo de Execução", font=("Segoe UI", 18, "bold")).pack(anchor="w", pady=(0, 20))
-        
-        # Info sobre MSCL
-        mscl_frame = ttk.Labelframe(tab_mode, text="Status da Biblioteca MSCL", padding=20)
-        mscl_frame.pack(fill=X, pady=(0, 25))
-        
-        if mscl_info["installed"]:
-            mscl_status = "✅ MSCL Instalado e Disponível"
-            mscl_color = "#22c55e"
-        else:
-            mscl_status = "❌ MSCL Não Encontrado (modos REAL e MSCL_MOCK indisponíveis)"
-            mscl_color = "#ef4444"
-        
-        ttk.Label(mscl_frame, text=mscl_status, font=("Segoe UI", 14), foreground=mscl_color).pack(anchor="w")
-        
-        # Selector de modo - SOLO REAL para producción
-        mode_var = tk.StringVar(value="REAL")
-        
-        modes_frame = ttk.Frame(tab_mode)
-        modes_frame.pack(fill=X, pady=15)
-        
-        # REAL Mode (único modo disponible en producción)
-        mode_real_frame = ttk.Labelframe(modes_frame, text="", padding=20)
-        mode_real_frame.pack(fill=X, pady=10)
-        
-        rb_real = ttk.Radiobutton(
-            mode_real_frame,
-            text="   REAL - Hardware MicroStrain",
-            variable=mode_var,
-            value="REAL",
-            style='BigRadio.TRadiobutton'
-        )
-        rb_real.pack(anchor="w", ipady=8)
-        ttk.Label(
-            mode_real_frame, 
-            text="     Conexão real com BaseStation e nós SG-Link. Requer hardware e MSCL.",
-            font=("Segoe UI", 11),
-            foreground="#64748b"
-        ).pack(anchor="w", padx=(30, 0))
-
-        # ==================== Tab Conexão ====================
-        tab_conn = ttk.Frame(notebook, padding=30)
-        notebook.add(tab_conn, text="   🔌 CONEXÃO   ")
-        
-        ttk.Label(tab_conn, text="Tipo de Conexão:", font=("Segoe UI", 16, "bold")).pack(anchor="w", pady=(0, 15))
-        conn_type_var = tk.StringVar(value=current_config["connection_type"])
-        
-        # Containers para opções
-        lf_serial = ttk.Labelframe(tab_conn, text="Configuração Serial", padding=25)
-        lf_tcp = ttk.Labelframe(tab_conn, text="Configuração TCP/IP (BaseStation)", padding=25)
-
-        # Função para alternar visibilidade
-        def toggle_connection_options():
-            if conn_type_var.get() == "SERIAL":
-                lf_serial.pack(fill=X, pady=20)
-                lf_tcp.pack_forget()
-            else:
-                lf_serial.pack_forget()
-                lf_tcp.pack(fill=X, pady=20)
-
-        # Radio buttons GRANDES para tablet
-        frame_radios = ttk.Frame(tab_conn)
-        frame_radios.pack(fill=X, pady=(0, 20))
-        
-        rb_tcp = ttk.Radiobutton(
-            frame_radios, 
-            text="   TCP/IP (Ethernet/Wifi)   ", 
-            variable=conn_type_var, 
-            value="TCP", 
-            command=toggle_connection_options,
-            style='BigRadio.TRadiobutton'
-        )
-        rb_tcp.pack(side=LEFT, padx=(0, 40), ipady=12, ipadx=15)
-        
-        rb_serial = ttk.Radiobutton(
-            frame_radios, 
-            text="   Serial (USB)   ", 
-            variable=conn_type_var, 
-            value="SERIAL", 
-            command=toggle_connection_options,
-            style='BigRadio.TRadiobutton'
-        )
-        rb_serial.pack(side=LEFT, ipady=12, ipadx=15)
-        
-        # Serial Options
-        ttk.Label(lf_serial, text="Porta COM:", font=("Segoe UI", 14)).pack(anchor="w")
-        entry_serial = ttk.Entry(lf_serial, font=("Segoe UI", 18))
-        entry_serial.insert(0, current_config["serial_port"])
-        entry_serial.pack(fill=X, pady=(8, 0), ipady=12)
-        
-        # TCP Options - Campos maiores
-        frame_ip = ttk.Frame(lf_tcp)
-        frame_ip.pack(fill=X, pady=(0, 20))
-        
-        ttk.Label(frame_ip, text="Endereço IP da BaseStation:", font=("Segoe UI", 14)).pack(anchor="w")
-        entry_ip = ttk.Entry(frame_ip, font=("Segoe UI", 18))
-        entry_ip.delete(0, END)
-        entry_ip.insert(0, current_config["tcp_ip"])
-        entry_ip.pack(fill=X, pady=(8, 0), ipady=12)
-        
-        frame_port = ttk.Frame(lf_tcp)
-        frame_port.pack(fill=X)
-        
-        ttk.Label(frame_port, text="Porta TCP:", font=("Segoe UI", 14)).pack(anchor="w")
-        entry_tcp_port = ttk.Entry(frame_port, font=("Segoe UI", 18))
-        entry_tcp_port.delete(0, END)
-        entry_tcp_port.insert(0, current_config["tcp_port"])
-        entry_tcp_port.pack(fill=X, pady=(8, 0), ipady=12)
-        
-        # Info adicional
-        ttk.Label(
-            lf_tcp, 
-            text="💡 A porta TCP típica para BaseStation é 5000", 
-            font=("Segoe UI", 12), 
-            foreground="#64748b"
-        ).pack(anchor="w", pady=(20, 0))
-
-        # Inicializar estado visual
-        toggle_connection_options()
-
         # ==================== Tab Sensores ====================
         tab_nodes = ttk.Frame(notebook, padding=30)
         notebook.add(tab_nodes, text="   📡 SENSORES   ")
         
-        ttk.Label(tab_nodes, text="Configuração de Nós Sem Fio", font=("Segoe UI", 16, "bold")).pack(anchor="w", pady=(0, 20))
+        ttk.Label(tab_nodes, text="Configuração de Celdas de Carga", 
+                  font=("Segoe UI", 18, "bold")).pack(anchor="w", pady=(0, 10))
         
-        # Botão para descobrir nós (usando MSCL)
-        discover_frame = ttk.Frame(tab_nodes)
+        ttk.Label(tab_nodes, 
+                  text="2 Nodos SG-Link-200 com 2 canais cada = 4 celdas de carga no total",
+                  font=("Segoe UI", 12), foreground="#64748b").pack(anchor="w", pady=(0, 20))
+        
+        # === Porta Serial (USB Gateway) ===
+        port_frame = ttk.Labelframe(tab_nodes, text="Porta Serial (Gateway USB)", padding=15)
+        port_frame.pack(fill=X, pady=(0, 20))
+        
+        port_inner = ttk.Frame(port_frame)
+        port_inner.pack(fill=X)
+        
+        ttk.Label(port_inner, text="Porta COM:", font=("Segoe UI", 14)).pack(side=LEFT, padx=(0, 10))
+        entry_serial = ttk.Entry(port_inner, font=("Segoe UI", 14), width=15)
+        entry_serial.insert(0, current_config.get("serial_port", "COM3"))
+        entry_serial.pack(side=LEFT, ipady=6)
+        
+        ttk.Label(port_inner, text="(ex: COM3, COM4, etc.)", 
+                  font=("Segoe UI", 11), foreground="#64748b").pack(side=LEFT, padx=(15, 0))
+        
+        # === Frame de Descubrimiento ===
+        discover_frame = ttk.Labelframe(tab_nodes, text="Descoberta de Nós", padding=15)
         discover_frame.pack(fill=X, pady=(0, 20))
         
-        self.discovered_nodes_var = tk.StringVar(value="Nenhuma busca de nós realizada")
+        discover_btn_frame = ttk.Frame(discover_frame)
+        discover_btn_frame.pack(fill=X, pady=(0, 10))
         
-        def discover_nodes():
-            """Tenta descobrir nós usando MSCL se está conectado."""
-            self.discovered_nodes_var.set("Procurando nós... (requer conexão ativa)")
-            # Enviar comando ao backend para descobrir nós
+        # Variable para almacenar nodos descubiertos
+        self._discovered_nodes = []
+        self._discovered_nodes_var = tk.StringVar(value="Conecte o sistema e pressione 'Buscar' para descobrir nós")
+        
+        def discover_nodes_action():
+            """Inicia descubrimiento de nodos."""
+            self._discovered_nodes_var.set("🔍 Procurando nós na rede... aguarde...")
             self.command_queue.put({'cmd': 'DISCOVER_NODES'})
-            self.log_message("Solicitando descoberta de nós...")
+            self.log_message("Iniciando descoberta de nós SG-Link...")
         
         ttk.Button(
-            discover_frame, 
+            discover_btn_frame, 
             text="🔍 BUSCAR NÓS NA REDE", 
-            command=discover_nodes,
+            command=discover_nodes_action,
             bootstyle="info",
             padding=(25, 15)
         ).pack(side=LEFT)
         
+        # Botón para autoasignar
+        def auto_assign_nodes():
+            """Autoasigna nodos descubiertos a las celdas."""
+            if not self._discovered_nodes:
+                self._discovered_nodes_var.set("⚠️ Primeiro busque os nós na rede")
+                return
+            
+            # Autoasignar: recorrer nodos y canales
+            celda_idx = 1
+            for node in self._discovered_nodes:
+                node_id = node.get('id', 0)
+                channels = node.get('channels', [])
+                
+                for ch_info in channels:
+                    if celda_idx > 4:
+                        break
+                    ch_name = ch_info.get('channel', 'ch1')
+                    
+                    # Actualizar entries
+                    key = f"celda_{celda_idx}"
+                    if key in node_entries:
+                        node_entries[key]["id"].delete(0, END)
+                        node_entries[key]["id"].insert(0, str(node_id))
+                        node_entries[key]["ch"].delete(0, END)
+                        node_entries[key]["ch"].insert(0, ch_name)
+                    
+                    celda_idx += 1
+                
+                if celda_idx > 4:
+                    break
+            
+            self._discovered_nodes_var.set(f"✅ {celda_idx - 1} celdas auto-atribuídas")
+        
+        ttk.Button(
+            discover_btn_frame, 
+            text="⚡ AUTO-ATRIBUIR", 
+            command=auto_assign_nodes,
+            bootstyle="warning",
+            padding=(20, 15)
+        ).pack(side=LEFT, padx=(15, 0))
+        
+        # Label de status
         ttk.Label(
             discover_frame, 
-            textvariable=self.discovered_nodes_var, 
+            textvariable=self._discovered_nodes_var, 
             font=("Segoe UI", 12), 
             foreground="#64748b"
-        ).pack(side=LEFT, padx=(20, 0))
+        ).pack(anchor="w", pady=(10, 5))
+        
+        # Frame para mostrar nodos descubiertos
+        discovered_list_frame = ttk.Frame(discover_frame)
+        discovered_list_frame.pack(fill=X, pady=(5, 0))
+        
+        # Treeview para mostrar nodos descubiertos
+        disc_columns = ("node_id", "channel", "rssi", "value", "status")
+        self._disc_tree = ttk.Treeview(discovered_list_frame, columns=disc_columns, 
+                                        show="headings", height=4)
+        
+        self._disc_tree.heading("node_id", text="Nodo ID")
+        self._disc_tree.heading("channel", text="Canal")
+        self._disc_tree.heading("rssi", text="RSSI")
+        self._disc_tree.heading("value", text="Valor Atual")
+        self._disc_tree.heading("status", text="Estado")
+        
+        self._disc_tree.column("node_id", width=100, anchor="center")
+        self._disc_tree.column("channel", width=80, anchor="center")
+        self._disc_tree.column("rssi", width=80, anchor="center")
+        self._disc_tree.column("value", width=120, anchor="center")
+        self._disc_tree.column("status", width=100, anchor="center")
+        
+        self._disc_tree.pack(fill=X, pady=(5, 0))
         
         node_entries = {}
         
-        # === MATRIZ 2x2 VISUAL para indicar posición de sensores ===
-        ttk.Label(tab_nodes, text="Disposição dos Sensores (vista superior):", font=("Segoe UI", 14)).pack(anchor="w", pady=(10, 15))
+        # === CONFIGURACIÓN DE 4 CELDAS NUMERADAS ===
+        ttk.Label(tab_nodes, text="Atribuição de Celdas (1-4):", 
+                  font=("Segoe UI", 14, "bold")).pack(anchor="w", pady=(20, 10))
         
-        # Contenedor de la matriz visual
-        matrix_frame = ttk.Frame(tab_nodes)
-        matrix_frame.pack(fill=BOTH, expand=YES, padx=20)
+        # Frame para las 4 celdas en una fila
+        cells_frame = ttk.Frame(tab_nodes)
+        cells_frame.pack(fill=X, pady=(0, 15))
         
-        # Configurar grid 2x2
-        matrix_frame.columnconfigure(0, weight=1)
-        matrix_frame.columnconfigure(1, weight=1)
-        matrix_frame.rowconfigure(0, weight=1)
-        matrix_frame.rowconfigure(1, weight=1)
+        for i in range(4):
+            cells_frame.columnconfigure(i, weight=1)
         
-        # Función para crear cada celda del sensor
-        def create_sensor_config_cell(key, label_short, row, col):
-            cell_frame = ttk.Labelframe(matrix_frame, text=label_short, padding=15)
-            cell_frame.grid(row=row, column=col, sticky="nsew", padx=8, pady=8)
+        # Crear las 4 celdas
+        for celda_num in range(1, 5):
+            key = f"celda_{celda_num}"
+            current_node_data = current_config["nodes"].get(key, {"id": 0, "ch": "ch1", "nombre": f"Celda {celda_num}"})
             
-            current_node_data = current_config["nodes"].get(key, {"id": 0, "ch": "ch1"})
+            # Frame de cada celda
+            cell_frame = ttk.Labelframe(cells_frame, text=f"📦 CELDA {celda_num}", padding=15)
+            cell_frame.grid(row=0, column=celda_num-1, sticky="nsew", padx=8, pady=5)
             
             # Node ID
             id_frame = ttk.Frame(cell_frame)
             id_frame.pack(fill=X, pady=5)
-            ttk.Label(id_frame, text="Node ID:", font=("Segoe UI", 12)).pack(side=LEFT)
+            ttk.Label(id_frame, text="Nodo ID:", font=("Segoe UI", 12)).pack(side=LEFT)
             e_id = ttk.Entry(id_frame, font=("Segoe UI", 14), width=10)
-            e_id.insert(0, str(current_node_data["id"]))
+            e_id.insert(0, str(current_node_data.get("id", 0)))
             e_id.pack(side=RIGHT, ipady=6)
             
             # Channel
             ch_frame = ttk.Frame(cell_frame)
             ch_frame.pack(fill=X, pady=5)
             ttk.Label(ch_frame, text="Canal:", font=("Segoe UI", 12)).pack(side=LEFT)
-            e_ch = ttk.Entry(ch_frame, font=("Segoe UI", 14), width=10)
-            e_ch.insert(0, str(current_node_data["ch"]))
-            e_ch.pack(side=RIGHT, ipady=6)
+            ch_combo = ttk.Combobox(ch_frame, values=["ch1", "ch2", "ch3", "ch4"], 
+                                     font=("Segoe UI", 14), width=8, state="readonly")
+            ch_combo.set(current_node_data.get("ch", "ch1"))
+            ch_combo.pack(side=RIGHT, ipady=4)
             
-            node_entries[key] = {"id": e_id, "ch": e_ch}
+            node_entries[key] = {"id": e_id, "ch": ch_combo}
         
-        # Crear matriz 2x2 con posiciones claras (SENSOR en vez de célula)
-        create_sensor_config_cell("celda_sup_izq", "⬉ SENSOR SUP. ESQ.", 0, 0)
-        create_sensor_config_cell("celda_sup_der", "⬈ SENSOR SUP. DIR.", 0, 1)
-        create_sensor_config_cell("celda_inf_izq", "⬋ SENSOR INF. ESQ.", 1, 0)
-        create_sensor_config_cell("celda_inf_der", "⬊ SENSOR INF. DIR.", 1, 1)
+        # Nota explicativa
+        ttk.Label(tab_nodes, 
+                  text="💡 Cada nodo SG-Link-200 tiene 2 canales (ch1, ch2). "
+                       "Configure cada celda con su nodo y canal correspondiente.",
+                  font=("Segoe UI", 11), foreground="#64748b",
+                  wraplength=800).pack(anchor="w", pady=(10, 5))
+
+        # ==================== Tab CALIBRAÇÃO ====================
+        tab_cal = ttk.Frame(notebook, padding=30)
+        notebook.add(tab_cal, text="   ⚖ CALIBRAÇÃO   ")
         
-        # Indicador visual de la balanza
-        ttk.Label(tab_nodes, text="↑ Frente da balança ↑", font=("Segoe UI", 11, "italic"), foreground="#64748b").pack(pady=(15, 5))
+        self._setup_calibration_tab(tab_cal, current_config)
 
         # ==================== Botões de Ação ====================
         # Frame de botões fixo na parte inferior con borda superior
@@ -1397,11 +1463,11 @@ class BalanzaGUI(ttk.Window):
         
         def save_config():
             new_config = {
-                "execution_mode": mode_var.get(),
-                "connection_type": conn_type_var.get(),
+                "execution_mode": "REAL",
+                "connection_type": "SERIAL",
                 "serial_port": entry_serial.get(),
-                "tcp_ip": entry_ip.get(),
-                "tcp_port": entry_tcp_port.get(),
+                "tcp_ip": "",
+                "tcp_port": "",
                 "nodes": {}
             }
             
@@ -1419,11 +1485,20 @@ class BalanzaGUI(ttk.Window):
                 with open(config_path, 'w') as f:
                     json.dump(new_config, f, indent=4)
                 
-                self.show_alert("Salvo", "Configuração salva.\nReinicie a aplicação para aplicar as alterações.", "success", parent=dialog)
-                dialog.destroy()
+                # Liberar grab antes de mostrar alerta
+                try:
+                    dialog.grab_release()
+                except:
+                    pass
+                
+                self.show_alert("Salvo", "Configuração salva.\nReinicie a aplicação para aplicar as alterações.", "success", parent=self)
+                safe_close_dialog()
             except Exception as e:
-                self.show_alert("Erro", f"Não foi possível salvar: {e}", "error", parent=dialog)
-
+                try:
+                    dialog.grab_release()
+                except:
+                    pass
+                self.show_alert("Erro", f"Não foi possível salvar: {e}", "error", parent=self)
         # Botões GRANDES para tablet - más visibles
         btn_salvar = ttk.Button(
             btn_container, 
@@ -1438,12 +1513,817 @@ class BalanzaGUI(ttk.Window):
             btn_container, 
             text="  CANCELAR  ", 
             bootstyle="secondary", 
-            command=dialog.destroy,
+            command=safe_close_dialog,
             padding=(50, 18)
         )
         btn_cancelar.pack(side=RIGHT, padx=25, ipadx=20, ipady=5)
 
-        # Modal behavior - usar after para evitar conflictos con overrideredirect
+        # Configurar protocolo de cierre
+        dialog.protocol("WM_DELETE_WINDOW", safe_close_dialog)
+        
+        # Modal behavior
         dialog.transient(self)
-        dialog.after(10, lambda: dialog.grab_set())
+        try:
+            dialog.grab_set()
+        except:
+            pass
         self.wait_window(dialog)
+
+    def _setup_calibration_tab(self, parent, current_config):
+        """Configura la pestaña de calibración de sensores."""
+        from modules.calibration import CalibrationManager, CalibrationPoint
+        
+        # Título - fuente grande para tablet
+        ttk.Label(parent, text="Calibração de Celdas de Carga", 
+                  font=("Segoe UI", 22, "bold")).pack(anchor="w", pady=(0, 15))
+        
+        # Descripción - fuente legible
+        ttk.Label(parent, 
+                  text="Esta ferramenta permite realizar ensaios de calibração com pesos padrão.\n"
+                       "Os valores são salvos em CSV para análise posterior.",
+                  font=("Segoe UI", 14), foreground="#64748b",
+                  wraplength=900).pack(anchor="w", pady=(0, 20))
+        
+        # Frame de selección de sensor
+        select_frame = ttk.Labelframe(parent, text="Selecionar Sensor", padding=20)
+        select_frame.pack(fill=X, pady=(0, 15))
+        
+        # Combo de sensores - fuentes grandes
+        sensor_names = list(current_config.get("nodes", {}).keys())
+        self._cal_sensor_var = tk.StringVar(value=sensor_names[0] if sensor_names else "")
+        
+        ttk.Label(select_frame, text="Sensor a calibrar:", font=("Segoe UI", 18)).pack(side=LEFT, padx=(0, 15))
+        sensor_combo = ttk.Combobox(select_frame, textvariable=self._cal_sensor_var,
+                                     values=sensor_names, font=("Segoe UI", 18), 
+                                     state="readonly", width=25)
+        sensor_combo.pack(side=LEFT, ipady=8)
+        
+        # Botón para iniciar calibración - grande para tablet
+        btn_start_cal = ttk.Button(select_frame, text="▶ INICIAR CALIBRAÇÃO",
+                                    bootstyle="warning", padding=(25, 15),
+                                    command=lambda: self._open_calibration_wizard(current_config))
+        btn_start_cal.pack(side=RIGHT, padx=10)
+        
+        # Botón para cargar calibración existente - grande para tablet
+        btn_load_cal = ttk.Button(select_frame, text="📂 CARREGAR SESSÃO",
+                                   bootstyle="info", padding=(25, 15),
+                                   command=self._load_calibration_session)
+        btn_load_cal.pack(side=RIGHT, padx=10)
+        
+        # Frame de información sobre la calibración
+        info_frame = ttk.Labelframe(parent, text="Informação de Calibração", padding=15)
+        info_frame.pack(fill=BOTH, expand=YES, pady=10)
+        
+        info_text = """
+    PROCEDIMENTO DE CALIBRAÇÃO:
+
+1. Selecione o sensor que deseja calibrar
+2. Clique em "INICIAR CALIBRAÇÃO"
+3. Aplique os pesos padrão conforme indicado (0 a 200.000 kg)
+4. Para cada peso, clique em "CAPTURAR" para gravar a leitura
+5. Ao finalizar, o sistema calcula a curva de calibração
+6. Exporte os dados para CSV para documentação
+
+        """
+        
+        info_label = ttk.Label(info_frame, text=info_text, font=("Segoe UI", 12),
+                               justify="left", wraplength=850)
+        info_label.pack(anchor="w", fill=BOTH, expand=YES)
+        
+        # Lista de calibraciones guardadas
+        saved_frame = ttk.Labelframe(parent, text="Sessões Salvas", padding=15)
+        saved_frame.pack(fill=X, pady=10)
+        
+        self._cal_saved_list = ttk.Label(saved_frame, 
+                                          text="Carregando lista de calibrações...",
+                                          font=("Segoe UI", 11), foreground="#64748b")
+        self._cal_saved_list.pack(anchor="w")
+        
+        # Cargar lista de sesiones guardadas
+        self._refresh_saved_calibrations()
+    
+    def _refresh_saved_calibrations(self):
+        """Actualiza la lista de calibraciones guardadas."""
+        try:
+            from modules.calibration import CalibrationManager
+            from config import NODOS_CONFIG
+            
+            cal_manager = CalibrationManager(NODOS_CONFIG)
+            sessions = cal_manager.list_saved_sessions()
+            
+            if sessions:
+                text = "📁 Sessões encontradas:\n"
+                for s in sessions[:5]:  # Mostrar máximo 5
+                    text += f"   • {s['sensor_nombre']} - {s['fecha']} ({s['puntos']} pontos)\n"
+                if len(sessions) > 5:
+                    text += f"   ... e mais {len(sessions) - 5} sessões"
+            else:
+                text = "Nenhuma sessão de calibração salva"
+            
+            self._cal_saved_list.configure(text=text)
+        except Exception as e:
+            self._cal_saved_list.configure(text=f"Erro carregando sessões: {e}")
+    
+    def _load_calibration_session(self):
+        """Abre diálogo para cargar una sesión de calibración."""
+        from tkinter import filedialog
+        import os
+        
+        cal_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "calibrations")
+        
+        # Crear directorio si no existe
+        if not os.path.exists(cal_dir):
+            os.makedirs(cal_dir, exist_ok=True)
+        
+        try:
+            filepath = filedialog.askopenfilename(
+                title="Selecionar Sessão de Calibração",
+                initialdir=cal_dir,
+                filetypes=[("JSON files", "*.json"), ("CSV files", "*.csv"), ("All files", "*.*")],
+                parent=self
+            )
+            
+            # Usuario canceló el diálogo
+            if not filepath:
+                return
+            
+            self.log_message(f"Carregando sessão: {filepath}")
+            # TODO: Mostrar datos de la sesión cargada
+            self.show_alert("Carregado", f"Sessão carregada:\n{os.path.basename(filepath)}", "success")
+        except Exception as e:
+            self.log_message(f"Erro ao carregar sessão: {e}")
+    
+    def _open_calibration_wizard(self, current_config):
+        """Abre el wizard de calibración mejorado con gráfico en tiempo real."""
+        sensor_name = self._cal_sensor_var.get()
+        if not sensor_name:
+            self.show_alert("Erro", "Selecione um sensor para calibrar", "error")
+            return
+        
+        # Obtener ID del sensor
+        sensor_config = current_config.get("nodes", {}).get(sensor_name, {})
+        sensor_id = sensor_config.get("id", 0)
+        
+        if sensor_id == 0:
+            self.show_alert("Erro", "Sensor não configurado corretamente", "error")
+            return
+        
+        # Verificar matplotlib
+        try:
+            import matplotlib
+            matplotlib.use('TkAgg')
+            from matplotlib.figure import Figure
+            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+            import numpy as np
+        except ImportError:
+            self.show_alert("Erro", "Matplotlib não instalado. Execute: pip install matplotlib", "error")
+            return
+        
+        # Crear ventana del wizard
+        wizard = ttk.Toplevel(self)
+        wizard.overrideredirect(True)
+        
+        # Tamaño casi pantalla completa para tablet
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+        wizard_w = screen_w - 40
+        wizard_h = screen_h - 60
+        x = 20
+        y = 20
+        wizard.geometry(f"{wizard_w}x{wizard_h}+{x}+{y}")
+        
+        wizard.lift()
+        wizard.focus_force()
+        
+        # Guardar referencia al wizard
+        self._cal_wizard = wizard
+        self._cal_points = []  # Lista de puntos: [(peso_kg, mv_v), ...]
+        
+        # Función de cierre seguro
+        def on_close():
+            try:
+                self._cal_wizard_active = False
+                wizard.grab_release()
+            except:
+                pass
+            try:
+                wizard.destroy()
+            except:
+                pass
+            self._cal_wizard = None
+        
+        # Borde
+        border_frame = ttk.Frame(wizard, bootstyle="warning", padding=4)
+        border_frame.pack(fill=BOTH, expand=YES)
+        
+        main_frame = ttk.Frame(border_frame, padding=15)
+        main_frame.pack(fill=BOTH, expand=YES)
+        
+        # === HEADER ===
+        title_frame = ttk.Frame(main_frame)
+        title_frame.pack(fill=X, pady=(0, 10))
+        
+        ttk.Label(title_frame, text=f"⚖ CALIBRAÇÃO: {sensor_name.upper()}", 
+                  font=("Segoe UI", 24, "bold")).pack(side=LEFT)
+        
+        ttk.Button(title_frame, text="✕ FECHAR", bootstyle="danger",
+                   command=on_close, padding=(20, 10)).pack(side=RIGHT)
+        
+        # === CONTENEDOR PRINCIPAL (2 columnas) ===
+        content_frame = ttk.Frame(main_frame)
+        content_frame.pack(fill=BOTH, expand=YES)
+        content_frame.columnconfigure(0, weight=1)
+        content_frame.columnconfigure(1, weight=1)
+        content_frame.rowconfigure(0, weight=1)
+        
+        # === COLUMNA IZQUIERDA: Lectura + Tabla + Acciones ===
+        left_frame = ttk.Frame(content_frame)
+        left_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        
+        # Frame de lectura actual
+        reading_frame = ttk.Labelframe(left_frame, text="📊 Leitura Atual", padding=15)
+        reading_frame.pack(fill=X, pady=(0, 10))
+        
+        reading_container = ttk.Frame(reading_frame)
+        reading_container.pack(fill=X)
+        
+        self._cal_current_mv = ttk.Label(reading_container, text="0.0000 mV/V", 
+                                          font=("Consolas", 42, "bold"), foreground="#2563eb")
+        self._cal_current_mv.pack(side=LEFT)
+        
+        self._cal_current_kg = ttk.Label(reading_container, text="(0.000 ton)", 
+                                          font=("Segoe UI", 18), foreground="#64748b")
+        self._cal_current_kg.pack(side=LEFT, padx=(20, 0))
+        
+        ttk.Button(reading_container, text="🔄", bootstyle="info-outline",
+                   command=lambda: self._update_cal_reading(sensor_id),
+                   padding=(12, 8)).pack(side=RIGHT)
+        
+        # Frame de acciones - entrada de peso
+        action_frame = ttk.Labelframe(left_frame, text="➕ Adicionar Ponto", padding=15)
+        action_frame.pack(fill=X, pady=(0, 10))
+        
+        input_row = ttk.Frame(action_frame)
+        input_row.pack(fill=X, pady=(0, 10))
+        
+        ttk.Label(input_row, text="Peso real (kg):", font=("Segoe UI", 16)).pack(side=LEFT)
+        self._cal_peso_entry = ttk.Entry(input_row, font=("Segoe UI", 18), width=12)
+        self._cal_peso_entry.pack(side=LEFT, padx=10, ipady=8)
+        
+        ttk.Button(input_row, text="📥 CAPTURAR", bootstyle="success",
+                   command=lambda: self._capture_cal_point_v2(sensor_id),
+                   padding=(20, 12)).pack(side=LEFT, padx=5)
+        
+        ttk.Button(input_row, text="🗑 REMOVER", bootstyle="danger-outline",
+                   command=self._remove_cal_point_v2,
+                   padding=(15, 12)).pack(side=LEFT, padx=5)
+        
+        # Tabla de puntos capturados
+        table_frame = ttk.Labelframe(left_frame, text="📋 Pontos de Calibração", padding=10)
+        table_frame.pack(fill=BOTH, expand=YES, pady=(0, 10))
+        
+        columns = ("peso_real", "mv_v")
+        self._cal_tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=10)
+        
+        self._cal_tree.heading("peso_real", text="Peso Real (kg)")
+        self._cal_tree.heading("mv_v", text="Leitura (mV/V)")
+        
+        self._cal_tree.column("peso_real", width=180, anchor="center")
+        self._cal_tree.column("mv_v", width=180, anchor="center")
+        
+        scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=self._cal_tree.yview)
+        self._cal_tree.configure(yscrollcommand=scrollbar.set)
+        
+        self._cal_tree.pack(side=LEFT, fill=BOTH, expand=YES)
+        scrollbar.pack(side=RIGHT, fill=Y)
+        
+        # Botones de exportación
+        export_frame = ttk.Frame(left_frame)
+        export_frame.pack(fill=X)
+        
+        ttk.Button(export_frame, text="� EXPORTAR CSV", bootstyle="secondary",
+                   command=self._export_calibration_csv_v2,
+                   padding=(20, 12)).pack(side=LEFT, padx=5)
+        
+        ttk.Button(export_frame, text="� GUARDAR SESSÃO", bootstyle="success",
+                   command=self._save_calibration_session_v2,
+                   padding=(20, 12)).pack(side=LEFT, padx=5)
+        
+        # === COLUMNA DERECHA: Gráfico ===
+        right_frame = ttk.Labelframe(content_frame, text="📈 Curva de Calibração", padding=10)
+        right_frame.grid(row=0, column=1, sticky="nsew")
+        
+        # Crear figura de matplotlib con estilo moderno
+        fig = Figure(figsize=(7, 6), dpi=100, facecolor='#f8fafc')
+        self._cal_ax = fig.add_subplot(111)
+        self._cal_ax.set_facecolor('#ffffff')
+        self._cal_ax.set_xlabel('Peso Real (kg)', fontsize=12, fontweight='bold')
+        self._cal_ax.set_ylabel('mV/V', fontsize=12, fontweight='bold')
+        self._cal_ax.set_title('Curva de Calibração', fontsize=14, fontweight='bold', color='#1e293b')
+        self._cal_ax.grid(True, linestyle='--', alpha=0.7)
+        self._cal_ax.tick_params(labelsize=10)
+        
+        # Canvas de matplotlib en tkinter
+        self._cal_canvas = FigureCanvasTkAgg(fig, master=right_frame)
+        self._cal_canvas.draw()
+        self._cal_canvas.get_tk_widget().pack(fill=BOTH, expand=YES)
+        
+        # Label de resultados debajo del gráfico
+        self._cal_results_label = ttk.Label(right_frame, text="Adicione pontos para calcular a curva", 
+                                             font=("Segoe UI", 12), foreground="#64748b")
+        self._cal_results_label.pack(pady=(10, 0))
+        
+        # Iniciar calibration manager
+        from modules.calibration import CalibrationManager
+        from config import NODOS_CONFIG
+        
+        self._cal_manager = CalibrationManager(NODOS_CONFIG)
+        self._cal_manager.start_session(sensor_id, sensor_name)
+        
+        # Iniciar actualización de lectura
+        self._cal_wizard_active = True
+        self._cal_sensor_id = sensor_id
+        self._update_cal_reading_loop(wizard, sensor_id)
+        
+        wizard.protocol("WM_DELETE_WINDOW", on_close)
+        wizard.transient(self)
+    
+    def _update_cal_reading(self, sensor_id):
+        """Actualiza la lectura actual del sensor usando los últimos datos recibidos."""
+        try:
+            # Buscar sensor por ID en los últimos datos
+            kg = 0.0
+            for sensor_name, sensor_info in self._last_sensor_data.get('sensores', {}).items():
+                if sensor_info.get('id') == sensor_id:
+                    # El valor viene en toneladas, convertir a kg para consistencia
+                    kg = sensor_info.get('raw', 0.0) * 1000  # raw está en toneladas
+                    break
+            
+            ton = kg / 1000.0  # Volver a toneladas para mostrar
+            
+            # Calcular mV/V aproximado (sensibilidad típica 2 mV/V @ 50 ton)
+            SENSIBILIDAD_MV_V = 2.0
+            CARGA_NOMINAL_KG = 50000.0
+            mv_v = (kg / CARGA_NOMINAL_KG) * SENSIBILIDAD_MV_V if kg != 0 else 0.0
+            
+            # Guardar valor mV/V actual para captura
+            self._cal_current_mv_value = mv_v
+            
+            # Actualizar labels (mV/V prominente, ton secundario)
+            self._cal_current_mv.configure(text=f"{mv_v:.4f} mV/V")
+            self._cal_current_kg.configure(text=f"({ton:.3f} ton)")
+        except Exception as e:
+            self.log_message(f"Erro lendo sensor: {e}")
+        except Exception as e:
+            self.log_message(f"Erro lendo sensor: {e}")
+    
+    def _update_cal_reading_loop(self, wizard, sensor_id):
+        """Loop de actualización de lectura del sensor."""
+        if not self._cal_wizard_active:
+            return
+        
+        try:
+            if wizard.winfo_exists():
+                self._update_cal_reading(sensor_id)
+                wizard.after(500, lambda: self._update_cal_reading_loop(wizard, sensor_id))
+        except:
+            pass
+    
+    def _capture_cal_point(self, sensor_id):
+        """Captura un punto de calibración usando la lectura actual."""
+        # Función auxiliar para liberar grab antes de mostrar alertas
+        def release_grab():
+            if hasattr(self, '_cal_wizard') and self._cal_wizard:
+                try:
+                    self._cal_wizard.grab_release()
+                except:
+                    pass
+        
+        try:
+            peso_str = self._cal_peso_entry.get().strip().replace(",", "")
+            if not peso_str:
+                release_grab()
+                self.show_alert("Erro", "Digite o peso aplicado", "error")
+                return
+            
+            peso_kg = float(peso_str)
+            
+            # Obtener lectura actual directamente de los datos almacenados
+            valor_sensor_kg = 0.0
+            for sensor_name, sensor_info in self._last_sensor_data.get('sensores', {}).items():
+                if sensor_info.get('id') == sensor_id:
+                    # El valor 'raw' viene en toneladas desde el procesador
+                    valor_sensor_kg = sensor_info.get('raw', 0.0) * 1000  # Convertir a kg
+                    break
+            
+            if valor_sensor_kg == 0.0:
+                release_grab()
+                self.show_alert("Aviso", "Sem leitura do sensor. Verifique a conexão.", "info")
+                return
+            
+            # Calcular mV/V aproximado
+            SENSIBILIDAD_MV_V = 2.0
+            CARGA_NOMINAL_KG = 50000.0
+            mv_v = (valor_sensor_kg / CARGA_NOMINAL_KG) * SENSIBILIDAD_MV_V
+            
+            # Agregar punto manualmente
+            from modules.calibration import CalibrationPoint
+            from datetime import datetime
+            
+            point = CalibrationPoint(
+                peso_aplicado_kg=peso_kg,
+                valor_sensor_kg=valor_sensor_kg,
+                valor_crudo_mv_v=mv_v,
+                timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            
+            # Agregar a la sesión del manager
+            if self._cal_manager.current_session:
+                self._cal_manager.current_session.puntos.append(point)
+            
+            # Agregar a la tabla
+            self._cal_tree.insert("", "end", values=(
+                f"{point.peso_aplicado_kg:,.0f}",
+                f"{point.valor_sensor_kg/1000:.3f}",  # Mostrar en toneladas
+                f"{point.valor_crudo_mv_v:.4f}",
+                f"{point.std_dev:.3f}",
+                point.timestamp.split(" ")[1] if " " in point.timestamp else point.timestamp
+            ))
+            
+            self.log_message(f"Ponto capturado: {peso_kg} kg → {valor_sensor_kg:.1f} kg lido")
+            self._cal_peso_entry.delete(0, END)
+                
+        except ValueError:
+            release_grab()
+            self.show_alert("Erro", "Peso inválido. Use apenas números.", "error")
+        except Exception as e:
+            release_grab()
+            self.show_alert("Erro", f"Erro ao capturar: {e}", "error")
+    
+    def _remove_cal_point(self):
+        """Elimina el punto seleccionado de la tabla."""
+        selected = self._cal_tree.selection()
+        if selected:
+            for item in selected:
+                idx = self._cal_tree.index(item)
+                self._cal_tree.delete(item)
+                if hasattr(self, '_cal_manager') and self._cal_manager:
+                    self._cal_manager.remove_point(idx)
+            self.log_message("Ponto removido")
+        else:
+            # Liberar grab para mostrar alerta
+            if hasattr(self, '_cal_wizard') and self._cal_wizard:
+                try:
+                    self._cal_wizard.grab_release()
+                except:
+                    pass
+            self.show_alert("Info", "Selecione um ponto para remover", "info")
+    
+    def _calculate_calibration_curve(self):
+        """Calcula la curva de calibración."""
+        if not hasattr(self, '_cal_manager') or not self._cal_manager.current_session or len(self._cal_manager.current_session.puntos) < 2:
+            # Liberar grab para mostrar alerta
+            if hasattr(self, '_cal_wizard') and self._cal_wizard:
+                try:
+                    self._cal_wizard.grab_release()
+                except:
+                    pass
+            self.show_alert("Erro", "Precisa de pelo menos 2 pontos para calcular", "error")
+            return
+        
+        # Calcular regresiones
+        slope, offset, r2 = self._cal_manager.calculate_linear_regression()
+        
+        # Detectar no-linealidad
+        analysis = self._cal_manager.detect_nonlinearity()
+        
+        result_text = f"📊 Slope: {slope:.6f} | Offset: {offset:.1f} | R²: {r2:.6f}"
+        
+        if analysis.get("needs_polynomial"):
+            poly_coeffs, poly_r2 = self._cal_manager.calculate_polynomial_regression(degree=2)
+            result_text += f"\n⚠️ Detectada não-linearidade ({analysis['upper_third_avg_error']:.2f}% erro no extremo)"
+            result_text += f"\n📈 Polinómio grau 2: R²={poly_r2:.6f}"
+        
+        self._cal_results_label.configure(text=result_text)
+        self.log_message(f"Curva calculada: R²={r2:.6f}")
+        
+        # Liberar grab para mostrar diálogo con resultados
+        if hasattr(self, '_cal_wizard') and self._cal_wizard:
+            try:
+                self._cal_wizard.grab_release()
+            except:
+                pass
+        
+        self.show_alert("Calibração Calculada", 
+                        f"Resultados da calibração:\n\n"
+                        f"Slope: {slope:.6f}\n"
+                        f"Offset: {offset:.1f} kg\n"
+                        f"R²: {r2:.6f}\n\n"
+                        f"{'⚠️ Recomenda-se correção polinómica' if analysis.get('needs_polynomial') else '✅ Linearidade OK'}",
+                        "success" if not analysis.get("needs_polynomial") else "info")
+    
+    def _export_calibration_csv(self):
+        """Exporta la calibración a CSV."""
+        if not hasattr(self, '_cal_manager') or not self._cal_manager.current_session:
+            self.show_alert("Erro", "Não há sessão ativa para exportar", "error")
+            return
+        
+        try:
+            # Liberar grab temporalmente para permitir diálogos
+            if hasattr(self, '_cal_wizard') and self._cal_wizard:
+                try:
+                    self._cal_wizard.grab_release()
+                except:
+                    pass
+            
+            self._cal_manager.finish_session()
+            filepath = self._cal_manager.export_to_csv()
+            self.log_message(f"CSV exportado: {filepath}")
+            self.show_alert("Exportado", f"Arquivo salvo:\n{filepath}", "success")
+        except Exception as e:
+            self.show_alert("Erro", f"Erro ao exportar: {e}", "error")
+    
+    def _save_calibration_session(self):
+        """Guarda la sesión de calibración."""
+        if not hasattr(self, '_cal_manager') or not self._cal_manager.current_session:
+            self.show_alert("Erro", "Não há sessão ativa para guardar", "error")
+            return
+        
+        try:
+            # Liberar grab temporalmente para permitir diálogos
+            if hasattr(self, '_cal_wizard') and self._cal_wizard:
+                try:
+                    self._cal_wizard.grab_release()
+                except:
+                    pass
+            
+            self._cal_manager.finish_session()
+            filepath = self._cal_manager.save_session()
+            self.log_message(f"Sessão salva: {filepath}")
+            self.show_alert("Salvo", f"Sessão guardada:\n{filepath}", "success")
+            self._refresh_saved_calibrations()
+        except Exception as e:
+            self.show_alert("Erro", f"Erro ao guardar: {e}", "error")
+
+    # ==================== NUEVAS FUNCIONES V2 PARA CALIBRACIÓN ====================
+    
+    def _capture_cal_point_v2(self, sensor_id):
+        """Captura un punto de calibración y actualiza el gráfico en tiempo real."""
+        def release_grab():
+            if hasattr(self, '_cal_wizard') and self._cal_wizard:
+                try:
+                    self._cal_wizard.grab_release()
+                except:
+                    pass
+        
+        try:
+            peso_str = self._cal_peso_entry.get().strip().replace(",", "").replace(".", "")
+            if not peso_str:
+                release_grab()
+                self.show_alert("Erro", "Digite o peso real aplicado", "error")
+                return
+            
+            peso_kg = float(peso_str)
+            
+            # Obtener valor mV/V actual
+            mv_v = getattr(self, '_cal_current_mv_value', 0.0)
+            
+            if mv_v == 0.0:
+                release_grab()
+                self.show_alert("Aviso", "Sem leitura do sensor. Verifique a conexão.", "info")
+                return
+            
+            # Agregar punto a la lista
+            self._cal_points.append((peso_kg, mv_v))
+            
+            # Agregar a la tabla
+            self._cal_tree.insert("", "end", values=(
+                f"{peso_kg:,.0f}",
+                f"{mv_v:.4f}"
+            ))
+            
+            # Agregar al manager también
+            from modules.calibration import CalibrationPoint
+            from datetime import datetime
+            
+            point = CalibrationPoint(
+                peso_aplicado_kg=peso_kg,
+                valor_crudo_mv_v=mv_v,
+                valor_sensor_kg=peso_kg,  # Usamos el peso real
+                timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            
+            if self._cal_manager.current_session:
+                self._cal_manager.current_session.puntos.append(point)
+            
+            self.log_message(f"Ponto capturado: {peso_kg:.0f} kg → {mv_v:.4f} mV/V")
+            self._cal_peso_entry.delete(0, END)
+            
+            # Actualizar gráfico
+            self._update_cal_graph()
+                
+        except ValueError:
+            release_grab()
+            self.show_alert("Erro", "Peso inválido. Use apenas números.", "error")
+        except Exception as e:
+            release_grab()
+            self.show_alert("Erro", f"Erro ao capturar: {e}", "error")
+    
+    def _remove_cal_point_v2(self):
+        """Elimina el punto seleccionado y actualiza el gráfico."""
+        selected = self._cal_tree.selection()
+        if selected:
+            for item in selected:
+                idx = self._cal_tree.index(item)
+                self._cal_tree.delete(item)
+                
+                # Eliminar de la lista de puntos
+                if 0 <= idx < len(self._cal_points):
+                    self._cal_points.pop(idx)
+                
+                # Eliminar del manager
+                if hasattr(self, '_cal_manager') and self._cal_manager:
+                    self._cal_manager.remove_point(idx)
+            
+            self.log_message("Ponto removido")
+            self._update_cal_graph()
+        else:
+            if hasattr(self, '_cal_wizard') and self._cal_wizard:
+                try:
+                    self._cal_wizard.grab_release()
+                except:
+                    pass
+            self.show_alert("Info", "Selecione um ponto para remover", "info")
+    
+    def _update_cal_graph(self):
+        """Actualiza el gráfico de calibración con los puntos actuales."""
+        try:
+            import numpy as np
+            
+            # Limpiar el gráfico
+            self._cal_ax.clear()
+            self._cal_ax.set_xlabel('Peso Real (kg)', fontsize=12, fontweight='bold')
+            self._cal_ax.set_ylabel('mV/V', fontsize=12, fontweight='bold')
+            self._cal_ax.set_title('Curva de Calibração', fontsize=14, fontweight='bold', color='#1e293b')
+            self._cal_ax.grid(True, linestyle='--', alpha=0.7)
+            self._cal_ax.set_facecolor('#ffffff')
+            
+            if not self._cal_points:
+                self._cal_results_label.configure(text="Adicione pontos para calcular a curva")
+                self._cal_canvas.draw()
+                return
+            
+            # Extraer datos
+            pesos = np.array([p[0] for p in self._cal_points])
+            mvs = np.array([p[1] for p in self._cal_points])
+            
+            # Dibujar puntos
+            self._cal_ax.scatter(pesos, mvs, s=120, c='#2563eb', marker='o', 
+                                  label='Pontos medidos', zorder=5, edgecolors='white', linewidth=2)
+            
+            # Si hay al menos 2 puntos, calcular y dibujar la curva
+            if len(self._cal_points) >= 2:
+                # Regresión lineal
+                slope, intercept = np.polyfit(pesos, mvs, 1)
+                
+                # Calcular R²
+                y_pred = slope * pesos + intercept
+                ss_res = np.sum((mvs - y_pred) ** 2)
+                ss_tot = np.sum((mvs - np.mean(mvs)) ** 2)
+                r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+                
+                # Línea de regresión
+                x_line = np.linspace(min(pesos) * 0.9, max(pesos) * 1.1, 100)
+                y_line = slope * x_line + intercept
+                
+                self._cal_ax.plot(x_line, y_line, 'r-', linewidth=2, 
+                                   label=f'Linear: y = {slope:.6f}x + {intercept:.4f}', alpha=0.8)
+                
+                # Si hay 3+ puntos, intentar ajuste polinómico
+                if len(self._cal_points) >= 3:
+                    try:
+                        poly_coeffs = np.polyfit(pesos, mvs, 2)
+                        y_poly = np.polyval(poly_coeffs, x_line)
+                        
+                        # R² del polinomio
+                        y_pred_poly = np.polyval(poly_coeffs, pesos)
+                        ss_res_poly = np.sum((mvs - y_pred_poly) ** 2)
+                        r2_poly = 1 - (ss_res_poly / ss_tot) if ss_tot > 0 else 0
+                        
+                        if r2_poly > r2 + 0.001:  # Solo mostrar si mejora significativamente
+                            self._cal_ax.plot(x_line, y_poly, 'g--', linewidth=2, 
+                                               label=f'Polinómio (R²={r2_poly:.4f})', alpha=0.7)
+                    except:
+                        pass
+                
+                # Actualizar label de resultados
+                self._cal_results_label.configure(
+                    text=f"📊 Slope: {slope:.6f} mV/V/kg | Offset: {intercept:.4f} mV/V | R²: {r2:.4f}"
+                )
+            else:
+                self._cal_results_label.configure(text="Adicione mais pontos para calcular a curva")
+            
+            # Leyenda
+            self._cal_ax.legend(loc='upper left', fontsize=10)
+            
+            # Ajustar límites
+            if len(pesos) > 0:
+                x_margin = (max(pesos) - min(pesos)) * 0.1 if max(pesos) != min(pesos) else 1000
+                y_margin = (max(mvs) - min(mvs)) * 0.1 if max(mvs) != min(mvs) else 0.1
+                self._cal_ax.set_xlim(min(pesos) - x_margin, max(pesos) + x_margin)
+                self._cal_ax.set_ylim(min(mvs) - y_margin, max(mvs) + y_margin)
+            
+            # Redibujar
+            self._cal_canvas.draw()
+            
+        except Exception as e:
+            self.log_message(f"Erro ao atualizar gráfico: {e}")
+    
+    def _export_calibration_csv_v2(self):
+        """Exporta la calibración a CSV (versión simplificada)."""
+        if not self._cal_points:
+            if hasattr(self, '_cal_wizard') and self._cal_wizard:
+                try:
+                    self._cal_wizard.grab_release()
+                except:
+                    pass
+            self.show_alert("Erro", "Não há pontos para exportar", "error")
+            return
+        
+        try:
+            # Liberar grab para el diálogo de archivo
+            if hasattr(self, '_cal_wizard') and self._cal_wizard:
+                try:
+                    self._cal_wizard.grab_release()
+                except:
+                    pass
+            
+            from tkinter import filedialog
+            from datetime import datetime
+            import os
+            
+            # Directorio de calibraciones
+            cal_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "calibrations")
+            os.makedirs(cal_dir, exist_ok=True)
+            
+            # Nombre por defecto
+            sensor_name = self._cal_sensor_var.get() if hasattr(self, '_cal_sensor_var') else "sensor"
+            default_name = f"calibracao_{sensor_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            
+            filepath = filedialog.asksaveasfilename(
+                title="Exportar Calibração CSV",
+                initialdir=cal_dir,
+                initialfile=default_name,
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+                parent=self._cal_wizard if self._cal_wizard else self
+            )
+            
+            if not filepath:
+                return
+            
+            # Escribir CSV
+            import csv
+            with open(filepath, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(["Peso Real (kg)", "mV/V"])
+                for peso, mv in self._cal_points:
+                    writer.writerow([peso, f"{mv:.6f}"])
+            
+            self.log_message(f"CSV exportado: {filepath}")
+            self.show_alert("Exportado", f"Arquivo salvo:\n{os.path.basename(filepath)}", "success")
+            
+        except Exception as e:
+            self.show_alert("Erro", f"Erro ao exportar: {e}", "error")
+    
+    def _save_calibration_session_v2(self):
+        """Guarda la sesión de calibración completa."""
+        if not self._cal_points:
+            if hasattr(self, '_cal_wizard') and self._cal_wizard:
+                try:
+                    self._cal_wizard.grab_release()
+                except:
+                    pass
+            self.show_alert("Erro", "Não há pontos para guardar", "error")
+            return
+        
+        try:
+            # Liberar grab para diálogos
+            if hasattr(self, '_cal_wizard') and self._cal_wizard:
+                try:
+                    self._cal_wizard.grab_release()
+                except:
+                    pass
+            
+            if hasattr(self, '_cal_manager') and self._cal_manager.current_session:
+                self._cal_manager.finish_session()
+                filepath = self._cal_manager.save_session()
+                self.log_message(f"Sessão salva: {filepath}")
+                import os
+                self.show_alert("Salvo", f"Sessão guardada:\n{os.path.basename(filepath)}", "success")
+                self._refresh_saved_calibrations()
+            else:
+                self.show_alert("Erro", "Sessão não inicializada", "error")
+                
+        except Exception as e:
+            self.show_alert("Erro", f"Erro ao guardar: {e}", "error")

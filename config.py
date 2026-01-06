@@ -14,18 +14,35 @@ if os.path.exists(_MSCL_PATH) and _MSCL_PATH not in sys.path:
 MODO_EJECUCION = "REAL" 
 
 # Configuração Serial (Somente para modo REAL)
-PUERTO_COM = "COM3" # Ajustar conforme a porta real
+# WSDA-USB-200 Gateway se conecta via USB (porta COM virtual)
+PUERTO_COM = "COM3"  # Ajustar conforme a porta do WSDA-USB-200
 BAUDRATE = 921600
 
-# Mapeamento de Nós Físicos para Posições Lógicas
-# ID: Identificador único do nó SG-Link-200
-# CH: Canal de dados (geralmente "ch1" para strain gauge)
+# =============================================================================
+# CONFIGURAÇÃO DE CELDAS DE CARGA
+# =============================================================================
+# Estructura: 2 nodos SG-Link-200, cada uno con 2 canales (ch1, ch2)
+# Total: 4 celdas de carga
+#
+# Nodo 1: ch1 = Celda 1, ch2 = Celda 2
+# Nodo 2: ch1 = Celda 3, ch2 = Celda 4
+#
+# El usuario puede renumerar las celdas según su disposición física
+
 NODOS_CONFIG = {
-    "celda_sup_izq": {"id": 11111, "ch": "ch1"},
-    "celda_sup_der": {"id": 22222, "ch": "ch1"},
-    "celda_inf_izq": {"id": 67890, "ch": "ch1"},
-    "celda_inf_der": {"id": 12345, "ch": "ch1"},
+    # Celda 1 - Nodo 1, Canal 1
+    "celda_1": {"id": 11111, "ch": "ch1", "nombre": "Celda 1", "posicion": "1"},
+    # Celda 2 - Nodo 1, Canal 2  
+    "celda_2": {"id": 11111, "ch": "ch2", "nombre": "Celda 2", "posicion": "2"},
+    # Celda 3 - Nodo 2, Canal 1
+    "celda_3": {"id": 22222, "ch": "ch1", "nombre": "Celda 3", "posicion": "3"},
+    # Celda 4 - Nodo 2, Canal 2
+    "celda_4": {"id": 22222, "ch": "ch2", "nombre": "Celda 4", "posicion": "4"},
 }
+
+# Lista de canales activos por nodo (para referencia)
+# Cada nodo SG-Link-200 puede tener hasta 4 canales diferenciales
+CANALES_POR_NODO = ["ch1", "ch2", "ch3", "ch4"]
 
 # Configuração de robustez (para modo REAL)
 RECONNECT_ATTEMPTS = 3

@@ -270,7 +270,12 @@ class MSCLDriver(ISistemaPesaje):
     def _log(self, level: str, message: str) -> None:
         """Log interno con timestamp."""
         timestamp = time.strftime("%H:%M:%S")
-        print(f"[{timestamp}] [{level}] [MSCL-DRIVER] {message}")
+        # Sanitizar mensaje para evitar errores de codificación con surrogates
+        try:
+            safe_message = str(message).encode('utf-8', errors='replace').decode('utf-8')
+        except Exception:
+            safe_message = repr(message)
+        print(f"[{timestamp}] [{level}] [MSCL-DRIVER] {safe_message}")
     
     # =========================================================================
     # GESTIÓN DE ESTADO
@@ -353,18 +358,21 @@ class MSCLDriver(ISistemaPesaje):
             # Re-lanzar excepciones de sincronización
             raise
         except mscl.Error_Connection as e:
-            self._log("ERROR", f"Error de conexión MSCL: {e}")
-            self._stats['last_error'] = f"Connection: {e}"
+            error_msg = str(e).encode('utf-8', errors='replace').decode('utf-8')
+            self._log("ERROR", f"Error de conexión MSCL: {error_msg}")
+            self._stats['last_error'] = f"Connection: {error_msg}"
             self._set_state(ConnectionState.ERROR)
             return False
         except mscl.Error as e:
-            self._log("ERROR", f"Error MSCL: {e}")
-            self._stats['last_error'] = f"MSCL: {e}"
+            error_msg = str(e).encode('utf-8', errors='replace').decode('utf-8')
+            self._log("ERROR", f"Error MSCL: {error_msg}")
+            self._stats['last_error'] = f"MSCL: {error_msg}"
             self._set_state(ConnectionState.ERROR)
             return False
         except Exception as e:
-            self._log("ERROR", f"Error inesperado: {e}")
-            self._stats['last_error'] = str(e)
+            error_msg = str(e).encode('utf-8', errors='replace').decode('utf-8')
+            self._log("ERROR", f"Error inesperado: {error_msg}")
+            self._stats['last_error'] = error_msg
             self._set_state(ConnectionState.ERROR)
             return False
     
@@ -1025,49 +1033,187 @@ class MSCLDriver(ISistemaPesaje):
     # =========================================================================
     
     def descubrir_nodos(self, timeout_ms: int = 5000) -> List[Dict[str, Any]]:
-        """Descubre nodos wireless en la red."""
+        """
+        Descubre nodos wireless en la red y obtiene información detallada.
+        
+        Para WSDA-USB-200 Gateway conectado via USB:
+        - Detecta todos los nodos SG-Link activos en la red
+        - Obtiene información de todos los canales disponibles por nodo
+        - Retorna lista con datos completos para asignación
+        
+        Returns:
+            Lista de diccionarios con información de cada nodo y sus canales:
+            [
+                {
+                    'id': 12345,
+                    'rssi': -45,
+                    'model': 'SG-Link-200',
+                    'serial': 'XXXXX',
+                    'channels': [
+                        {'channel': 'ch1', 'type': 'strain', 'value': 0.0},
+                        {'channel': 'ch2', 'type': 'strain', 'value': 0.0},
+                        ...
+                    ],
+                    'sample_rate': '32 Hz',
+                    'configured': False
+                },
+                ...
+            ]
+        """
         if not self.esta_conectado() or not self._base_station:
             self._log("WARNING", "Sin conexión activa para descubrir nodos")
             return []
         
         self._log("INFO", f"Iniciando descubrimiento de nodos (timeout: {timeout_ms}ms)...")
+        self._log("INFO", "Gateway WSDA-USB-200 - Buscando nodos SG-Link...")
+        
         nodos_encontrados = []
-        node_ids_seen: Set[int] = set()
+        node_data: Dict[int, Dict[str, Any]] = {}  # node_id -> info completa
         
         try:
             start_time = time.time()
             
+            # Fase 1: Recolectar datos de sweeps para identificar nodos activos
             while (time.time() - start_time) * 1000 < timeout_ms:
                 sweeps = self._base_station.getData(200)
                 
                 for sweep in sweeps:
                     node_id = sweep.nodeAddress()
                     
-                    if node_id not in node_ids_seen:
-                        node_ids_seen.add(node_id)
-                        
-                        info = {
+                    if node_id not in node_data:
+                        # Nuevo nodo encontrado
+                        node_data[node_id] = {
                             'id': node_id,
                             'rssi': sweep.nodeRssi(),
                             'status': 'active',
+                            'model': 'SG-Link-200',
+                            'serial': str(node_id),
+                            'channels': {},  # ch_name -> {data}
+                            'sample_rate': 'unknown',
                             'configured': node_id in self._expected_node_ids
                         }
                         
                         try:
-                            info['sample_rate'] = sweep.sampleRate().prettyStr()
+                            node_data[node_id]['sample_rate'] = sweep.sampleRate().prettyStr()
                         except:
-                            info['sample_rate'] = 'unknown'
+                            pass
                         
-                        nodos_encontrados.append(info)
-                        self._log("INFO", f"  Nodo encontrado: ID={node_id}, RSSI={info['rssi']}")
+                        self._log("INFO", f"  Nodo encontrado: ID={node_id}, RSSI={sweep.nodeRssi()}")
+                    
+                    # Actualizar RSSI (promedio)
+                    current_rssi = node_data[node_id]['rssi']
+                    node_data[node_id]['rssi'] = int((current_rssi + sweep.nodeRssi()) / 2)
+                    
+                    # Extraer información de canales del sweep
+                    try:
+                        data_points = sweep.data()
+                        for dp in data_points:
+                            ch_name = dp.channelName()
+                            ch_value = dp.as_float()
+                            
+                            if ch_name not in node_data[node_id]['channels']:
+                                node_data[node_id]['channels'][ch_name] = {
+                                    'channel': ch_name,
+                                    'type': self._get_channel_type(ch_name),
+                                    'values': [],
+                                    'last_value': ch_value
+                                }
+                            
+                            node_data[node_id]['channels'][ch_name]['values'].append(ch_value)
+                            node_data[node_id]['channels'][ch_name]['last_value'] = ch_value
+                    except Exception as e:
+                        self._log("DEBUG", f"Error extrayendo canales: {e}")
                 
-                time.sleep(0.1)
+                time.sleep(0.05)
+            
+            # Fase 2: Intentar obtener información adicional del nodo via MSCL
+            for node_id, info in node_data.items():
+                try:
+                    node = mscl.WirelessNode(node_id, self._base_station)
+                    
+                    # Intentar obtener modelo
+                    try:
+                        model = node.model()
+                        info['model'] = str(model) if model else 'SG-Link-200'
+                    except:
+                        pass
+                    
+                    # Intentar obtener número de serie
+                    try:
+                        serial = node.serialNumber()
+                        info['serial'] = str(serial) if serial else str(node_id)
+                    except:
+                        pass
+                    
+                    # Intentar obtener canales activos
+                    try:
+                        active_chs = node.getActiveChannels()
+                        for ch in active_chs:
+                            ch_name = f"ch{ch.channelNumber()}"
+                            if ch_name not in info['channels']:
+                                info['channels'][ch_name] = {
+                                    'channel': ch_name,
+                                    'type': 'strain',
+                                    'values': [],
+                                    'last_value': 0.0
+                                }
+                    except:
+                        pass
+                        
+                except Exception as e:
+                    self._log("DEBUG", f"Error obteniendo info adicional de nodo {node_id}: {e}")
+            
+            # Convertir a lista y formatear canales
+            for node_id, info in node_data.items():
+                # Convertir channels dict a lista ordenada
+                channels_list = []
+                for ch_name in sorted(info['channels'].keys()):
+                    ch_info = info['channels'][ch_name]
+                    # Calcular promedio si hay valores
+                    avg_value = 0.0
+                    if ch_info['values']:
+                        avg_value = sum(ch_info['values']) / len(ch_info['values'])
+                    
+                    channels_list.append({
+                        'channel': ch_name,
+                        'type': ch_info['type'],
+                        'value': round(avg_value, 4),
+                        'last_value': round(ch_info['last_value'], 4)
+                    })
+                
+                # Si no se detectaron canales, asumir ch1 y ch2 (típico SG-Link-200)
+                if not channels_list:
+                    channels_list = [
+                        {'channel': 'ch1', 'type': 'strain', 'value': 0.0, 'last_value': 0.0},
+                        {'channel': 'ch2', 'type': 'strain', 'value': 0.0, 'last_value': 0.0}
+                    ]
+                
+                info['channels'] = channels_list
+                nodos_encontrados.append(info)
                 
         except mscl.Error as e:
             self._log("ERROR", f"Error durante descubrimiento: {e}")
+        except Exception as e:
+            self._log("ERROR", f"Error inesperado en descubrimiento: {e}")
         
         self._log("INFO", f"Descubrimiento completo: {len(nodos_encontrados)} nodo(s)")
+        for node in nodos_encontrados:
+            ch_count = len(node.get('channels', []))
+            self._log("INFO", f"  → Nodo {node['id']}: {ch_count} canal(es), RSSI={node['rssi']}")
+        
         return nodos_encontrados
+    
+    def _get_channel_type(self, channel_name: str) -> str:
+        """Determina el tipo de canal basado en su nombre."""
+        ch_lower = channel_name.lower()
+        if 'strain' in ch_lower or ch_lower.startswith('ch'):
+            return 'strain'
+        elif 'temp' in ch_lower:
+            return 'temperature'
+        elif 'volt' in ch_lower:
+            return 'voltage'
+        else:
+            return 'unknown'
     
     # =========================================================================
     # ESTADÍSTICAS Y STATUS

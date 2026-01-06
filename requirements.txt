@@ -1,4 +1,6 @@
 ttkbootstrap
 Pillow
 pyinstaller
+numpy
+matplotlib
 # MSCL se incluye localmente en carpeta MSCL/

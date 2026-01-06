@@ -174,18 +174,40 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
                     data_queue.put({'type': 'LOG', 'payload': "Tara reiniciada para 0."})
                     
                 elif cmd == 'DISCOVER_NODES':
-                    # Descobrir nos usando MSCL
+                    # Descobrir nos usando MSCL (WSDA-USB-200 Gateway)
                     if hasattr(sistema_pesaje, 'descubrir_nodos'):
                         try:
-                            nodos = sistema_pesaje.descubrir_nodos()
+                            data_queue.put({'type': 'LOG', 'payload': "Buscando nós SG-Link via WSDA-USB-200..."})
+                            nodos = sistema_pesaje.descubrir_nodos(timeout_ms=5000)
+                            
                             if nodos:
-                                data_queue.put({'type': 'LOG', 'payload': f"Nos encontrados: {nodos}"})
+                                # Enviar datos estructurados a la GUI
+                                data_queue.put({
+                                    'type': 'DISCOVERED_NODES',
+                                    'payload': nodos
+                                })
+                                
+                                # También log resumen
+                                total_channels = sum(len(n.get('channels', [])) for n in nodos)
+                                data_queue.put({
+                                    'type': 'LOG', 
+                                    'payload': f"✓ Encontrados {len(nodos)} nodo(s) com {total_channels} canal(is) total"
+                                })
                             else:
-                                data_queue.put({'type': 'LOG', 'payload': "Nenhum no encontrado. Verifique a conexao."})
+                                data_queue.put({
+                                    'type': 'DISCOVERED_NODES',
+                                    'payload': []
+                                })
+                                data_queue.put({
+                                    'type': 'LOG', 
+                                    'payload': "⚠️ Nenhum nó encontrado. Verifique se os nós estão transmitindo."
+                                })
                         except Exception as e:
-                            data_queue.put({'type': 'LOG', 'payload': f"Erro buscando nos: {e}"})
+                            data_queue.put({'type': 'LOG', 'payload': f"Erro buscando nós: {e}"})
+                            data_queue.put({'type': 'DISCOVERED_NODES', 'payload': []})
                     else:
-                        data_queue.put({'type': 'LOG', 'payload': "Descoberta nao disponivel em modo simulacao."})
+                        data_queue.put({'type': 'LOG', 'payload': "Descoberta não disponível em modo simulação."})
+                        data_queue.put({'type': 'DISCOVERED_NODES', 'payload': []})
                     
                 elif cmd == 'EXIT':
                     running = False
