@@ -8,22 +8,22 @@
         "celda_1": {
             "id": 0,
             "ch": "ch1",
-            "nombre": "Celda 1"
+            "nombre": "Célula 1"
         },
         "celda_2": {
             "id": 0,
             "ch": "ch2",
-            "nombre": "Celda 2"
+            "nombre": "Célula 2"
         },
         "celda_3": {
             "id": 0,
             "ch": "ch1",
-            "nombre": "Celda 3"
+            "nombre": "Célula 3"
         },
         "celda_4": {
             "id": 0,
             "ch": "ch2",
-            "nombre": "Celda 4"
+            "nombre": "Célula 4"
         }
     }
 }
