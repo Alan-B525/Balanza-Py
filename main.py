@@ -14,7 +14,6 @@ import threading
 import queue
 from typing import Dict
 
-# Garantir que os modulos podem ser importados
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(current_dir)
 
@@ -23,7 +22,6 @@ from modules.data_processor import DataProcessor
 from modules.gui import BalanzaGUI
 from modules.factory import criar_sistema_pesaje, check_mscl_installation
 
-# Variaveis globais de configuracao (podem ser sobrescritas por settings.json)
 ACTIVE_COM = DEFAULT_COM
 ACTIVE_NODOS = DEFAULT_NODOS
 ACTIVE_MODE = MODO_EJECUCION
@@ -109,7 +107,6 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
                 cmd = cmd_msg['cmd']
                 
                 if cmd == 'CONNECT':
-                    # Ejecutar conexión en hilo separado para no bloquear
                     if not connection_in_progress:
                         connection_in_progress = True
                         
@@ -135,11 +132,9 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
                         connection_thread.start()
                 
                 elif cmd == 'CONNECT_WITH_PROGRESS':
-                    # Mismo comportamiento que CONNECT
                     pass
                 
                 elif cmd == 'CANCEL_CONNECT':
-                    # La cancelación se maneja en la GUI
                     pass
                     
                 elif cmd == 'DISCONNECT':
@@ -349,7 +344,7 @@ def main():
     backend_thread.start()
     
     # Iniciar GUI (Thread Principal)
-    app = BalanzaGUI(data_queue, command_queue)
+    app = BalanzaGUI(data_queue, command_queue, procesador)
     app.mainloop()
 
 

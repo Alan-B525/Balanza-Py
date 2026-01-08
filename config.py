@@ -22,6 +22,14 @@ RECONNECT_ATTEMPTS = 3
 NODE_TIMEOUT_SECONDS = 5.0
 DATA_TIMEOUT_MS = 100
 
+# === Especificações do Display ===
+# Windows 10 IoT Enterprise / Android 4.4
+# Resolução: 10.1" 1280x800
 APP_TITLE = "Sistema de Pesagem Industrial"
 APP_SIZE = "1280x800"
 THEME_NAME = "litera"
+
+# === Especificações do Sensor (Célula de Carga) ===
+SENSOR_MV_PER_V = 1.2      # Sensibilidade: 1.2 mV/V
+SENSOR_MAX_VOLTAGE = 2.5   # Tensão máxima de excitação: 2.5V
+DISPLAY_DECIMALS = 0       # Mostrar valores inteiros (sem decimais)

@@ -2,28 +2,24 @@
     "execution_mode": "REAL",
     "connection_type": "SERIAL",
     "serial_port": "COM3",
-    "tcp_ip": "192.168.0.100",
-    "tcp_port": "5000",
+    "tcp_ip": "",
+    "tcp_port": "",
     "nodes": {
         "celda_1": {
             "id": 0,
-            "ch": "ch1",
-            "nombre": "Célula 1"
+            "ch": "ch1"
         },
         "celda_2": {
             "id": 0,
-            "ch": "ch2",
-            "nombre": "Célula 2"
+            "ch": "ch2"
         },
         "celda_3": {
             "id": 0,
-            "ch": "ch1",
-            "nombre": "Célula 3"
+            "ch": "ch1"
         },
         "celda_4": {
             "id": 0,
-            "ch": "ch2",
-            "nombre": "Célula 4"
+            "ch": "ch2"
         }
     }
 }

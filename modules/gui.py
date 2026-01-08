@@ -2,7 +2,7 @@ import queue
 import threading
 import time
 import tkinter as tk
-from tkinter import filedialog, BOTH, YES, NO, X, Y, LEFT, RIGHT, END, HORIZONTAL, BOTTOM, TOP
+from tkinter import filedialog, messagebox, BOTH, YES, NO, X, Y, LEFT, RIGHT, END, HORIZONTAL, BOTTOM, TOP
 from PIL import Image, ImageTk
 
 import ttkbootstrap as ttk
@@ -11,9 +11,23 @@ from ttkbootstrap.scrolled import ScrolledText
 
 from config import APP_TITLE, APP_SIZE, THEME_NAME, NODOS_CONFIG
 
+# Configurar matplotlib ANTES de cualquier import de backends
+# Esto evita bloqueos cuando se abre el wizard de calibración
+try:
+    import matplotlib
+    matplotlib.use('TkAgg')
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+    import numpy as np
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+    print("[GUI] Warning: Matplotlib no disponible para gráficos de calibración")
+
 class BalanzaGUI(ttk.Window):
-    def __init__(self, data_queue, command_queue):
+    def __init__(self, data_queue, command_queue, data_processor=None):
         super().__init__(themename=THEME_NAME)
+        self.data_processor = data_processor
         self.title(APP_TITLE)
         
         # Remover barra de ttulo de Windows (modo frameless)
@@ -38,6 +52,9 @@ class BalanzaGUI(ttk.Window):
         # Almacenar nodos descubiertos
         self._discovered_nodes = []
         
+        # Control de visualización de decimales (por defecto: SIN decimales)
+        self._show_decimals = False
+        
         # Variables para conexin asncrona
         self._connection_thread = None
         self._cancel_connection = False
@@ -51,8 +68,8 @@ class BalanzaGUI(ttk.Window):
         # Start update loop
         self.after(50, self.actualizar_gui)
         
-        # Iniciar conexo automaticamente aps a UI carregar
-        self.after(500, self._auto_connect_on_startup)
+        # Iniciar conexo automaticamente removida para evitar travamento na inicializacao
+        # self.after(500, self._auto_connect_on_startup)
 
     def _configure_styles(self):
         # Colors
@@ -114,9 +131,16 @@ class BalanzaGUI(ttk.Window):
                       background=[('selected', PRIMARY)], 
                       foreground=[('selected', 'white')])
 
+        # Combobox - Más grandes para tablet (dropdown legible)
+        self.style.configure('TCombobox', font=(FONT_MAIN, 14), padding=8)
+        # Aumentar altura del dropdown list
+        self.option_add('*TCombobox*Listbox.font', (FONT_MAIN, 14))
+        self.option_add('*TCombobox*Listbox*selectBackground', PRIMARY)
+        self.option_add('*TCombobox*Listbox*selectForeground', 'white')
+
         # Header
         self.style.configure('Header.TFrame', background=BG_CARD)
-        self.style.configure('HeaderTitle.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_MAIN, 22, 'bold'))
+        self.style.configure('HeaderTitle.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_MAIN, 22, "bold"))
         self.style.configure('HeaderSub.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, 12))
 
     def _setup_ui(self):
@@ -191,7 +215,7 @@ class BalanzaGUI(ttk.Window):
         # Botn de Configuracin - Color info (azul)
         self.btn_config = ttk.Button(
             actions_frame, 
-            text=" CONFIG", 
+            text="CONFIG", 
             bootstyle="info", 
             command=self.show_configuration_dialog, 
             style='Header.TButton',
@@ -218,7 +242,7 @@ class BalanzaGUI(ttk.Window):
         # Botn Salir - Rojo y separado
         ttk.Button(
             actions_frame, 
-            text=" SAIR", 
+            text="SAIR", 
             command=self.quit_app, 
             bootstyle="danger", 
             style='Header.TButton', 
@@ -282,10 +306,10 @@ class BalanzaGUI(ttk.Window):
             )
             value_lbl.pack(expand=YES)
             
-            # Unidad
+            # Unidade
             ttk.Label(
                 value_container, 
-                text="ton", 
+                text="t", 
                 font=('Segoe UI', 15), 
                 foreground="#64748b",
                 background="#ffffff"
@@ -300,14 +324,14 @@ class BalanzaGUI(ttk.Window):
         # Crear sensores en posiciones: izquierda y derecha (numerados)
         keys = list(NODOS_CONFIG.keys())
         if len(keys) >= 4:
-            create_sensor_card(keys[0], " CELULA 1", 0, 0)
-            create_sensor_card(keys[1], " CELULA 2", 0, 2)
-            create_sensor_card(keys[2], " CELULA 3", 1, 0)
-            create_sensor_card(keys[3], " CELULA 4", 1, 2)
+            create_sensor_card(keys[0], "CELULA 1", 0, 0)
+            create_sensor_card(keys[1], "CELULA 2", 0, 2)
+            create_sensor_card(keys[2], "CELULA 3", 1, 0)
+            create_sensor_card(keys[3], "CELULA 4", 1, 2)
         elif len(keys) >= 2:
             # Fallback si solo hay 2 celdas configuradas
-            create_sensor_card(keys[0], " CELULA 1", 0, 0)
-            create_sensor_card(keys[1], " CELULA 2", 0, 2)
+            create_sensor_card(keys[0], "CELULA 1", 0, 0)
+            create_sensor_card(keys[1], "CELULA 2", 0, 2)
 
         # --- PANEL CENTRAL: TOTAL (MS GRANDE) ---
         control_panel = ttk.Frame(grid_area, style='Card.TFrame', padding=15)
@@ -326,11 +350,10 @@ class BalanzaGUI(ttk.Window):
             text="0", 
             style='TotalValue.TLabel', 
             anchor="center",
-            width=10  # Ancho fijo para evitar cambios
+            width=10  # Largura fixa para evitar mudanças
         )
         self.lbl_total.pack(fill=X, pady=20)
-        self.lbl_total_unit = ttk.Label(self.total_section, text="ton", style='TotalUnit.TLabel', anchor="center")
-        self.lbl_total_unit.pack()
+        self.lbl_total_unit = ttk.Label(self.total_section, text="t", style='TotalUnit.TLabel', anchor="center")
         self.lbl_total_unit.pack()
         
         # Separador dentro del panel
@@ -343,7 +366,7 @@ class BalanzaGUI(ttk.Window):
         # Info de Tara - MS GRANDE Y VISIBLE
         self.lbl_tare_info = ttk.Label(
             actions_section, 
-            text="Tara Acumulada: 0 kg", 
+            text="Tara Acumulada: 0 t", 
             style='TareInfo.TLabel',
             anchor="center"
         )
@@ -353,10 +376,10 @@ class BalanzaGUI(ttk.Window):
         btn_row = ttk.Frame(actions_section, style='CardNoBorder.TFrame')
         btn_row.pack(fill=X)
         
-        # Botn ZERAR (Tarar) - Grande y prominente
+        # Botão TARA - Grande e proeminente
         btn_tare = ttk.Button(
             btn_row, 
-            text="ZERAR", 
+            text="TARA", 
             command=self.do_tare, 
             bootstyle="warning", 
             style='Tare.TButton', 
@@ -365,17 +388,32 @@ class BalanzaGUI(ttk.Window):
         )
         btn_tare.pack(side=LEFT, expand=YES, padx=5)
         
-        # Botn Reset Tara - MISMO TAMAO que ZERAR
+        # Botão Limpar Tara - MESMO TAMANHO que TARA
         btn_reset = ttk.Button(
             btn_row, 
-            text="RESET TARA", 
+            text="LIMPAR TARA", 
             command=self.reset_tare, 
             bootstyle="secondary", 
-            style='Tare.TButton',  # Mismo estilo que ZERAR
+            style='Tare.TButton',  # Mesmo estilo que TARA
             width=12, 
-            padding=(25, 18)  # Mismo padding que ZERAR
+            padding=(25, 18)  # Mesmo padding que TARA
         )
         btn_reset.pack(side=LEFT, expand=YES, padx=5)
+        
+        # Segunda fila para botón de decimales
+        btn_row2 = ttk.Frame(actions_section, style='CardNoBorder.TFrame')
+        btn_row2.pack(fill=X, pady=(15, 0))
+        
+        # Botón para mostrar/ocultar decimales
+        self.btn_decimals = ttk.Button(
+            btn_row2, 
+            text="MOSTRAR DECIMAIS", 
+            command=self.toggle_decimals, 
+            bootstyle="info-outline", 
+            width=26, 
+            padding=(15, 10)
+        )
+        self.btn_decimals.pack(expand=YES)
 
         # --- Log Area con LOGOS GRANDES a cada lado ---
         log_frame = ttk.Frame(main_container, style='Card.TFrame', padding=12)
@@ -485,35 +523,38 @@ class BalanzaGUI(ttk.Window):
         self.log_text.text.configure(state='disabled')
 
     def _update_display(self, data):
-        # Actualizar Tara Acumulada en toneladas
+        # Guardar datos para actualización cuando cambie modo decimales
+        self._last_sensor_data = data
+        
+        # Atualizar Tara Acumulada em Toneladas
         if 'total_tare' in data:
-            tara_ton = data['total_tare']  # Ya viene en toneladas del procesador
-            self.lbl_tare_info.configure(text=f"Tara Acumulada: {tara_ton:.2f} ton")
+            tara_ton = data['total_tare']
+            self.lbl_tare_info.configure(text=f"Tara Acumulada: {self._format_weight(tara_ton)} t")
         
         # Verificar si hay sensores desconectados para cambiar color del panel
         any_disconnected = data.get('any_disconnected', False)
         
-        # Tambin verificar manualmente en los sensores
+        # Tambn verificar manualmente en los sensores
         if not any_disconnected:
             for sensor_info in data.get('sensores', {}).values():
                 if not sensor_info.get('connected', True):
                     any_disconnected = True
                     break
         
-        # Cambiar color del panel TOTAL segn estado de sensores - FAIL-SAFE
+        # Mudar cor do painel TOTAL segundo estado de sensores - FAIL-SAFE
         if any_disconnected:
-            # ROJO - Hay sensor(es) desconectado(s) - SISTEMA PARADO
+            # VERMELHO - Há sensor(es) desconectado(s) - SISTEMA PARADO
             self.total_section.configure(style='TotalPanelDanger.TFrame')
-            self.lbl_total_title.configure(text="ERRO DE COMUNICACAO", style='TotalLabelDanger.TLabel')
+            self.lbl_total_title.configure(text="ERRO DE COMUNICAÇÃO", style='TotalLabelDanger.TLabel')
             self.lbl_total.configure(text="---", style='TotalValueDanger.TLabel')
             self.lbl_total_unit.configure(text="SISTEMA PARADO", style='TotalUnitDanger.TLabel')
         else:
-            # AZUL - Todos los sensores conectados (normal)
+            # AZUL - Todos os sensores conectados (normal)
             self.total_section.configure(style='TotalPanel.TFrame')
             self.lbl_total_title.configure(text="PESO TOTAL", style='TotalLabel.TLabel')
-            peso_ton = data['total']  # Ya viene en toneladas del procesador
-            self.lbl_total.configure(text=f"{peso_ton:.2f}", style='TotalValue.TLabel')
-            self.lbl_total_unit.configure(text="ton", style='TotalUnit.TLabel')
+            peso_ton = data['total']
+            self.lbl_total.configure(text=f"{self._format_weight(peso_ton)}", style='TotalValue.TLabel')
+            self.lbl_total_unit.configure(text="t", style='TotalUnit.TLabel')
         
         # Actualizar Sensores Individuales
         sensores = data['sensores']
@@ -521,9 +562,9 @@ class BalanzaGUI(ttk.Window):
             if key in sensores:
                 info = sensores[key]
                 
-                # Actualizar valor - Mostrar en toneladas con 2 decimales
-                valor_ton = info['valor']  # Ya viene en toneladas del procesador
-                widgets['value'].configure(text=f"{valor_ton:.2f}")
+                # Actualizar valor - Usar formato según configuración de decimales
+                valor_ton = info['valor']
+                widgets['value'].configure(text=f"{self._format_weight(valor_ton)}")
                 
                 # Atualizar estado visual segundo conexo
                 if info.get('connected', True):
@@ -560,8 +601,168 @@ class BalanzaGUI(ttk.Window):
                 padding=(15, 12)
             )
 
+    def _show_numeric_keypad(self, entry_widget, title="Inserir Valor"):
+        """Mostra um teclado numérico virtual para entrada de valores em tablets."""
+        # Obter valor atual do entry
+        current_value = entry_widget.get() if hasattr(entry_widget, 'get') else ""
+        
+        # Criar janela popup
+        keypad = tk.Toplevel(self)
+        keypad.title(title)
+        keypad.transient(self)
+        keypad.overrideredirect(True)  # Sin barra de título
+        
+        # Tamaño y posición centrada
+        kp_width = 350
+        kp_height = 450
+        x = self.winfo_x() + (self.winfo_width() - kp_width) // 2
+        y = self.winfo_y() + (self.winfo_height() - kp_height) // 2
+        keypad.geometry(f"{kp_width}x{kp_height}+{x}+{y}")
+        
+        # Frame principal con borde
+        main_frame = ttk.Frame(keypad, padding=10)
+        main_frame.pack(fill=BOTH, expand=YES)
+        
+        # Título
+        ttk.Label(main_frame, text=title, font=("Segoe UI", 16, "bold")).pack(pady=(0, 10))
+        
+        # Display del valor actual
+        display_var = tk.StringVar(value=current_value)
+        display = ttk.Entry(main_frame, textvariable=display_var, font=("Consolas", 28), 
+                           justify="center", state="readonly")
+        display.pack(fill=X, pady=(0, 15), ipady=10)
+        
+        # Frame para botones numéricos
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=BOTH, expand=YES)
+        
+        # Configurar grid 4x3
+        for i in range(4):
+            btn_frame.rowconfigure(i, weight=1)
+        for i in range(3):
+            btn_frame.columnconfigure(i, weight=1)
+        
+        # Función para agregar dígito
+        def add_digit(d):
+            current = display_var.get()
+            # Evitar múltiples puntos decimales
+            if d == "." and "." in current:
+                return
+            display_var.set(current + d)
+        
+        # Función para borrar
+        def backspace():
+            current = display_var.get()
+            display_var.set(current[:-1])
+        
+        # Función para limpiar
+        def clear():
+            display_var.set("")
+        
+        # Función para confirmar
+        def confirm():
+            value = display_var.get()
+            # Actualizar el entry original
+            entry_widget.delete(0, tk.END)
+            entry_widget.insert(0, value)
+            # Disparar evento de cambio si tiene variable asociada
+            try:
+                if hasattr(entry_widget, 'cget'):
+                    var = entry_widget.cget('textvariable')
+                    if var:
+                        self.nametowidget(var).set(value)
+            except:
+                pass
+            keypad.destroy()
+        
+        # Función para cancelar
+        def cancel():
+            keypad.destroy()
+        
+        # Estilo de botones grandes
+        btn_style = {"padding": (15, 20)}
+        
+        # Crear botones numéricos (1-9)
+        buttons = [
+            ('7', 0, 0), ('8', 0, 1), ('9', 0, 2),
+            ('4', 1, 0), ('5', 1, 1), ('6', 1, 2),
+            ('1', 2, 0), ('2', 2, 1), ('3', 2, 2),
+            ('.', 3, 0), ('0', 3, 1), ('C', 3, 2),
+        ]
+        
+        for (text, row, col) in buttons:
+            if text == 'C':
+                btn = ttk.Button(btn_frame, text=text, command=clear, 
+                                bootstyle="warning", **btn_style)
+            elif text == '.':
+                btn = ttk.Button(btn_frame, text=text, command=lambda d=text: add_digit(d),
+                                bootstyle="secondary", **btn_style)
+            else:
+                btn = ttk.Button(btn_frame, text=text, command=lambda d=text: add_digit(d),
+                                bootstyle="light", **btn_style)
+            btn.grid(row=row, column=col, sticky="nsew", padx=3, pady=3)
+        
+        # Frame para botones de acción
+        action_frame = ttk.Frame(main_frame)
+        action_frame.pack(fill=X, pady=(15, 0))
+        action_frame.columnconfigure(0, weight=1)
+        action_frame.columnconfigure(1, weight=1)
+        action_frame.columnconfigure(2, weight=1)
+        
+        # Botón Borrar (Backspace)
+        ttk.Button(action_frame, text="<", command=backspace,
+                  bootstyle="secondary", padding=(20, 15)).grid(row=0, column=0, sticky="ew", padx=3)
+        
+        # Botón Cancelar
+        ttk.Button(action_frame, text="CANCELAR", command=cancel,
+                  bootstyle="danger", padding=(20, 15)).grid(row=0, column=1, sticky="ew", padx=3)
+        
+        # Botón Confirmar
+        ttk.Button(action_frame, text="OK", command=confirm,
+                  bootstyle="success", padding=(20, 15)).grid(row=0, column=2, sticky="ew", padx=3)
+        
+        # Hacer modal - SIN grab_set para evitar bloqueos en tablets
+        # keypad.grab_set()  # REMOVIDO - causa bloqueo
+        keypad.focus_set()
+        keypad.lift()  # Traer al frente
+        
+        # Cerrar con Escape
+        keypad.bind("<Escape>", lambda e: cancel())
+        keypad.bind("<Return>", lambda e: confirm())
+
+    def _bind_numeric_keypad(self, entry_widget, title="Inserir Valor"):
+        """Vincula un Entry para mostrar teclado numérico al recibir foco."""
+        def on_focus(event):
+            # Pequeño delay para evitar conflictos
+            self.after(100, lambda: self._show_numeric_keypad(entry_widget, title))
+        entry_widget.bind("<FocusIn>", on_focus)
+        # También al hacer click
+        entry_widget.bind("<Button-1>", on_focus)
+
     def do_tare(self):
         self.command_queue.put({'cmd': 'TARE'})
+
+    def toggle_decimals(self):
+        """Alterna entre mostrar valores con o sin decimales."""
+        self._show_decimals = not self._show_decimals
+        if self._show_decimals:
+            self.btn_decimals.configure(text="OCULTAR DECIMAIS", bootstyle="info")
+        else:
+            self.btn_decimals.configure(text="MOSTRAR DECIMAIS", bootstyle="info-outline")
+        # Forzar actualización visual inmediata
+        if hasattr(self, '_last_sensor_data') and self._last_sensor_data:
+            self._update_display(self._last_sensor_data)
+
+    def _format_weight(self, value):
+        """Formatea el peso según configuración de decimales (redondeo bancario/IEEE 754)."""
+        if self._show_decimals:
+            # Con decimales: 2 posiciones usando redondeo bancario
+            from decimal import Decimal, ROUND_HALF_EVEN
+            d = Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_EVEN)
+            return f"{d}"
+        else:
+            # Sin decimales: redondeo al entero más cercano (norma ISO 80000-1)
+            return f"{round(value)}"
 
     def show_large_confirmation(self, title, message):
         """Mostra um dilogo modal personalizado SEM barra de ttulo, com fontes e botes grandes."""
@@ -716,21 +917,21 @@ class BalanzaGUI(ttk.Window):
         target.wait_window(dialog)
 
     def reset_tare(self):
-        print("DEBUG: Boto Reset pressionado")
-        self.log_message("Solicitando zerar tara...")
+        print("DEBUG: Botão Limpar Tara pressionado")
+        self.log_message("Solicitando limpar tara...")
         # Usar after para permitir que a UI seja atualizada
         self.after(100, self._show_reset_confirmation)
 
     def _show_reset_confirmation(self):
-        resposta = self.show_large_confirmation("Confirmao", "Tem certeza que deseja zerar a tara?")
+        resposta = self.show_large_confirmation("Confirmação", "Tem certeza que deseja limpar a tara?")
         
-        print(f"DEBUG: Resposta dilogo: {resposta}")
+        print(f"DEBUG: Resposta diálogo: {resposta}")
         
         if resposta:
             self.command_queue.put({'cmd': 'RESET_TARE'})
-            self.log_message("Tara zerada com sucesso.")
+            self.log_message("Tara limpa com sucesso.")
         else:
-            self.log_message("Operao cancelada.")
+            self.log_message("Operação cancelada.")
 
     # =========================================================================
     # DIALOGO DE DESCONEXION DE SENSOR
@@ -782,18 +983,18 @@ class BalanzaGUI(ttk.Window):
         frame = ttk.Frame(outer_frame, padding=30)
         frame.pack(fill=BOTH, expand=YES)
         
-        # Icono y titulo
+        # Titulo
         title_lbl = ttk.Label(
             frame, 
-            text="  SENSOR DESCONECTADO", 
+            text="SENSOR DESCONECTADO", 
             font=("Segoe UI", 20, "bold"), 
             foreground="#dc2626"
         )
         title_lbl.pack(pady=(0, 20))
         
         # Mensaje principal
-        msg_text = f"El sensor '{nombre}' (ID: {node_id}) ha perdido la conexin.\n\n" \
-                   f"La adquisicin de datos est pausada."
+        msg_text = f"O sensor '{nombre}' (ID: {node_id}) perdeu a conexão.\n\n" \
+                   f"A aquisição de dados esta pausada."
         msg_lbl = ttk.Label(
             frame, 
             text=msg_text, 
@@ -886,18 +1087,18 @@ class BalanzaGUI(ttk.Window):
                 )
     
     def _handle_sensor_reconnected(self, payload):
-        """Maneja cuando un sensor se reconecta exitosamente."""
+        """Maneja quando um sensor se reconecta com sucesso."""
         node_id = payload['node_id']
         
         # Mostrar mensaje de exito y cerrar dialogo
-        self.log_message(f" Sensor {node_id} reconectado com sucesso")
+        self.log_message(f"Sensor {node_id} reconectado com sucesso")
         
         # Actualizar dialogo si existe
         if hasattr(self, '_disconnect_dialogs') and node_id in self._disconnect_dialogs:
             dialog_info = self._disconnect_dialogs[node_id]
             if dialog_info['progress_label']:
                 dialog_info['progress_label'].configure(
-                    text=" RECONECTADO COM SUCESSO",
+                    text="RECONECTADO COM SUCESSO",
                     foreground="#22c55e"
                 )
             if dialog_info['attempt_label']:
@@ -1003,6 +1204,20 @@ class BalanzaGUI(ttk.Window):
 
     def _show_connection_dialog(self):
         """Mostra dilogo de conexo - 100% no bloqueante."""
+        
+        # 1. Se j est ativo, apenas trazer para frente
+        if getattr(self, '_connection_dialog_active', False):
+            if hasattr(self, '_conn_dialog') and self._conn_dialog.winfo_exists():
+                self._conn_dialog.lift()
+                return
+        
+        # 2. Limpeza preventiva: Se existe janela "morta" ou "cancelando", destruir antes
+        if hasattr(self, '_conn_dialog') and self._conn_dialog.winfo_exists():
+            try:
+                self._conn_dialog.destroy()
+            except:
+                pass
+
         self._connection_dialog_active = True
         self._cancel_connection = False
         
@@ -1095,7 +1310,7 @@ class BalanzaGUI(ttk.Window):
         # xito
         if self.connected:
             self._conn_progress.stop()
-            self._conn_status.configure(text=" Conectado!", foreground="#22c55e")
+            self._conn_status.configure(text="Conectado!", foreground="#22c55e")
             self._conn_info.configure(text="")
             self._conn_btn.configure(state='disabled')
             self._connection_dialog_active = False
@@ -1136,21 +1351,41 @@ class BalanzaGUI(ttk.Window):
         """Cancela conexin inmediatamente."""
         self._cancel_connection = True
         self._connection_dialog_active = False
-        self._conn_progress.stop()
-        self._conn_status.configure(text="Cancelado")
-        self._conn_dialog.after(300, self._safe_close_conn_dialog)
-    
-    def _safe_close_conn_dialog(self):
-        """Cierra dilogo de forma segura."""
+        
+        # Parar elementos visuais
+        if hasattr(self, '_conn_progress') and self._conn_progress.winfo_exists():
+            self._conn_progress.stop()
+        if hasattr(self, '_conn_status') and self._conn_status.winfo_exists():
+            self._conn_status.configure(text="Cancelado")
+            
+        # IMPORTANTE: Liberar grab imediatamente para evitar congelamento
+        if hasattr(self, '_conn_dialog') and self._conn_dialog.winfo_exists():
+            try:
+                self._conn_dialog.grab_release()
+            except:
+                pass
+        
+        # Agendar fechamento passando a referncia da janela atual
+        # para evitar fechar uma nova janela se for aberta rapidamente
+        current_dialog = self._conn_dialog
+        self.after(300, lambda: self._destroy_specific_dialog(current_dialog))
+        
+    def _destroy_specific_dialog(self, dialog):
+        """Destri uma janela de dilogo especfica."""
         try:
-            if hasattr(self, '_conn_dialog') and self._conn_dialog.winfo_exists():
-                self._conn_dialog.destroy()
+            if dialog and dialog.winfo_exists():
+                dialog.destroy()
         except:
             pass
+            
+    def _safe_close_conn_dialog(self):
+        """Cierra dilogo de forma segura (wrapper legado)."""
+        if hasattr(self, '_conn_dialog'):
+            self._destroy_specific_dialog(self._conn_dialog)
         
     def _update_connection_progress(self, data):
         """Atualiza o dilogo de conexo com o progresso."""
-        if not hasattr(self, '_connection_dialog') or not self._connection_dialog_active:
+        if not hasattr(self, '_conn_dialog') or not getattr(self, '_connection_dialog_active', False):
             return
             
         try:
@@ -1159,35 +1394,53 @@ class BalanzaGUI(ttk.Window):
             status = data.get('status', 'connecting')
             message = data.get('message', 'Conectando...')
             
-            self._connection_attempt_lbl.configure(
-                text=f"Tentativa {attempt} de {max_attempts}"
-            )
-            self._connection_status_lbl.configure(text=message)
+            # Atualizar textos se os widgets existirem
+            if hasattr(self, '_conn_info') and self._conn_info.winfo_exists():
+                self._conn_info.configure(text=f"Tentativa {attempt} de {max_attempts}")
+            
+            if hasattr(self, '_conn_status') and self._conn_status.winfo_exists():
+                self._conn_status.configure(text=message)
             
             if status == 'success':
-                self._connection_progress.stop()
-                self._connection_status_lbl.configure(
-                    text=" Conexão estabelecida com sucesso!",
-                    foreground="#22c55e"
-                )
-                self._connection_btn_cancel.configure(state='disabled')
+                if hasattr(self, '_conn_progress') and self._conn_progress.winfo_exists():
+                    self._conn_progress.stop()
+                
+                if hasattr(self, '_conn_status') and self._conn_status.winfo_exists():
+                    self._conn_status.configure(
+                        text=" Conexão estabelecida com sucesso!",
+                        foreground="#22c55e"
+                    )
+                
+                if hasattr(self, '_conn_btn') and self._conn_btn.winfo_exists():
+                    self._conn_btn.configure(state='disabled')
+                
                 self._connection_dialog_active = False
-                self._connection_dialog.after(1000, self._connection_dialog.destroy)
+                if self._conn_dialog.winfo_exists():
+                    self._conn_dialog.after(1000, self._conn_dialog.destroy)
                 
             elif status == 'failed':
-                self._connection_progress.stop()
-                self._connection_status_lbl.configure(
-                    text=" " + message,
-                    foreground="#ef4444"
-                )
-                self._connection_btn_cancel.configure(text="FECHAR", state='normal')
+                if hasattr(self, '_conn_progress') and self._conn_progress.winfo_exists():
+                    self._conn_progress.stop()
+                
+                if hasattr(self, '_conn_status') and self._conn_status.winfo_exists():
+                    self._conn_status.configure(
+                        text=" " + message,
+                        foreground="#ef4444"
+                    )
+                
+                if hasattr(self, '_conn_btn') and self._conn_btn.winfo_exists():
+                    self._conn_btn.configure(text="FECHAR", state='normal')
+                
                 self._connection_dialog_active = False
                 
             elif status == 'cancelled':
-                self._connection_progress.stop()
+                if hasattr(self, '_conn_progress') and self._conn_progress.winfo_exists():
+                    self._conn_progress.stop()
+                
                 self._connection_dialog_active = False
                 try:
-                    self._connection_dialog.destroy()
+                    if self._conn_dialog.winfo_exists():
+                        self._conn_dialog.destroy()
                 except:
                     pass
                     
@@ -1197,9 +1450,10 @@ class BalanzaGUI(ttk.Window):
     def _close_connection_dialog(self):
         """Fecha o dilogo de conexo se estiver aberto."""
         self._connection_dialog_active = False
-        if hasattr(self, '_connection_dialog'):
+        if hasattr(self, '_conn_dialog'):
             try:
-                self._connection_dialog.destroy()
+                if self._conn_dialog.winfo_exists():
+                    self._conn_dialog.destroy()
             except:
                 pass
 
@@ -1246,7 +1500,7 @@ class BalanzaGUI(ttk.Window):
         dialog.lift()
         dialog.focus_force()
 
-        # Estilos para abas grandes (touch-friendly) y CENTRADAS (simulado con padding o fill)
+        # Estilos para abas grandes (touch-friendly) y CENTRADAS (simulado com padding o fill)
         # Nota: El estilo 'TNotebook.Tab' ya fue ajustado en _configure_styles,
         # pero aqui podemos forzar aun mas
         style = ttk.Style()
@@ -1288,7 +1542,7 @@ class BalanzaGUI(ttk.Window):
                   foreground="#1e293b", 
                   background="#ffffff").pack(side=LEFT)
         
-        btn_close = ttk.Button(title_frame, text=" FECHAR", 
+        btn_close = ttk.Button(title_frame, text="FECHAR", 
                                bootstyle="danger", 
                                command=safe_close_dialog,
                                width=12,
@@ -1311,27 +1565,67 @@ class BalanzaGUI(ttk.Window):
         ttk.Label(tab_nodes, text="Configuração de Células de Carga", 
                   font=("Segoe UI", 18, "bold")).pack(anchor="w", pady=(0, 10))
         
-        ttk.Label(tab_nodes, 
-                  text="2 Nós SG-Link-200 com 2 canais cada = 4 células de carga no total",
-                  font=("Segoe UI", 12), foreground="#64748b").pack(anchor="w", pady=(0, 20))
         
         # === Porta Serial (USB Gateway) ===
         port_frame = ttk.Labelframe(tab_nodes, text="Porta Serial (Gateway USB)", padding=15)
         port_frame.pack(fill=X, pady=(0, 20))
         
-        port_inner = ttk.Frame(port_frame)
-        port_inner.pack(fill=X)
+        # Layout con grid para mejor alineacion
+        port_grid = ttk.Frame(port_frame)
+        port_grid.pack(fill=X)
+        port_grid.columnconfigure(1, weight=1)
         
-        ttk.Label(port_inner, text="Porta COM:", font=("Segoe UI", 14)).pack(side=LEFT, padx=(0, 10))
-        entry_serial = ttk.Entry(port_inner, font=("Segoe UI", 14), width=15)
-        entry_serial.insert(0, current_config.get("serial_port", "COM3"))
-        entry_serial.pack(side=LEFT, ipady=6)
+        ttk.Label(port_grid, text="Porta COM:", font=("Segoe UI", 14)).grid(row=0, column=0, sticky="w", padx=(0, 15))
         
-        ttk.Label(port_inner, text="(ex: COM3, COM4, etc.)", 
-                  font=("Segoe UI", 11), foreground="#64748b").pack(side=LEFT, padx=(15, 0))
+        # PROCURAR PORTAS DISPONIVEIS AUTOMATICAMENTE
+        com_values = []
+        try:
+            import serial.tools.list_ports
+            com_list = serial.tools.list_ports.comports()
+            com_values = [p.device for p in com_list]
+        except:
+            com_values = []
+            
+        current_port = current_config.get("serial_port", "COM3")
         
-        # === Frame de Descubrimiento ===
-        discover_frame = ttk.Labelframe(tab_nodes, text="Descoberta de Nós", padding=15)
+        # Si la lista esta vacia, agregar al menos el default
+        if not com_values:
+            com_values.append(current_port)
+        elif current_port not in com_values:
+            com_values.append(current_port)
+            
+        # Ordenar portas
+        try:
+            com_values.sort(key=lambda x: int(x.replace('COM', '')) if x.startswith('COM') and x[3:].isdigit() else x)
+        except:
+            pass # No ordenar si falla
+            
+        # Combobox editable para seleccionar o escribir
+        entry_serial = ttk.Combobox(port_grid, font=("Segoe UI", 14), width=12, values=com_values)
+        entry_serial.set(current_port)
+        entry_serial.grid(row=0, column=1, sticky="w", ipady=6)
+        
+        # Boton Actualizar Portas - sin feedback visual acumulativo
+        def refresh_ports():
+            try:
+                import serial.tools.list_ports
+                ports = serial.tools.list_ports.comports()
+                new_values = [p.device for p in ports]
+                # Ordenar
+                if new_values:
+                    new_values.sort(key=lambda x: int(x.replace('COM', '')) if x.startswith('COM') and x[3:].isdigit() else x)
+                    entry_serial['values'] = new_values
+                    entry_serial.set(new_values[0])
+                
+            except ImportError:
+                self.show_alert("Aviso", "Instale 'pyserial' para deteccao automatica.", parent=dialog)
+            except Exception as e:
+                self.show_alert("Erro", str(e), "error", parent=dialog)
+                
+        ttk.Button(port_grid, text="Atualizar", command=refresh_ports, bootstyle="secondary-outline", width=10).grid(row=0, column=2, padx=(15, 0))
+        
+        # === Frame de Descubrimento ===
+        discover_frame = ttk.Labelframe(tab_nodes, text="Descoberta de Nos", padding=15)
         discover_frame.pack(fill=X, pady=(0, 20))
         
         discover_btn_frame = ttk.Frame(discover_frame)
@@ -1386,11 +1680,11 @@ class BalanzaGUI(ttk.Window):
                 if celda_idx > 4:
                     break
             
-            self._discovered_nodes_var.set(f" {celda_idx - 1} celdas auto-atribudas")
+            self._discovered_nodes_var.set(f"{celda_idx - 1} celulas auto-atribuidas")
         
         ttk.Button(
             discover_btn_frame, 
-            text=" AUTO-ATRIBUIR", 
+            text="AUTO-ATRIBUIR", 
             command=auto_assign_nodes,
             bootstyle="warning",
             padding=(20, 15)
@@ -1429,11 +1723,11 @@ class BalanzaGUI(ttk.Window):
         
         node_entries = {}
         
-        # === CONFIGURACIN DE 4 CELDAS NUMERADAS ===
-        ttk.Label(tab_nodes, text="Atribuição de Células (1-4):", 
+        # === CONFIGURACION DE 4 CELDAS NUMERADAS ===
+        ttk.Label(tab_nodes, text="Atribuicao de Celulas (1-4):", 
                   font=("Segoe UI", 14, "bold")).pack(anchor="w", pady=(20, 10))
         
-        # Frame para las 4 celdas en una fila
+        # Frame para las 4 celdas
         cells_frame = ttk.Frame(tab_nodes)
         cells_frame.pack(fill=X, pady=(0, 15))
         
@@ -1446,40 +1740,36 @@ class BalanzaGUI(ttk.Window):
             current_node_data = current_config["nodes"].get(key, {"id": 0, "ch": "ch1", "nombre": f"Celda {celda_num}"})
             
             # Frame de cada celda
-            cell_frame = ttk.Labelframe(cells_frame, text=f" CÉLULA {celda_num}", padding=5)
+            cell_frame = ttk.Labelframe(cells_frame, text=f"CELULA {celda_num}", padding=10)
             cell_frame.grid(row=0, column=celda_num-1, sticky="nsew", padx=8, pady=5)
             
+            # Layout con grid para alineacion
+            cell_grid = ttk.Frame(cell_frame)
+            cell_grid.pack(fill=X)
+            cell_grid.columnconfigure(1, weight=1)
+            
             # Node ID
-            id_frame = ttk.Frame(cell_frame)
-            id_frame.pack(fill=X, pady=5)
-            ttk.Label(id_frame, text="ID do Nó:", font=("Segoe UI", 12)).pack(side=LEFT)
-            e_id = ttk.Entry(id_frame, font=("Segoe UI", 14), width=10)
+            ttk.Label(cell_grid, text="ID do Nó:", font=("Segoe UI", 12)).grid(row=0, column=0, sticky="w", pady=5)
+            e_id = ttk.Entry(cell_grid, font=("Segoe UI", 14), width=8)
             e_id.insert(0, str(current_node_data.get("id", 0)))
-            e_id.pack(side=RIGHT, ipady=6)
+            e_id.grid(row=0, column=1, sticky="e", pady=5, ipady=4)
+            self._bind_numeric_keypad(e_id, f"ID do Nó - Célula {celda_num}")
             
             # Channel
-            ch_frame = ttk.Frame(cell_frame)
-            ch_frame.pack(fill=X, pady=5)
-            ttk.Label(ch_frame, text="Canal:", font=("Segoe UI", 12)).pack(side=LEFT)
-            ch_combo = ttk.Combobox(ch_frame, values=["ch1", "ch2", "ch3", "ch4"], 
+            ttk.Label(cell_grid, text="Canal:", font=("Segoe UI", 12)).grid(row=1, column=0, sticky="w", pady=5)
+            # Limitado a 3 canais conforme conexões físicas do SG-Link-200 (OEM)
+            ch_combo = ttk.Combobox(cell_grid, values=["ch1", "ch2", "ch3"], 
                                      font=("Segoe UI", 14), width=8, state="readonly")
             ch_combo.set(current_node_data.get("ch", "ch1"))
-            ch_combo.pack(side=RIGHT, ipady=4)
+            ch_combo.grid(row=1, column=1, sticky="e", pady=5, ipady=6)
             
             node_entries[key] = {"id": e_id, "ch": ch_combo}
         
-        # Nota explicativa
-        ttk.Label(tab_nodes, 
-                  text=" Cada no SG-Link-200 tem 2 canais (ch1, ch2). "
-                       "Configure cada celula com seu no e canal correspondente.",
-                  font=("Segoe UI", 11), foreground="#64748b",
-                  wraplength=800).pack(anchor="w", pady=(10, 5))
-
         # ==================== Tab CALIBRACAO ====================
         tab_cal = ttk.Frame(notebook, padding=30)
-        notebook.add(tab_cal, text="    CALIBRACAO   ")
+        notebook.add(tab_cal, text="    CALIBRAÇÃO   ")
         
-        self._setup_calibration_tab(tab_cal, current_config)
+        self._setup_calibration_tab(tab_cal, current_config, safe_close_dialog)
 
         # ==================== Botes de Ao ====================
         # Frame de botes fixo na parte inferior con borda superior
@@ -1561,7 +1851,7 @@ class BalanzaGUI(ttk.Window):
             pass
         self.wait_window(dialog)
 
-    def _setup_calibration_tab(self, parent, current_config):
+    def _setup_calibration_tab(self, parent, current_config, close_config_dialog=None):
         """Configura a aba de calibração de sensores (Layout Tablet Grande)."""
         from modules.calibration import CalibrationManager
         
@@ -1569,7 +1859,7 @@ class BalanzaGUI(ttk.Window):
         ttk.Label(parent, text="Calibração de Células de Carga", 
                   font=("Segoe UI", 26, "bold")).pack(anchor="w", pady=(0, 20))
         
-        # Descrição - fonte legível
+        # Descricao - fonte legivel
         ttk.Label(parent, 
                   text="Selecione o sensor abaixo para iniciar o ensaio de calibração com pesos padrão.",
                   font=("Segoe UI", 16), foreground="#64748b",
@@ -1578,7 +1868,8 @@ class BalanzaGUI(ttk.Window):
         # === SELECCION DE SENSOR (GRIGO DE BOTONES GRANDES) ===
         # Reemplazamos el combobox viejo por algo mas tactil
         
-        select_frame = ttk.Labelframe(parent, text=" Selecione o Sensor ", padding=20)
+        # Remover texto del borde (frame) ya que es redundante con el texto de arriba
+        select_frame = ttk.Labelframe(parent, text="", padding=20)
         select_frame.pack(fill=X, pady=(0, 25))
         
         # Container interior con borde para diferenciar visualmente la zona
@@ -1587,319 +1878,236 @@ class BalanzaGUI(ttk.Window):
         
         sensor_names = list(current_config.get("nodes", {}).keys())
         if not sensor_names:
-            ttk.Label(inner_container, text="Nenhum sensor configurado.", 
-                     font=("Segoe UI", 16, "italic")).pack(pady=20)
-        
-        # Variable para controlar la seleccion. Inicializada con el primer sensor.
-        self._cal_sensor_selected = tk.StringVar(value=sensor_names[0] if sensor_names else "")
-        
-        # Grid layout para botones de sensores (Max 2 por fila para ser enormes)
-        row = 0
-        col = 0
-        MAX_COLS = 2
-        
-        # Estilo "Heavy" para las cartas - lo definimos on the fly si es necesario
-        # o usamos uno existente reforzado
-        
-        for name in sensor_names:
-            # Creamos un frame que actua como boton grande
-            def select_sensor(s_name=name):
-                self._cal_sensor_selected.set(s_name)
-                # Actualizar visualmente
-                self._update_sensor_buttons_visuals(inner_container)
+            ttk.Label(inner_container, text="Nenhum sensor configurado na aba SENSORES.", 
+                     font=("Segoe UI", 16, "italic"), foreground="#94a3b8").pack(pady=20)
+            # Mostrar mensaje y deshabilitar botones
+            self._cal_sensor_selected = tk.StringVar(value="")
+        else:
+            # Variable para controlar la seleccion. Inicializada con el primer sensor.
+            self._cal_sensor_selected = tk.StringVar(value=sensor_names[0])
+            
+            # Grid layout para botones de sensores (Max 2 por fila para ser enormes)
+            row = 0
+            col = 0
+            MAX_COLS = 2
+            
+            for name in sensor_names:
+                # Creamos un frame que actua como boton grande
+                def select_sensor(s_name=name):
+                    self._cal_sensor_selected.set(s_name)
+                    # Actualizar visualmente
+                    self._update_sensor_buttons_visuals(inner_container)
 
-            # Frame con borde SOLIDO y visibles separaciones
-            # Usamos 'Card.TFrame' que tiene borde, pero aumentamos el padding externo (grid padx/pady)
-            # para crear el "canal" de separacion
-            btn_frame = ttk.Frame(inner_container, style='Card.TFrame', padding=20)
-            
-            # NOTA: relief='raised' o 'solid' con borderwidth=2 hace que se note mucho mas
-            # Como no podemos cambiar el style global aqui facilmente sin afectar otros,
-            # confiamos en el cambio visual de "Selected state" y el gap
-            
-            # GRID con GAP GRANDE (20px) para que se note la separacion
-            btn_frame.grid(row=row, column=col, sticky="nsew", padx=15, pady=15)
-            
-            btn_frame.grid_propagate(False)
-            btn_frame.configure(height=120) # Altura fija AUMENTADA
-            
-            # Hacer que todo el frame sea clickeable
-            btn_frame.bind("<Button-1>", lambda e, n=name: select_sensor(n))
-            
-            # Icono o simbolo visual ayuda (REMOVIDO A PEDIDO DEL USUARIO)
-            content_frame = ttk.Frame(btn_frame, style='CardNoBorder.TFrame') # Transparente al padre
-            content_frame.pack(expand=YES, fill=BOTH)
-            content_frame.bind("<Button-1>", lambda e, n=name: select_sensor(n))
-            
-            # Sin icono de balanza
-            
-            # Texto Grande y en Negrita Centrado
-            lbl_name = ttk.Label(content_frame, text=name, font=("Segoe UI", 24, "bold"))
-            lbl_name.pack(expand=YES, anchor="center") # Centrado absoluto
-            lbl_name.bind("<Button-1>", lambda e, n=name: select_sensor(n))
-            
-            # Guardar referencia para actualizar estilo
-            btn_frame.sensor_name = name
-            
-            inner_container.columnconfigure(col, weight=1)
-            
-            col += 1
-            if col >= MAX_COLS:
-                col = 0
-                row += 1
+                # Frame principal del boton
+                btn_frame = ttk.Frame(inner_container, style='Card.TFrame', cursor="hand2")
+                
+                # GRID con GAP GRANDE (20px) para que se note la separacion
+                btn_frame.grid(row=row, column=col, sticky="nsew", padx=15, pady=15)
+                
+                btn_frame.grid_propagate(False)
+                btn_frame.configure(height=140) # Altura aumentada
+                
+                # Binding para click
+                btn_frame.bind("<Button-1>", lambda e, n=name: select_sensor(n))
+                
+                # Contenido interno
+                content_frame = ttk.Frame(btn_frame, style='CardNoBorder.TFrame')
+                content_frame.pack(expand=YES, fill=BOTH, padx=5, pady=5)
+                content_frame.bind("<Button-1>", lambda e, n=name: select_sensor(n))
+                
+                # 1. Nombre del Sensor
+                lbl_name = ttk.Label(content_frame, text=name, font=("Segoe UI", 26, "bold"))
+                lbl_name.pack(expand=YES, side=TOP, pady=(20, 5))
+                lbl_name.bind("<Button-1>", lambda e, n=name: select_sensor(n))
+                
+                # 2. Indicador Estado (Texto o Icono)
+                lbl_status = ttk.Label(content_frame, text="Clicar para selecionar", font=("Segoe UI", 12))
+                lbl_status.pack(side=BOTTOM, pady=(0, 20))
+                lbl_status.bind("<Button-1>", lambda e, n=name: select_sensor(n))
+                
+                # Guardar referencia para actualizar estilo
+                btn_frame.sensor_name = name
+                
+                # Tags para encontrar hijos facilmente en update
+                lbl_name.tag = "name"
+                lbl_status.tag = "status"
+                
+                inner_container.columnconfigure(col, weight=1)
+                
+                col += 1
+                if col >= MAX_COLS:
+                    col = 0
+                    row += 1
 
-        # Metodo para resaltar seleccionado
-        self._update_sensor_buttons_visuals(inner_container)
+            # Metodo para resaltar seleccionado
+            self._update_sensor_buttons_visuals(inner_container)
 
-        # === BOTONES DE ACCION (ENORMES) ===
-        action_frame = ttk.Frame(parent)
-        action_frame.pack(fill=X, pady=20)
+            # === BOTONES DE ACCION (ENORMES) ===
+            action_frame = ttk.Frame(parent)
+            action_frame.pack(fill=X, pady=20)
+            
+            # Funcion para cerrar dialogo config y abrir wizard
+            def start_calibration_action():
+                sensor_name = self._cal_sensor_selected.get()
+                # Cerrar el dialogo de configuracion primero
+                if close_config_dialog:
+                    close_config_dialog()
+                # Abrir wizard despues de un breve delay para asegurar cierre
+                self.after(100, lambda: self._open_calibration_wizard(current_config, sensor_name))
+            
+            # Botao INICIAR - Texto en bold explicitamente si el estilo no lo toma
+            # Se ha configurado style='Large.warning.TButton' en _configure_styles con font bold
+            btn_start = ttk.Button(
+                action_frame, 
+                text=" INICIAR CALIBRAÇÃO ",
+                bootstyle="warning", 
+                command=start_calibration_action
+            )
+            btn_start.configure(style='Large.warning.TButton') 
+            btn_start.pack(side=LEFT, fill=X, expand=YES, padx=(0, 10), ipady=15)
+            
+            # Botão CARREGAR
+            btn_load = ttk.Button(
+                action_frame, 
+                text=" HISTÓRICO / CARREGAR ",
+                bootstyle="info", 
+                command=lambda: self._load_calibration_session(parent)
+            )
+            # Aplicamos estilo grande tambien aqui
+            btn_load.configure(style='Large.info.TButton')
+            btn_load.pack(side=LEFT, fill=X, expand=YES, padx=(10, 0), ipady=15)
         
-        # Botão INICIAR - Texto en bold explicitamente si el estilo no lo toma
-        # Se ha configurado style='Large.warning.TButton' en _configure_styles con font bold
-        btn_start = ttk.Button(
-            action_frame, 
-            text=" INICIAR CALIBRAÇÃO ",
-            bootstyle="warning", 
-            command=lambda: self._open_calibration_wizard(current_config, self._cal_sensor_selected.get())
-        )
-        btn_start.configure(style='Large.warning.TButton') 
-        btn_start.pack(side=LEFT, fill=X, expand=YES, padx=(0, 10), ipady=15)
-        
-        # Botão CARREGAR
-        btn_load = ttk.Button(
-            action_frame, 
-            text=" HISTÓRICO / CARREGAR ",
-            bootstyle="info", 
-            command=self._load_calibration_session
-        )
-        # Aplicamos estilo grande tambien aqui
-        btn_load.configure(style='Large.info.TButton')
-        btn_load.pack(side=LEFT, fill=X, expand=YES, padx=(10, 0), ipady=15)
-        
-        # === TEXTO DE AYUDA LIMPIO ===
-        
-        help_text = (
-            "INSTRUÇÕES:\n"
-            "1. Selecione o sensor acima.\n"
-            "2. Clique em INICIAR para abrir o assistente.\n"
-            "3. Você precisará de pesos padrão conhecidos."
-        )
-        
-        info_frame = ttk.Frame(parent, padding=15)
-        info_frame.pack(fill=X, pady=10)
-        ttk.Label(info_frame, text=help_text, font=("Segoe UI", 14), 
-                 foreground="#64748b", justify="center").pack(anchor="center")
+        # === TEXTO DE AYUDA LIMPIO (Removido a pedido) ===
+        # help_text = (...)
+        # info_frame = ttk.Frame(parent, padding=15)
+        # info_frame.pack(fill=X, pady=10)
+        # ttk.Label(info_frame, text=help_text, ...).pack(anchor="center")
 
     def _update_sensor_buttons_visuals(self, container):
-        """Helper para actualizar color de botones de selección."""
+        """Helper para actualizar color de botones de selección com feedback visual claro."""
         selected = self._cal_sensor_selected.get()
-        primary_color = "#2563eb" # Azul
-        white = "#ffffff"
-        text_color = "#1e293b"
         
-        for widget in container.winfo_children(): # widget = btn_frame (borde)
+        # Colores definidos hardcoded para garantizar contraste sin depender del tema
+        COLOR_SELECTED_BG = "#2563eb" # Primary Blue
+        COLOR_SELECTED_FG = "#ffffff" # White
+        
+        COLOR_NORMAL_BG = "#ffffff"   # White
+        COLOR_NORMAL_FG = "#1e293b"   # Dark Slate
+        COLOR_NORMAL_SUB = "#94a3b8"  # Gray
+        
+        for widget in container.winfo_children(): # widget = btn_frame
             s_name = getattr(widget, 'sensor_name', None)
-            if s_name:
-                content_frame = None
-                # Buscar content frame interno
-                for child in widget.winfo_children():
-                    if isinstance(child, ttk.Frame):
-                        content_frame = child
-                        break
+            if not s_name:
+                continue
                 
-                # Elementos internos (Labels)
-                labels = []
+            # Buscar elementos internos
+            content_frame = None
+            lbl_name = None
+            lbl_status = None
+            
+            # Navegar hierarquia conhecida: btn_frame -> content_frame -> labels
+            for child in widget.winfo_children():
+                if isinstance(child, ttk.Frame):
+                    content_frame = child
+                    for sub in child.winfo_children():
+                        if isinstance(sub, ttk.Label):
+                            tag = getattr(sub, 'tag', None) # Si agregamos tag antes
+                            # Fallback por orden o texto si no hay tag
+                            if hasattr(sub, 'tag') and sub.tag == "name":
+                                lbl_name = sub
+                            elif hasattr(sub, 'tag') and sub.tag == "status":
+                                lbl_status = sub
+                            # Fallback simple
+                            elif not lbl_name and sub.cget("text") == s_name:
+                                lbl_name = sub
+                            elif not lbl_status:
+                                lbl_status = sub
+                    break
+            
+            # APLICAR ESTILOS
+            if s_name == selected:
+                # == SELECCIONADO ==
+                # Marco
+                try: widget.configure(bootstyle="primary") 
+                except: pass
+                
+                # Fondo interno (Simulado con labels pq Frame bg es dificil en ttk)
+                # El truco es usar un Labelframe o style custom, pero aqui iteramos
+                
+                if lbl_name:
+                    lbl_name.configure(background=COLOR_SELECTED_BG, foreground=COLOR_SELECTED_FG)
+                
+                if lbl_status:
+                    lbl_status.configure(
+                        text="SELECIONADO", 
+                        background=COLOR_SELECTED_BG, 
+                        foreground=COLOR_SELECTED_FG,
+                        font=("Segoe UI", 12, "bold")
+                    )
+                
+                # Hack para el background del frame contenedor
+                # Si content_frame es un TFrame, el background depende del style.
+                # Configuramos un style dinamico o usamos bootstyle="primary" inverse
                 if content_frame:
-                    for child in content_frame.winfo_children():
-                        if isinstance(child, ttk.Label):
-                            labels.append(child)
-                
-                if s_name == selected:
-                    # == SELECCIONADO ==
-                    # Usamos estilo azul fuerte para el marco
-                    try:
-                        widget.configure(bootstyle="primary") 
-                    except:
-                        pass
-                    
-                    # Fondo del contenido
-                    if content_frame:
-                        # No podemos cambiar bg de frame fcil sin style, 
-                        # asi que iteramos labels
-                        try:
-                            # Hack: bootstyle inverse-primary pone fondo azul y texto blanco
-                            content_frame.configure(bootstyle="primary")
-                        except:
-                            pass
-                            
-                    for lbl in labels:
-                        lbl.configure(background=primary_color, foreground=white)
-                        
-                else:
-                    # == NORMAL ==
-                    try:
-                        widget.configure(bootstyle="secondary") # Borde gris
-                    except:
-                        pass
-                        
-                    if content_frame:
-                        try:
-                            content_frame.configure(bootstyle="default")
-                        except:
-                            pass
-                            
-                    for lbl in labels:
-                        lbl.configure(background=white, foreground=text_color)
-    
-    def _open_calibration_wizard(self, config_dict, sensor_name_override=None):
-        """Abre o assistente de calibração para o sensor selecionado."""
-        # Determinar sensor ID y nombre
-        sensor_name = sensor_name_override or self._cal_sensor_var.get()
-        
-        # ... logic continue below ...
-        # (Necesitamos parchear para obtener el ID correcto basado en el nombre seleccionado)
-        if not sensor_name:
-             self.show_alert("Aviso", "Selecione um sensor primeiro.", "warning", parent=self)
-             return
+                    try: content_frame.configure(bootstyle="primary")
+                    except: pass
 
-        node_data = config_dict.get("nodes", {}).get(sensor_name)
-        if not node_data:
-            self.show_alert("Erro", "Dados do sensor não encontrados.", "error", parent=self)
-            return
-            
-        sensor_id = node_data.get("id")
-        
-        # Crear Wizard Window (Codigo existente modificado)
-        wizard = ttk.Toplevel(self)
-        self._cal_wizard = wizard
-        
-        # Pantalla completa
-        w, h = self.winfo_screenwidth(), self.winfo_screenheight()
-        wizard.geometry(f"{w}x{h}+0+0")
-        wizard.overrideredirect(True)
-        # ... resto del codigo original ...
-
-    
-    def _refresh_saved_calibrations(self):
-        """Actualiza la lista de calibraciones guardadas."""
-        try:
-            from modules.calibration import CalibrationManager
-            from config import NODOS_CONFIG
-            
-            cal_manager = CalibrationManager(NODOS_CONFIG)
-            sessions = cal_manager.list_saved_sessions()
-            
-            if sessions:
-                text = " Sessões encontradas:\n"
-                for s in sessions[:5]:  # Mostrar maximo 5
-                    text += f"    {s['sensor_nombre']} - {s['fecha']} ({s['puntos']} pontos)\n"
-                if len(sessions) > 5:
-                    text += f"   ... e mais {len(sessions) - 5} sessões"
             else:
-                text = "Nenhuma sessão de calibração salva"
-            
-            self._cal_saved_list.configure(text=text)
-        except Exception as e:
-            self._cal_saved_list.configure(text=f"Erro carregando sessões: {e}")
-    
-    def _load_calibration_session(self):
-        """Abre dialogo para cargar una sesion de calibracion."""
-        from tkinter import filedialog
-        import os
-        
-        cal_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "calibrations")
-        
-        # Crear directorio si no existe
-        if not os.path.exists(cal_dir):
-            os.makedirs(cal_dir, exist_ok=True)
-        
-        try:
-            filepath = filedialog.askopenfilename(
-                title="Selecionar Sessão de Calibração",
-                initialdir=cal_dir,
-                filetypes=[("JSON files", "*.json"), ("CSV files", "*.csv"), ("All files", "*.*")],
-                parent=self
-            )
-            
-            # Usuario cancelou o diálogo
-            if not filepath:
-                return
-            
-            self.log_message(f"Carregando sessão: {filepath}")
-            # TODO: Mostrar datos de la sesin cargada
-            self.show_alert("Carregado", f"Sessão carregada:\n{os.path.basename(filepath)}", "success")
-        except Exception as e:
-            self.log_message(f"Erro ao carregar sessão: {e}")
+                # == NORMAL / NO SELECCIONADO ==
+                # Marco
+                try: widget.configure(bootstyle="secondary") 
+                except: pass
+                
+                if lbl_name:
+                    lbl_name.configure(background=COLOR_NORMAL_BG, foreground=COLOR_NORMAL_FG)
+                
+                if lbl_status:
+                    lbl_status.configure(
+                        text="Clicar para selecionar", 
+                        background=COLOR_NORMAL_BG, 
+                        foreground=COLOR_NORMAL_SUB,
+                        font=("Segoe UI", 12)
+                    )
+                    
+                if content_frame:
+                    try: content_frame.configure(bootstyle="default")
+                    except: pass
     
     def _open_calibration_wizard(self, current_config, sensor_name_override=None):
-        """Abre o wizard de calibração melhorado com gráfico em tempo real."""
-        sensor_name = sensor_name_override or self._cal_sensor_var.get()
-        if not sensor_name:
-            self.show_alert("Erro", "Selecione um sensor para calibrar", "error")
+        """
+        Wizard de Calibração Avançado.
+        Permite entrada manual ou captura, múltiplos pontos, e seleção de curva.
+        """
+        # validar data processor
+        if not self.data_processor:
+            self.show_alert("Erro", "DataProcessor não disponível", "error")
             return
-        
-        # Obter ID do sensor
-        sensor_config = current_config.get("nodes", {}).get(sensor_name, {})
-        sensor_id = sensor_config.get("id", 0)
 
-        
-        # Verificar se ha conexao ativa
-        if not self.connected:
-            self.show_alert("Aviso", "Não há conexão ativa com sensores.\nConecte primeiro antes de calibrar.", "warning")
-            return
-        
-        # Verificar se o sensor tem ID valido (no es 0)
-        if sensor_id == 0:
-            self.show_alert("Aviso", f"Sensor '{sensor_name}' não está configurado (ID=0).\nConfigure os sensores primeiro.", "warning")
-            return
-        
-        # Verificar matplotlib
-        try:
-            import matplotlib
-            # Somente configurar backend se ainda nao configurado
-            import sys
-            if 'matplotlib.backends' not in sys.modules:
-                matplotlib.use('TkAgg')
-            from matplotlib.figure import Figure
-            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-            import numpy as np
-        except ImportError as e:
-            self.show_alert("Erro", f"Matplotlib não instalado: {e}", "error")
-            return
-        except Exception as e:
-            self.show_alert("Erro", f"Erro inicializando matplotlib: {e}", "error")
-            return
-        
-        # Crear ventana del wizard
+        # Setup manager
+        from modules.calibration import CalibrationManager
+        self._cal_manager = CalibrationManager(self.data_processor)
+        self._cal_manager.clear_points()
+
+        # Variables UI
+        self._cal_method_var = tk.StringVar(value="Linear (y=mx+b)")
+        self._cal_unit_var = tk.StringVar(value="Bits (Raw)")
+        self._cal_input_weight = tk.StringVar(value="")
+        self._cal_input_reading = tk.StringVar(value="")
+        self._cal_wizard_active = True
+
+        # Crear Ventana - SIN overrideredirect para evitar bloqueos
         wizard = ttk.Toplevel(self)
-        wizard.overrideredirect(True)
-        
-        # Tamao casi pantalla completa para tablet
-        screen_w = self.winfo_screenwidth()
-        screen_h = self.winfo_screenheight()
-        wizard_w = screen_w - 40
-        wizard_h = screen_h - 60
-        x = 20
-        y = 20
-        wizard.geometry(f"{wizard_w}x{wizard_h}+{x}+{y}")
-        
-        wizard.lift()
-        wizard.focus_force()
-        
-        # Forzar actualizacin de la ventana antes de agregar widgets pesados
-        wizard.update_idletasks()
-        
-        # Guardar referencia al wizard
+        wizard.title("Assistente de Calibração")
+        w, h = self.winfo_screenwidth(), self.winfo_screenheight()
+        wizard.geometry(f"{w}x{h}+0+0")
+        wizard.state('zoomed')  # Maximizar en Windows
         self._cal_wizard = wizard
-        self._cal_points = []  # Lista de puntos: [(peso_kg, mv_v), ...]
-        self._cal_current_mv_value = 0.0  # Inicializar valor mV/V
-        
-        # Funcin de cierre seguro
-        def on_close():
+
+        # === HELPERS ===
+        def close_wizard():
+            self._cal_wizard_active = False
             try:
-                self._cal_wizard_active = False
-                wizard.grab_release()
+                self._cal_manager.cancel()
             except:
                 pass
             try:
@@ -1908,500 +2116,330 @@ class BalanzaGUI(ttk.Window):
                 pass
             self._cal_wizard = None
         
-        # Borde
-        border_frame = ttk.Frame(wizard, bootstyle="warning", padding=4)
-        border_frame.pack(fill=BOTH, expand=YES)
+        wizard.protocol("WM_DELETE_WINDOW", close_wizard)
         
-        main_frame = ttk.Frame(border_frame, padding=15)
-        main_frame.pack(fill=BOTH, expand=YES)
-        
-        # === HEADER ===
-        title_frame = ttk.Frame(main_frame)
-        title_frame.pack(fill=X, pady=(0, 10))
-        
-        ttk.Label(title_frame, text=f" CALIBRAÇÃO: {sensor_name.upper()}", 
-                  font=("Segoe UI", 24, "bold")).pack(side=LEFT)
-        
-        ttk.Button(title_frame, text=" FECHAR", bootstyle="danger",
-                   command=on_close, padding=(20, 10)).pack(side=RIGHT)
-        
-        # === CONTENEDOR PRINCIPAL (2 columnas) ===
-        content_frame = ttk.Frame(main_frame)
-        content_frame.pack(fill=BOTH, expand=YES)
-        # Configurar grid para aprovechar mejor el espacio:
-        # Columna 0 (Izquierda: Controles y tabla): weight=4
-        # Columna 1 (Derecha: Gráfico): weight=6
-        content_frame.columnconfigure(0, weight=4)
-        content_frame.columnconfigure(1, weight=6)
-        content_frame.rowconfigure(0, weight=1)
-        
-        # === COLUMNA IZQUIERDA: Lectura + Tabla + Acciones ===
-        left_frame = ttk.Frame(content_frame)
-        left_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
-        
-        # Frame de lectura actual - Compacto
-        reading_frame = ttk.Labelframe(left_frame, text=" Leitura Atual", padding=10)
-        reading_frame.pack(fill=X, pady=(0, 10))
-        
-        reading_container = ttk.Frame(reading_frame)
-        reading_container.pack(fill=X)
-        
-        self._cal_current_mv = ttk.Label(reading_container, text="0.0000 mV/V", 
-                                          font=("Consolas", 32, "bold"), foreground="#2563eb", width=13)
-        self._cal_current_mv.pack(side=LEFT)
-        
-        self._cal_current_kg = ttk.Label(reading_container, text="(0.000 ton)", 
-                                          font=("Segoe UI", 16), foreground="#64748b", width=15)
-        self._cal_current_kg.pack(side=LEFT, padx=(15, 0))
-        
-        ttk.Button(reading_container, text="", bootstyle="info-outline",
-                   command=lambda: self._update_cal_reading(sensor_id),
-                   padding=(12, 8)).pack(side=RIGHT)
-        
-        # Frame de ações - entrada de peso - Compacto
-        action_frame = ttk.Labelframe(left_frame, text=" Nova Medição", padding=10)
-        action_frame.pack(fill=X, pady=(0, 10))
-        
-        input_row = ttk.Frame(action_frame)
-        input_row.pack(fill=X)
-        
-        ttk.Label(input_row, text="Peso (kg):", font=("Segoe UI", 14)).pack(side=LEFT)
-        self._cal_peso_entry = ttk.Entry(input_row, font=("Segoe UI", 16), width=10)
-        self._cal_peso_entry.pack(side=LEFT, padx=10, ipady=5)
-        
-        ttk.Button(input_row, text=" CAPTURAR ", bootstyle="success",
-                   command=lambda: self._capture_cal_point(sensor_id),
-                   padding=(15, 10)).pack(side=LEFT, padx=5, expand=YES, fill=X)
-        
-        # Tabla escrolleable - Ocupa TODO el espacio restante vertical
-        table_frame = ttk.Labelframe(left_frame, text=" Pontos Capturados", padding=10)
-        table_frame.pack(fill=BOTH, expand=YES, pady=(0, 10))
-        
-        # Header de la tabla fijo
-        header_frame = ttk.Frame(table_frame, bootstyle="secondary", padding=5)
-        header_frame.pack(fill=X)
-        header_frame.columnconfigure(0, weight=2)
-        header_frame.columnconfigure(1, weight=2)
-        header_frame.columnconfigure(2, weight=1)
-        
-        ttk.Label(header_frame, text="Peso Ref.", font=('Segoe UI', 11, 'bold'), anchor="c").grid(row=0, column=0, sticky="ew")
-        ttk.Label(header_frame, text="Leitura", font=('Segoe UI', 11, 'bold'), anchor="c").grid(row=0, column=1, sticky="ew")
-        ttk.Label(header_frame, text="Ação", font=('Segoe UI', 11, 'bold'), anchor="c").grid(row=0, column=2, sticky="ew")
-        
-        ttk.Separator(table_frame).pack(fill=X)
-        
-        # Container scrolleable
-        from ttkbootstrap.scrolled import ScrolledFrame
-        self._cal_table_scroll = ScrolledFrame(table_frame, autohide=False)
-        self._cal_table_scroll.pack(fill=BOTH, expand=YES, pady=5)
-        
-        # Botones de exportacion
-        export_frame = ttk.Frame(left_frame)
-        export_frame.pack(fill=X)
-        
-        ttk.Button(export_frame, text="EXPORTAR CSV", bootstyle="secondary-outline",
-                   command=self._export_calibration_csv,
-                   padding=(10, 10)).pack(side=LEFT, padx=5, expand=YES, fill=X)
-        
-        ttk.Button(export_frame, text="SALVAR", bootstyle="success",
-                   command=self._save_calibration_session,
-                   padding=(10, 10)).pack(side=LEFT, padx=5, expand=YES, fill=X)
-        
-        # === COLUMNA DERECHA: Grafico ===
-        right_frame = ttk.Labelframe(content_frame, text=" Análise da Curva", padding=10)
-        right_frame.grid(row=0, column=1, sticky="nsew")
-        
-        # Crear figura de matplotlib con estilo moderno
-        fig = Figure(figsize=(5, 4), dpi=90, facecolor='#ffffff')
-        self._cal_ax = fig.add_subplot(111)
-        self._cal_ax.set_facecolor('#ffffff')
-        # Márgenes ajustados
-        fig.subplots_adjust(left=0.12, right=0.95, top=0.92, bottom=0.12)
-        
-        self._cal_ax.set_xlabel('Peso Real (kg)', fontsize=11, fontweight='bold')
-        self._cal_ax.set_ylabel('mV/V', fontsize=11, fontweight='bold')
-        self._cal_ax.set_title('Curva de Calibração', fontsize=12, fontweight='bold', color='#1e293b')
-        self._cal_ax.grid(True, linestyle='--', alpha=0.7)
-        self._cal_ax.tick_params(labelsize=9)
-        
-        # Canvas de matplotlib en tkinter
-        self._cal_canvas = FigureCanvasTkAgg(fig, master=right_frame)
-        self._cal_canvas.draw_idle()  # Usar draw_idle para no bloquear
-        self._cal_canvas.get_tk_widget().pack(fill=BOTH, expand=YES)
-        
-        # Grid propagate false para evitar que el texto largo cambie el tamao
-        frame_results = ttk.Frame(right_frame)
-        frame_results.pack(fill=X, pady=(5,0))
-        frame_results.pack_propagate(False)
-        frame_results.configure(height=30)
-        
-        self._cal_results_label = ttk.Label(frame_results, text="Adicione pelo menos 2 pontos...", 
-                                          font=("Segoe UI", 11), foreground="#64748b", anchor="center")
-        self._cal_results_label.pack(fill=BOTH, expand=YES)
-        
-        # Iniciar calibration manager
-        from modules.calibration import CalibrationManager
-        from config import NODOS_CONFIG
-        
-        self._cal_manager = CalibrationManager(NODOS_CONFIG)
-        self._cal_manager.start_session(sensor_id, sensor_name)
-        
-        # Iniciar actualizacin de lectura
-        self._cal_wizard_active = True
-        self._cal_sensor_id = sensor_id
-        self._update_cal_reading_loop(wizard, sensor_id)
-        
-        if hasattr(self, '_cal_table_scroll'):
-            self._refresh_cal_table()
+        def check_connection():
+            return self.connected
             
-        wizard.protocol("WM_DELETE_WINDOW", on_close)
-        wizard.transient(self)
-    
-    def _update_cal_reading(self, sensor_id):
-        """Actualiza a leitura atual do sensor usando os últimos dados recebidos."""
-        try:
-            # Buscar sensor por ID en los ultimos datos
-            kg = 0.0
-            if hasattr(self, '_last_sensor_data') and self._last_sensor_data:
-                for sensor_name, sensor_info in self._last_sensor_data.get('sensores', {}).items():
-                    if sensor_info.get('id') == sensor_id:
-                        # El valor viene en toneladas, convertir a kg para consistencia
-                        kg = sensor_info.get('raw', 0.0) * 1000  # raw est en toneladas
-                        break
-            
-            ton = kg / 1000.0  # Volver a toneladas para mostrar
-            
-            # Calcular mV/V aproximado (sensibilidad tpica 2 mV/V @ 50 ton)
-            SENSIBILIDAD_MV_V = 2.0
-            CARGA_NOMINAL_KG = 50000.0
-            mv_v = (kg / CARGA_NOMINAL_KG) * SENSIBILIDAD_MV_V if kg != 0 else 0.0
-            
-            # Guardar valor mV/V actual para captura
-            self._cal_current_mv_value = mv_v
-            
-            # Actualizar labels (mV/V prominente, ton secundario)
-            if hasattr(self, '_cal_current_mv'):
-                self._cal_current_mv.configure(text=f"{mv_v:.4f} mV/V")
-            if hasattr(self, '_cal_current_kg'):
-                self._cal_current_kg.configure(text=f"({ton:.3f} ton)")
-        except Exception as e:
-            pass  # Silenciar errores para no bloquear
-    
-    def _update_cal_reading_loop(self, wizard, sensor_id):
-        """Loop de atualização de leitura do sensor."""
-        if not self._cal_wizard_active:
-            return
-        
-        try:
-            if wizard.winfo_exists():
-                self._update_cal_reading(sensor_id)
-                wizard.after(500, lambda: self._update_cal_reading_loop(wizard, sensor_id))
-        except:
-            pass
-    
-    # ==================== FUNÇÕES DE CALIBRAÇÃO ====================
-    
-    def _capture_cal_point(self, sensor_id):
-        """Captura um ponto de calibração e atualiza a tabela."""
-        def release_grab():
-            if hasattr(self, '_cal_wizard') and self._cal_wizard:
-                try:
-                    self._cal_wizard.grab_release()
-                except:
-                    pass
-        
-        try:
-            # Lógica de parsing de peso mejorada para admitir decimales
-            raw_input = self._cal_peso_entry.get().strip()
-            if "," in raw_input:
-                raw_input = raw_input.replace(",", ".")
-            
-            if not raw_input:
-                release_grab()
-                self.show_alert("Erro", "Digite o peso real aplicado", "error")
+        def cmd_capture():
+            if not check_connection():
+                msg = "O sistema não está conectado aos sensores.\nPara capturar valores, deve conectar o hardware."
+                messagebox.showwarning("Não Conectado", msg, parent=wizard)
                 return
             
-            peso_kg = float(raw_input)
+            val = self.data_processor.get_last_total_raw()
+            self._cal_input_reading.set(f"{val:.0f}")
             
-            # Obtener valor mV/V actual desde la variable actualizada por el loop
-            mv_v = getattr(self, '_cal_current_mv_value', 0.0)
-            
-            if mv_v == 0.0:
-                # Fallback: Intentar leer desde el label scaneando el texto
-                try:
-                    text = self._cal_current_mv.cget("text")
-                    val_str = text.split()[0]
-                    mv_v = float(val_str)
-                except:
-                    pass
-
-            if mv_v == 0.0:
-                release_grab()
-                self.show_alert("Aviso", "Sem leitura do sensor. Verifique a conexão.", "info")
-                return
-            
-            # Agregar punto a la lista
-            self._cal_points.append((peso_kg, mv_v))
-            
-            # Agregar al manager
-            from modules.calibration import CalibrationPoint
-            from datetime import datetime
-            
-            point = CalibrationPoint(
-                peso_aplicado_kg=peso_kg,
-                valor_crudo_mv_v=mv_v,
-                valor_sensor_kg=peso_kg,
-                timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            )
-            
-            if self._cal_manager.current_session:
-                self._cal_manager.current_session.puntos.append(point)
-            
-            self.log_message(f"Ponto capturado: {peso_kg:.3f} kg  {mv_v:.4f} mV/V")
-            self._cal_peso_entry.delete(0, END)
-            
-            # Actualizar tabla visual completa
-            self._refresh_cal_table()
-            
-            # Actualizar grafico
-            self._update_cal_graph()
-                
-        except ValueError:
-            release_grab()
-            self.show_alert("Erro", "Peso inválido. Use apenas números.", "error")
-        except Exception as e:
-            release_grab()
-            self.show_alert("Erro", f"Erro ao capturar: {e}", "error")
-
-    def _refresh_cal_table(self):
-        """Reconstruye la tabla visual item por item (Style Tabela Tablet)."""
-        # Limpiar tabla actual
-        if not hasattr(self, '_cal_table_scroll'):
-            return
-            
-        for widget in self._cal_table_scroll.winfo_children():
-            widget.destroy()
-            
-        # Reconstruir filas
-        for i, (peso, mv) in enumerate(self._cal_points):
-            row_frame = ttk.Frame(self._cal_table_scroll, padding=(5, 5))
-            row_frame.pack(fill=X, pady=2)
-            
-            # Layout Grid 2:2:1
-            row_frame.columnconfigure(0, weight=2)
-            row_frame.columnconfigure(1, weight=2)
-            row_frame.columnconfigure(2, weight=1)
-            
-            # Valores grandes y visibles
-            peso_ton = peso / 1000.0
-            ttk.Label(row_frame, text=f"{peso_ton:,.3f} ton", font=('Consolas', 12, 'bold'), anchor="c").grid(row=0, column=0, sticky="ew")
-            ttk.Label(row_frame, text=f"{mv:.4f} mV/V", font=('Consolas', 12), anchor="c").grid(row=0, column=1, sticky="ew")
-            
-            # Botón ROJO de borrar
-            btn_delete = ttk.Button(
-                row_frame, 
-                text="EXCLUIR", 
-                bootstyle="danger", 
-                command=lambda idx=i: self._confirm_and_delete(idx)
-            )
-            btn_delete.grid(row=0, column=2, padx=5, sticky="ew")
-            
-            ttk.Separator(self._cal_table_scroll).pack(fill=X, pady=0)
-
-    def _confirm_and_delete(self, index):
-        """Muestra dialogo de confirmación y elimina."""
-        # Validar indice
-        if not (0 <= index < len(self._cal_points)):
-            return
-
-        peso = self._cal_points[index][0]
-        peso_ton = peso / 1000.0
-        
-        # Diálogo de confirmación
-        msg = f"Deseja excluir a medição de {peso_ton:.3f} ton?"
-        if messagebox.askyesno("Remover Ponto", msg, master=self._cal_wizard):
+        def cmd_add_point():
             try:
-                self._cal_points.pop(index)
+                w_str = self._cal_input_weight.get()
+                r_str = self._cal_input_reading.get()
+                if not w_str or not r_str: 
+                    messagebox.showwarning("Aviso", "Complete ambos os campos", parent=wizard)
+                    return
                 
-                # Eliminar del manager
-                if hasattr(self, '_cal_manager') and self._cal_manager:
-                    self._cal_manager.remove_point(index)
+                weight = float(w_str)
+                reading = float(r_str)
                 
-                self._refresh_cal_table()
-                self._update_cal_graph()
-                self.log_message("Ponto removido com sucesso")
-            except Exception as e:
-                self.log_message(f"Erro ao deletar ponto: {e}")
-    
-    def _update_cal_graph(self):
-        """Atualiza o gráfico de calibração com os pontos atuais."""
-        try:
-            import numpy as np
+                self._cal_manager.add_point(weight, reading)
+                self._refresh_cal_wizard_table_ui()
+                self._update_cal_wizard_graph()
+                
+                self._cal_input_weight.set("")
+                self._cal_input_reading.set("")
+            except ValueError:
+                messagebox.showerror("Erro", "Valores numéricos inválidos", parent=wizard)
+                
+        def cmd_apply_cal():
+            # Método fijo: Interpolación por Segmentos
+            points = self._cal_manager.get_points()
             
-            # Limpiar el grafico
+            if len(points) < 2:
+                messagebox.showerror("Erro", "São necessários pelo menos 2 pontos para calibrar.", parent=wizard)
+                return
+            
+            # Crear modelo de interpolación por segmentos
+            sorted_points = sorted(points, key=lambda p: p[1])  # Ordenar por lectura
+            
+            info = f"Método: Interpolação Linear por Segmentos\n"
+            info += f"Pontos: {len(sorted_points)}\n"
+            info += f"Faixa: {sorted_points[0][1]:.0f} - {sorted_points[-1][1]:.0f}"
+            
+            if messagebox.askyesno("Aplicar", f"{info}\n\nAplicar esta calibração?", parent=wizard):
+                # Guardar puntos de calibración para interpolación
+                cal_data = {
+                    "method": "segments",
+                    "points": [(p[0], p[1]) for p in sorted_points],  # (peso, lectura)
+                    "valid": True
+                }
+                self._cal_manager.apply_calibration(cal_data)
+                messagebox.showinfo("Sucesso", "Calibração salva.", parent=wizard)
+                close_wizard()
+
+        # === UI LAYOUT ===
+        
+        # HEADER - Mejorado visualmente
+        header = ttk.Frame(wizard, bootstyle="primary")
+        header.pack(fill=X)
+        
+        header_inner = ttk.Frame(header, padding=(20, 15))
+        header_inner.pack(fill=X)
+        
+        # Icono y título
+        ttk.Label(header_inner, text="ASSISTENTE DE CALIBRAÇÃO", 
+                  font=("Segoe UI", 22, "bold"), 
+                  bootstyle="inverse-primary").pack(side=LEFT)
+        
+        # Botón cerrar grande
+        btn_close = ttk.Button(header_inner, text="FECHAR", 
+                               command=close_wizard, 
+                               bootstyle="danger",
+                               padding=(25, 12))
+        btn_close.pack(side=RIGHT)
+        
+        # Main Split
+        main = ttk.Frame(wizard, padding=15)
+        main.pack(fill=BOTH, expand=YES)
+        main.columnconfigure(0, weight=5)
+        main.columnconfigure(1, weight=5)
+        main.rowconfigure(0, weight=1)
+        
+        # === LEFT: Data Entry & Table ===
+        left = ttk.Labelframe(main, text="  Dados de Calibração  ", padding=15, bootstyle="info")
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        
+        # Input Form
+        f_in = ttk.Frame(left)
+        f_in.pack(fill=X, pady=(0, 15))
+        
+        ttk.Label(f_in, text="Insira os pontos de calibração:", 
+                  font=("Segoe UI", 12, "bold")).pack(anchor="w", pady=(0, 10))
+        
+        # Campos de entrada en grid
+        f_fields = ttk.Frame(f_in)
+        f_fields.pack(fill=X)
+        f_fields.columnconfigure(0, weight=1)
+        f_fields.columnconfigure(1, weight=1)
+        f_fields.columnconfigure(2, weight=0)
+        
+        # Weight (en t)
+        f_w = ttk.Frame(f_fields)
+        f_w.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+        ttk.Label(f_w, text="Peso Padrão (t):", font=("Segoe UI", 11)).pack(anchor="w")
+        e_weight = ttk.Entry(f_w, textvariable=self._cal_input_weight, font=("Consolas", 16))
+        e_weight.pack(fill=X, ipady=8)
+        self._bind_numeric_keypad(e_weight, "Peso Padrão (t)")
+        
+        # Reading
+        f_r = ttk.Frame(f_fields)
+        f_r.grid(row=0, column=1, sticky="ew", padx=(0, 10))
+        ttk.Label(f_r, text="Leitura Sensor:", font=("Segoe UI", 11)).pack(anchor="w")
+        e_reading = ttk.Entry(f_r, textvariable=self._cal_input_reading, font=("Consolas", 16))
+        e_reading.pack(fill=X, ipady=8)
+        self._bind_numeric_keypad(e_reading, "Leitura Sensor")
+        
+        # Capture Button - mismo tamaño que los demás
+        btn_capture = ttk.Button(f_fields, text="CAPTURAR", 
+                                  command=cmd_capture, 
+                                  bootstyle="info",
+                                  padding=(20, 15),
+                                  width=12)
+        btn_capture.grid(row=0, column=2, sticky="ns", padx=(10, 0))
+        
+        # Add Button - Grande y prominente
+        ttk.Button(f_in, text="ADICIONAR PONTO", 
+                   command=cmd_add_point, 
+                   bootstyle="success",
+                   padding=(20, 15),
+                   width=20).pack(fill=X, pady=(15, 0))
+        
+        # Separador
+        ttk.Separator(left).pack(fill=X, pady=15)
+        
+        # Table Header
+        ttk.Label(left, text="Pontos Capturados:", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0, 5))
+        
+        h_frame = ttk.Frame(left, bootstyle="dark", padding=8)
+        h_frame.pack(fill=X)
+        h_frame.columnconfigure(0, weight=1)
+        h_frame.columnconfigure(1, weight=1)
+        h_frame.columnconfigure(2, weight=0)
+        ttk.Label(h_frame, text="PESO (t)", font=("Segoe UI", 10, "bold"), 
+                  bootstyle="inverse-dark").grid(row=0, column=0)
+        ttk.Label(h_frame, text="LEITURA", font=("Segoe UI", 10, "bold"),
+                  bootstyle="inverse-dark").grid(row=0, column=1)
+        ttk.Label(h_frame, text="", width=5).grid(row=0, column=2)
+        
+        # Scrollable table
+        from ttkbootstrap.scrolled import ScrolledFrame
+        self._cal_tbl_scroll = ScrolledFrame(left, autohide=False, height=250)
+        self._cal_tbl_scroll.pack(fill=BOTH, expand=YES, pady=5)
+        
+        # === RIGHT: Graph & Config ===
+        right = ttk.Labelframe(main, text="Análise e Ajuste  ", padding=15, bootstyle="warning")
+        right.grid(row=0, column=1, sticky="nsew")
+        
+        # Config Frame - Solo unidad, método fijo: Interpolación por Segmentos
+        f_cfg = ttk.Frame(right)
+        f_cfg.pack(fill=X, pady=(0, 10))
+        
+        # Mostrar método fijo (informativo, no editable)
+        ttk.Label(f_cfg, text="Método: Interpolação Linear por Segmentos", 
+                  font=("Segoe UI", 12, "bold"), foreground="#2563eb").pack(anchor="w", pady=(0, 10))
+        
+        # Forzar método internamente
+        self._cal_method_var.set("Interpolação Segmentos")
+        
+        # Unit selector
+        f_unit = ttk.Frame(f_cfg)
+        f_unit.pack(fill=X)
+        ttk.Label(f_unit, text="Unidade Leitura:", font=("Segoe UI", 12)).pack(anchor="w")
+        units = ["Bits (Raw)", "mV/V", "t", "lbf"]
+        ttk.Combobox(f_unit, textvariable=self._cal_unit_var, values=units, 
+                     state="readonly", font=("Segoe UI", 14)).pack(fill=X, ipady=6)
+        
+        # Graph Frame
+        g_frame = ttk.Frame(right, bootstyle="light", padding=5)
+        g_frame.pack(fill=BOTH, expand=YES, pady=10)
+        
+        # Inicializar gráfico de forma segura
+        self._cal_fig = None
+        self._cal_ax = None
+        self._cal_canvas = None
+        
+        if MATPLOTLIB_AVAILABLE:
+            try:
+                self._cal_fig = Figure(figsize=(5, 4), dpi=100, facecolor='#f8f9fa')
+                self._cal_ax = self._cal_fig.add_subplot(111)
+                self._cal_ax.set_facecolor('#ffffff')
+                self._cal_ax.set_xlabel("Leitura Sensor", fontsize=10)
+                self._cal_ax.set_ylabel("Peso (t)", fontsize=10)
+                self._cal_ax.grid(True, linestyle='--', alpha=0.5)
+                
+                self._cal_canvas = FigureCanvasTkAgg(self._cal_fig, master=g_frame)
+                self._cal_canvas.get_tk_widget().pack(fill=BOTH, expand=YES)
+                
+                # Dibujo diferido para evitar bloqueo
+                wizard.after(100, lambda: self._cal_canvas.draw_idle() if self._cal_wizard_active else None)
+            except Exception as e:
+                print(f"[GUI] Error matplotlib: {e}")
+                ttk.Label(g_frame, text="Erro ao inicializar gráfico", 
+                          font=("Segoe UI", 12)).pack(expand=YES)
+        else:
+            ttk.Label(g_frame, text="Matplotlib não disponível\nInstale com: pip install matplotlib", 
+                      font=("Segoe UI", 12), justify="center").pack(expand=YES)
+        
+        ttk.Button(right, text="FINALIZAR E APLICAR CALIBRAÇÃO", 
+                   command=cmd_apply_cal, 
+                   bootstyle="success",
+                   padding=(20, 15)).pack(fill=X, pady=(10, 0))
+        
+    def _refresh_cal_wizard_table_ui(self):
+        for w in self._cal_tbl_scroll.winfo_children(): 
+            w.destroy()
+        
+        points = self._cal_manager.get_points()
+        
+        if not points:
+            # Mensaje cuando no hay puntos
+            empty_lbl = ttk.Label(self._cal_tbl_scroll, 
+                                  text="Não há pontos adicionados.\nInsira peso e leitura, depois pressione ADICIONAR.",
+                                  font=("Segoe UI", 11), foreground="gray", justify="center")
+            empty_lbl.pack(expand=YES, pady=30)
+            return
+            
+        for i, (peso, lectura) in enumerate(points):
+            # Fila con fondo alternado
+            bg_style = "light" if i % 2 == 0 else "secondary"
+            row = ttk.Frame(self._cal_tbl_scroll, padding=8, bootstyle=bg_style)
+            row.pack(fill=X, pady=1)
+            row.columnconfigure(0, weight=1)
+            row.columnconfigure(1, weight=1)
+            row.columnconfigure(2, weight=0)
+            
+            # Variables para edición
+            v_w = tk.StringVar(value=f"{peso:.2f}")
+            v_r = tk.StringVar(value=f"{lectura:.2f}")
+            
+            # Callback para actualizar modelo
+            def update_model(idx=i, var=v_w, field='w'):
+                try: 
+                    val = float(var.get())
+                    if idx < len(self._cal_manager.points):
+                        if field == 'w': 
+                            self._cal_manager.points[idx].weight = val
+                        else: 
+                            self._cal_manager.points[idx].reading = val
+                        self._update_cal_wizard_graph()
+                except: 
+                    pass
+
+            # Entry Peso - con teclado numérico
+            e_w = ttk.Entry(row, textvariable=v_w, font=("Consolas", 12), justify="center")
+            e_w.grid(row=0, column=0, sticky="ew", padx=5)
+            e_w.bind("<FocusOut>", lambda e, idx=i, var=v_w: update_model(idx, var, 'w'))
+            e_w.bind("<Return>", lambda e, idx=i, var=v_w: update_model(idx, var, 'w'))
+            e_w.bind("<Button-1>", lambda e, ew=e_w: self.after(50, lambda: self._show_numeric_keypad(ew, "Peso (t)")))
+
+            # Entry Leitura - con teclado numérico
+            e_r = ttk.Entry(row, textvariable=v_r, font=("Consolas", 12), justify="center")
+            e_r.grid(row=0, column=1, sticky="ew", padx=5)
+            e_r.bind("<FocusOut>", lambda e, idx=i, var=v_r: update_model(idx, var, 'r'))
+            e_r.bind("<Return>", lambda e, idx=i, var=v_r: update_model(idx, var, 'r'))
+            e_r.bind("<Button-1>", lambda e, er=e_r: self.after(50, lambda: self._show_numeric_keypad(er, "Leitura")))
+            
+            # Botón Eliminar - más visible
+            btn_del = ttk.Button(row, text="X", width=4, bootstyle="danger",
+                                 command=lambda idx=i: self._cal_remove_point(idx),
+                                 padding=(8, 5))
+            btn_del.grid(row=0, column=2, padx=5)
+
+    def _cal_remove_point(self, idx):
+        self._cal_manager.remove_point(idx)
+        self._refresh_cal_wizard_table_ui()
+        self._update_cal_wizard_graph()
+
+    def _update_cal_wizard_graph(self):
+        """Actualiza el gráfico usando interpolación lineal por segmentos."""
+        if not MATPLOTLIB_AVAILABLE:
+            return
+        if not hasattr(self, '_cal_wizard_active') or not self._cal_wizard_active:
+            return
+        if self._cal_ax is None or self._cal_canvas is None: 
+            return
+        
+        try:
             self._cal_ax.clear()
-            self._cal_ax.set_xlabel('Peso Real (kg)', fontsize=12, fontweight='bold')
-            self._cal_ax.set_ylabel('mV/V', fontsize=12, fontweight='bold')
-            self._cal_ax.set_title('Curva de Calibração', fontsize=14, fontweight='bold', color='#1e293b')
-            self._cal_ax.grid(True, linestyle='--', alpha=0.7)
+            self._cal_ax.set_xlabel("Leitura Sensor", fontsize=10)
+            self._cal_ax.set_ylabel("Peso (t)", fontsize=10)
+            self._cal_ax.grid(True, linestyle='--', alpha=0.5)
             self._cal_ax.set_facecolor('#ffffff')
             
-            if not self._cal_points:
-                self._cal_results_label.configure(text="Adicione pontos para calcular a curva")
-                self._cal_canvas.draw()
+            points = self._cal_manager.get_points()
+            if not points: 
+                self._cal_ax.set_title("Sem dados", fontsize=11, color='gray')
+                self._cal_canvas.draw_idle()
                 return
+
+            # Ordenar puntos por valor de lectura (x)
+            sorted_points = sorted(points, key=lambda p: p[1])
+            x = np.array([p[1] for p in sorted_points])
+            y = np.array([p[0] for p in sorted_points])
             
-            # Extraer datos
-            pesos = np.array([p[0] for p in self._cal_points])
-            mvs = np.array([p[1] for p in self._cal_points])
+            # Scatter - puntos más grandes y visibles
+            self._cal_ax.scatter(x, y, c='#2563eb', s=80, zorder=5, edgecolors='white', linewidth=2)
             
-            # Dibujar puntos
-            self._cal_ax.scatter(pesos, mvs, s=120, c='#2563eb', marker='o', 
-                                  label='Pontos medidos', zorder=5, edgecolors='white', linewidth=2)
-            
-            # Si hay al menos 2 puntos, calcular y dibujar la curva
-            if len(self._cal_points) >= 2:
-                # Regresion lineal
-                slope, intercept = np.polyfit(pesos, mvs, 1)
-                
-                # Calcular R
-                y_pred = slope * pesos + intercept
-                ss_res = np.sum((mvs - y_pred) ** 2)
-                ss_tot = np.sum((mvs - np.mean(mvs)) ** 2)
-                r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
-                
-                # Linea de regresion
-                x_line = np.linspace(min(pesos) * 0.9, max(pesos) * 1.1, 100)
-                y_line = slope * x_line + intercept
-                
-                self._cal_ax.plot(x_line, y_line, 'r-', linewidth=2, 
-                                   label=f'Linear: y = {slope:.6f}x + {intercept:.4f}', alpha=0.8)
-                
-                # Si hay 3+ puntos, intentar ajuste polinomico
-                if len(self._cal_points) >= 3:
-                    try:
-                        poly_coeffs = np.polyfit(pesos, mvs, 2)
-                        y_poly = np.polyval(poly_coeffs, x_line)
-                        
-                        # R del polinomio
-                        y_pred_poly = np.polyval(poly_coeffs, pesos)
-                        ss_res_poly = np.sum((mvs - y_pred_poly) ** 2)
-                        r2_poly = 1 - (ss_res_poly / ss_tot) if ss_tot > 0 else 0
-                        
-                        if r2_poly > r2 + 0.001:  # Solo mostrar si mejora significativamente
-                            self._cal_ax.plot(x_line, y_poly, 'g--', linewidth=2, 
-                                               label=f'Polinômio (R={r2_poly:.4f})', alpha=0.7)
-                    except:
-                        pass
-                
-                # Actualizar label de resultados
-                self._cal_results_label.configure(
-                    text=f" Slope: {slope:.6f} mV/V/kg | Offset: {intercept:.4f} mV/V | R: {r2:.4f}"
-                )
+            # Interpolación Lineal por Segmentos (unir puntos con líneas rectas)
+            if len(x) >= 2:
+                # Dibujar líneas conectando los puntos ordenados
+                self._cal_ax.plot(x, y, 'r-', linewidth=2, label="Segmentos", zorder=4)
+                self._cal_ax.set_title(f"Interpolação por Segmentos ({len(points)} pontos)", 
+                                       fontsize=11, fontweight='bold')
+                self._cal_ax.legend(loc='best')
             else:
-                self._cal_results_label.configure(text="Adicione mais pontos para calcular a curva")
-            
-            # Leyenda
-            self._cal_ax.legend(loc='upper left', fontsize=10)
-            
-            # Ajustar lmites
-            if len(pesos) > 0:
-                x_margin = (max(pesos) - min(pesos)) * 0.1 if max(pesos) != min(pesos) else 1000
-                y_margin = (max(mvs) - min(mvs)) * 0.1 if max(mvs) != min(mvs) else 0.1
-                self._cal_ax.set_xlim(min(pesos) - x_margin, max(pesos) + x_margin)
-                self._cal_ax.set_ylim(min(mvs) - y_margin, max(mvs) + y_margin)
-            
-            # Redibujar
-            self._cal_canvas.draw()
-            
+                self._cal_ax.set_title(f"{len(points)} ponto(s) - Adicione mais para ajustar", 
+                                       fontsize=11, color='gray')
+                     
+            self._cal_canvas.draw_idle()
         except Exception as e:
-            self.log_message(f"Erro ao atualizar grfico: {e}")
-    
-    def _export_calibration_csv(self):
-        """Exporta a calibração para CSV (versão simplificada)."""
-        if not self._cal_points:
-            if hasattr(self, '_cal_wizard') and self._cal_wizard:
-                try:
-                    self._cal_wizard.grab_release()
-                except:
-                    pass
-            self.show_alert("Erro", "Não há pontos para exportar", "error")
-            return
-        
-        try:
-            # Liberar grab para el dilogo de archivo
-            if hasattr(self, '_cal_wizard') and self._cal_wizard:
-                try:
-                    self._cal_wizard.grab_release()
-                except:
-                    pass
-            
-            from tkinter import filedialog
-            from datetime import datetime
-            import os
-            
-            # Directorio de calibraciones
-            cal_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "calibrations")
-            os.makedirs(cal_dir, exist_ok=True)
-            
-            # Nombre por defecto
-            sensor_name = self._cal_sensor_var.get() if hasattr(self, '_cal_sensor_var') else "sensor"
-            default_name = f"calibracao_{sensor_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-            
-            filepath = filedialog.asksaveasfilename(
-                title="Exportar Calibração CSV",
-                initialdir=cal_dir,
-                initialfile=default_name,
-                defaultextension=".csv",
-                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
-                parent=self._cal_wizard if self._cal_wizard else self
-            )
-            
-            if not filepath:
-                return
-            
-            # Escribir CSV
-            import csv
-            with open(filepath, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerow(["Peso Real (kg)", "mV/V"])
-                for peso, mv in self._cal_points:
-                    writer.writerow([peso, f"{mv:.6f}"])
-            
-            self.log_message(f"CSV exportado: {filepath}")
-            self.show_alert("Exportado", f"Arquivo salvo:\n{os.path.basename(filepath)}", "success")
-            
-        except Exception as e:
-            self.show_alert("Erro", f"Erro ao exportar: {e}", "error")
-    
-    def _save_calibration_session(self):
-        """Guarda a sessão de calibração completa."""
-        if not self._cal_points:
-            if hasattr(self, '_cal_wizard') and self._cal_wizard:
-                try:
-                    self._cal_wizard.grab_release()
-                except:
-                    pass
-            self.show_alert("Erro", "Não há pontos para guardar", "error")
-            return
-        
-        try:
-            # Liberar grab para dialogos
-            if hasattr(self, '_cal_wizard') and self._cal_wizard:
-                try:
-                    self._cal_wizard.grab_release()
-                except:
-                    pass
-            
-            if hasattr(self, '_cal_manager') and self._cal_manager.current_session:
-                self._cal_manager.finish_session()
-                filepath = self._cal_manager.save_session()
-                self.log_message(f"Sessão salva: {filepath}")
-                import os
-                self.show_alert("Salvo", f"Sessão guardada:\n{os.path.basename(filepath)}", "success")
-                self._refresh_saved_calibrations()
-            else:
-                self.show_alert("Erro", "Sessão não inicializada", "error")
-                
-        except Exception as e:
-            self.show_alert("Erro", f"Erro ao guardar: {e}", "error")
+            print(f"[GUI] Erro atualizando gráfico: {e}")

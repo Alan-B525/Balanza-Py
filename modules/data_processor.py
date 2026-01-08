@@ -53,6 +53,14 @@ class DataProcessor:
         self.median_window = median_window
         self.ema_alpha = ema_alpha
         
+        # Coeficientes de Calibración Global (Sistema Completo)
+        # y = mx + b
+        # y = (Suma_Raw * slope) + offset
+        self.system_slope: float = 1.0
+        self.system_offset: float = 0.0
+        
+        self._last_total_raw: float = 0.0 # Almacenar ultimo raw sum para calibracion
+        
         self._node_to_name: Dict[int, str] = {}
         self._median_buffers: Dict[int, deque] = {}
         self._ema_values: Dict[int, Optional[float]] = {}
@@ -110,59 +118,80 @@ class DataProcessor:
         resultado = {
             "sensores": {},
             "total": 0.0,
+            "total_raw": 0.0, # Nuevo campo para debugging
             "total_tare": 0.0,
             "logs": [],
-            "disconnect_events": [],  # Eventos de desconexión para la GUI
-            "any_disconnected": False  # Flag rápido para verificar desconexiones
+            "disconnect_events": [],
+            "any_disconnected": False
         }
         
         current_time = time.time()
         datos_por_nodo = self._extract_node_data(raw_data)
         
+        # 1. Detectar conexiones / desconexiones
         for node_id, value in datos_por_nodo.items():
             self._last_seen[node_id] = current_time
-            
             if not self._node_connected_state.get(node_id, False):
                 self._node_connected_state[node_id] = True
                 nombre = self._node_to_name.get(node_id, f"Nodo {node_id}")
                 resultado["logs"].append(f"Sensor {nombre} (ID:{node_id}) conectado")
         
-        total_peso = 0.0
-        total_tare = 0.0
+        # 2. Estrategia "Suma de Fuerzas": Sumar Raw PRIMERO
+        sum_raw_connected = 0.0
+        active_sensors_count = 0
         
         for nombre_logico, cfg in self.nodos_config.items():
             node_id = cfg["id"]
             is_connected = self._check_connection(node_id, current_time, resultado)
             
             valor_crudo = 0.0
-            valor_filtrado = 0.0
-            
             if node_id in datos_por_nodo:
                 valor_crudo = datos_por_nodo[node_id]
-                valor_filtrado = self._filter_value(node_id, valor_crudo)
-            elif self._ema_values.get(node_id) is not None:
-                valor_filtrado = self._ema_values[node_id]
+            else:
+                # Si no hay dato nuevo, usar ultimo conocido o 0?
+                # Usamos 0 si no esta conectado.
+                pass
+                
+            # Aplicar filtros al valor individual para visualizacin estable
+            valor_filtrado = self._filter_value(node_id, valor_crudo)
             
-            tara_actual = self._tares.get(node_id, 0.0)
-            valor_neto = valor_filtrado - tara_actual
-            
+            # Acumular para la Suma Total (usamos valor filtrado para estabilidad)
             if is_connected:
-                total_peso += valor_neto
-                total_tare += tara_actual
+                sum_raw_connected += valor_filtrado
+                active_sensors_count += 1
             else:
                 resultado["any_disconnected"] = True
             
+            # Datos individuales (sin calibrar, solo raw bits)
             resultado["sensores"][nombre_logico] = {
-                "valor": round(valor_neto, 3),
-                "raw": round(valor_filtrado, 3),
-                "crudo": round(valor_crudo, 3),
+                "valor": 0.0, # Ya no calculamos peso individual
+                "raw": int(valor_filtrado), # Mostrar bits
+                "crudo": int(valor_crudo),
                 "id": node_id,
-                "tara": round(tara_actual, 3),
                 "connected": is_connected
             }
+
+        self._last_total_raw = sum_raw_connected # Guardar para acceso externo (Calibracion)
+
+        # 3. Aplicar Formula Lineal al Total: y = mx + b
+        # Peso = (Suma_Raw * m) + b
         
-        resultado["total"] = round(total_peso, 3)
-        resultado["total_tare"] = round(total_tare, 3)
+        # IMPORTANTE: Si falta algun sensor, la suma es invalida para pesaje preciso
+        # pero mostramos lo que hay.
+        
+        peso_bruto = (sum_raw_connected * self.system_slope) + self.system_offset
+        
+        # Aplicar Tara Global
+        # La tara ahora se aplica sobre el peso calculado (no sobre raw)
+        # O se puede manejar 'b' como (Offset_Zero - Tara).
+        # Implementaremos tara simple: Peso_Neto = Peso_Bruto - Tara_Global
+        
+        tara_global = self._tares.get("global", 0.0)
+        peso_neto = peso_bruto - tara_global
+        
+        resultado["total"] = round(peso_neto, 3)
+        resultado["total_raw"] = sum_raw_connected
+        resultado["total_tare"] = round(tara_global, 3)
         
         # Incluir eventos de desconexión pendientes
         disconnect_events = self.get_disconnect_events()
@@ -173,81 +202,34 @@ class DataProcessor:
             ]
         
         return resultado
-    
-    def _extract_node_data(self, raw_data: List[Dict[str, Any]]) -> Dict[int, float]:
-        datos_por_nodo: Dict[int, float] = {}
         
-        for item in raw_data:
-            if "values" in item:
-                for node_id, value in item["values"].items():
-                    datos_por_nodo[node_id] = value
-            elif "node_id" in item and "value" in item:
-                datos_por_nodo[item["node_id"]] = item["value"]
+    def set_system_calibration(self, slope: float, offset: float):
+        """Actualiza los coeficientes de calibración del sistema."""
+        self.system_slope = slope
+        self.system_offset = offset
+
+    def update_calibration(self, slope: float, offset: float):
+        """Actualiza los coeficientes de calibración del sistema."""
+        self.system_slope = slope
+        self.system_offset = offset
+
+    def set_tara(self) -> float:
+        """Establece tara global usando el peso actual."""
+        # Necesitamos el ultimo peso bruto calculado. 
+        # Como procesar() es stateless respecto al peso bruto anterior,
+        # Recalculamos rapido con los ultimos EMAs
         
-        return datos_por_nodo
-    
-    def _check_connection(self, node_id: int, current_time: float, 
-                          resultado: Dict) -> bool:
-        last_seen = self._last_seen.get(node_id, 0.0)
-        is_connected = (current_time - last_seen) <= self.SENSOR_TIMEOUT_S
+        sum_raw = 0.0
+        for node_id in self._ema_values:
+             if self._ema_values[node_id] is not None:
+                 sum_raw += self._ema_values[node_id]
         
-        if not is_connected and self._node_connected_state.get(node_id, False):
-            self._node_connected_state[node_id] = False
-            nombre = self._node_to_name.get(node_id, f"Nodo {node_id}")
-            resultado["logs"].append(f"ALERTA: {nombre} (ID:{node_id}) perdio conexion")
-            
-            # Generar evento de desconexión
-            event = SensorDisconnectEvent(
-                node_id=node_id,
-                nombre_logico=nombre,
-                timestamp=current_time,
-                was_connected=True
-            )
-            self._disconnect_events.append(event)
-        
-        return is_connected
-    
-    def get_disconnect_events(self) -> List[SensorDisconnectEvent]:
-        """Retorna y limpia los eventos de desconexión pendientes."""
-        events = self._disconnect_events.copy()
-        self._disconnect_events.clear()
-        return events
-    
-    def get_disconnected_sensors(self) -> List[Dict[str, Any]]:
-        """Retorna lista de sensores actualmente desconectados."""
-        disconnected = []
-        current_time = time.time()
-        for nombre_logico, cfg in self.nodos_config.items():
-            node_id = cfg["id"]
-            if not self._node_connected_state.get(node_id, False):
-                disconnected.append({
-                    "node_id": node_id,
-                    "nombre": nombre_logico,
-                    "last_seen": self._last_seen.get(node_id, 0.0),
-                    "offline_seconds": current_time - self._last_seen.get(node_id, 0.0)
-                })
-        return disconnected
-    
-    def mark_sensor_reconnected(self, node_id: int) -> None:
-        """Marca un sensor como reconectado (para uso externo)."""
-        self._node_connected_state[node_id] = True
-        self._last_seen[node_id] = time.time()
-    
-    def set_tara(self) -> Dict[int, float]:
-        taras_aplicadas = {}
-        for node_id, ema_value in self._ema_values.items():
-            if ema_value is not None:
-                self._tares[node_id] = ema_value
-                taras_aplicadas[node_id] = ema_value
-        # Guardar tara en archivo de estado
-        self._save_tara_state()
-        return taras_aplicadas
-    
+        peso_bruto_actual = (sum_raw * self.system_slope) + self.system_offset
+        self._tares["global"] = peso_bruto_actual
+        return peso_bruto_actual
+
     def reset_tara(self) -> None:
-        for node_id in self._tares:
-            self._tares[node_id] = 0.0
-        # Guardar tara en archivo de estado
-        self._save_tara_state()
+        self._tares["global"] = 0.0
     
     def load_tara_state(self) -> bool:
         """Carga el estado de tara desde app_state.json."""
@@ -329,6 +311,10 @@ class DataProcessor:
             "total_tare": sum(self._tares.values()),
             "sensor_timeout_s": self.SENSOR_TIMEOUT_S
         }
+    
+    def get_last_total_raw(self) -> float:
+        """Retorna la ultima suma total de valores raw (filtrados)."""
+        return self._last_total_raw
 
 
 def create_processor(nodos_config: Dict[str, Dict[str, Any]], 

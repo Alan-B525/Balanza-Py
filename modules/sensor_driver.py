@@ -438,12 +438,48 @@ class MSCLDriver(ISistemaPesaje):
         except Exception as e:
             self._log("WARNING", f"listPorts no disponible: {e}")
         
+        # Se MSCL falhar, tentar pyserial E brute force controlado
         if not ports_to_try:
-            ports_to_try.extend([f"COM{i}" for i in range(1, 20)])
-        
+            try:
+                import serial.tools.list_ports
+                com_ports = serial.tools.list_ports.comports()
+                for p in com_ports:
+                    ports_to_try.append(p.device)
+                self._log("INFO", f"Puertos detectados por pySerial: {ports_to_try}")
+            except ImportError:
+                # Fallback para brute force - MAS com validacao previa
+                self._log("WARNING", "pyserial nao encontrado, usando varredura (COM1-COM20)")
+                ports_to_try.extend([f"COM{i}" for i in range(1, 21)])
+            except Exception as e:
+                self._log("WARNING", f"Erro listando portas serial: {e}")
+                ports_to_try.extend([f"COM{i}" for i in range(1, 21)])
+
+        # Eliminar duplicatas mantendo ordem
+        ports_to_try = list(dict.fromkeys(ports_to_try))
+
         for port in ports_to_try:
             try:
                 self._log("INFO", f"Probando puerto: {port}")
+                
+                # PRE-CHECK: Tentar abrir com pyserial primeiro se disponivel
+                # Isso evita que o MSCL trave em portas fantasmas (ex: Bluetooth)
+                port_is_safe = True
+                try:
+                    import serial
+                    s = serial.Serial(port, 9600, timeout=1.0) # Aumentado timeout para 1.0s para dar chance ao SO
+                    s.close()
+                except Exception as e:
+                    # Se pyserial no consegue abrir, MSCL provavelmente vai travar tambm
+                    # A menos que seja um erro de 'Access Denied' (porta em uso), 
+                    # mas se est em uso, no vamos conseguir conectar de qualquer jeito
+                    self._log("WARNING", f"  -> Pular {port}: no responde ao pyserial ({str(e)[:50]}...)")
+                    port_is_safe = False
+
+                if not port_is_safe:
+                    continue
+
+                self._log("INFO", f"  -> Puerto {port} parece seguro. Iniciando MSCL...")
+                # Agora seguro tentar com MSCL
                 self._connection = mscl.Connection.Serial(port)
                 temp_base = mscl.BaseStation(self._connection)
                 
@@ -453,16 +489,27 @@ class MSCLDriver(ISistemaPesaje):
                     self._connection_string = port
                     return self._post_base_station_init()
                 else:
-                    self._connection.disconnect()
+                    self._clean_connection()
                     
-            except mscl.Error:
-                pass
-            except Exception:
-                pass
+            except mscl.Error as e:
+                self._log("WARNING", f"  -> MSCL Error en {port}: {e}")
+                self._clean_connection()
+            except Exception as e:
+                self._log("WARNING", f"  -> Error inesperado en {port}: {e}")
+                self._clean_connection()
         
         self._log("ERROR", "No se encontró BaseStation en ningún puerto")
         return False
-    
+        
+    def _clean_connection(self):
+        """Limpa objeto de conexo com segurana."""
+        try:
+            if hasattr(self, '_connection') and self._connection:
+                self._connection.disconnect()
+        except:
+            pass
+        self._connection = None
+
     def _initialize_base_station(self) -> bool:
         """Inicializa y valida la BaseStation."""
         try:
@@ -546,6 +593,15 @@ class MSCLDriver(ISistemaPesaje):
             sample_rate = mscl.SampleRate.Hertz(self.TARGET_SAMPLE_RATE_HZ)
             config.sampleRate(sample_rate)
             
+            # --- MODIFICACION INDUSTRIAL: DATOS CRUDOS ---
+            # Forzamos formato UInt24 para obtener los bits puros del ADC sin procesar
+            # Esto es vital para la estrategia de "Suma de Fuerzas"
+            try:
+                config.dataFormat(mscl.WirelessTypes.dataFormat_raw_uint24)
+                self._log("INFO", "  -> Formato de datos configurado a RAW UInt24")
+            except Exception as e:
+                self._log("WARNING", f"  -> No se pudo establecer RAW UInt24: {e}")
+
             # TODO: Configurar filtros analógicos/digitales si es necesario
             # Los SG-Link-200 tienen filtros configurables:
             # - config.lowPassFilter(mscl.WirelessTypes.filter_33hz)
