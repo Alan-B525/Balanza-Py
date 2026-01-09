@@ -805,79 +805,91 @@ class BalanzaGUI(ttk.Window):
 
     def show_large_confirmation(self, title, message):
         """Mostra um dilogo modal personalizado SEM barra de ttulo, com fontes e botes grandes."""
-        result = {'value': False}
+        result = {'value': False, 'done': False}
         
-        # Criar janela secundria SIN BARRA DE TTULO
-        dialog = ttk.Toplevel(self)
-        dialog.overrideredirect(True)  # Quitar barra de Windows
-        dialog.geometry("600x360")
+        # Obtener la ventana padre (puede ser wizard o self)
+        parent = self._cal_wizard if hasattr(self, '_cal_wizard') and self._cal_wizard else self
         
-        # Centralizar em relao  janela principal
+        # Liberar grab del padre si existe
         try:
-            x = self.winfo_x() + (self.winfo_width() // 2) - 300
-            y = self.winfo_y() + (self.winfo_height() // 2) - 180
-            dialog.geometry(f"+{x}+{y}")
+            parent.grab_release()
         except:
             pass
         
-        # Forzar que aparezca arriba
-        dialog.lift()
-        dialog.focus_force()
+        # Crear janela secundria SIN BARRA DE TTULO
+        dialog = ttk.Toplevel(parent)
+        dialog.overrideredirect(True)  # Quitar barra de Windows
+        
+        # Centralizar em relao  tela
+        screen_w = dialog.winfo_screenwidth()
+        screen_h = dialog.winfo_screenheight()
+        x = (screen_w // 2) - 350
+        y = (screen_h // 2) - 225
+        dialog.geometry(f"700x450+{x}+{y}")
+        
+        # Forzar que aparezca arriba de todo
+        dialog.attributes('-topmost', True)
             
         # Container con borde para definir el dilogo
-        outer_frame = ttk.Frame(dialog, bootstyle="secondary", padding=3)
+        outer_frame = ttk.Frame(dialog, bootstyle="dark", padding=4)
         outer_frame.pack(fill=BOTH, expand=YES)
         
-        frame = ttk.Frame(outer_frame, padding=30)
+        frame = ttk.Frame(outer_frame, padding=40)
         frame.pack(fill=BOTH, expand=YES)
         
         # Ttulo personalizado
-        title_lbl = ttk.Label(frame, text=title.upper(), font=("Segoe UI", 16, "bold"), foreground="#1e293b")
-        title_lbl.pack(pady=(0, 20))
+        title_lbl = ttk.Label(frame, text=title.upper(), font=("Segoe UI", 22, "bold"), foreground="#1e293b")
+        title_lbl.pack(pady=(0, 25))
         
         # Mensagem grande
-        lbl = ttk.Label(frame, text=message, font=("Segoe UI", 20), wraplength=480, justify="center")
-        lbl.pack(pady=(10, 40), expand=YES)
+        lbl = ttk.Label(frame, text=message, font=("Segoe UI", 18), wraplength=600, justify="center")
+        lbl.pack(pady=(10, 50), expand=YES)
         
         # Botes grandes
         btn_frame = ttk.Frame(frame)
         btn_frame.pack(fill=X, pady=10)
         
-        # Funcin de cierre seguro
-        def safe_close():
-            try:
-                dialog.grab_release()
-            except:
-                pass
-            try:
-                dialog.destroy()
-            except:
-                pass
-        
         def on_yes():
             result['value'] = True
-            safe_close()
+            result['done'] = True
             
         def on_no():
-            safe_close()
+            result['done'] = True
             
-        btn_yes = ttk.Button(btn_frame, text="SIM", style="Large.success.TButton", width=12, 
-                             command=on_yes, padding=(20, 15))
-        btn_yes.pack(side=LEFT, padx=20, expand=YES, fill=X)
+        btn_yes = ttk.Button(btn_frame, text="SIM", bootstyle="success", width=15, 
+                             command=on_yes, padding=(30, 20))
+        btn_yes.pack(side=LEFT, padx=30, expand=YES, fill=X)
         
-        btn_no = ttk.Button(btn_frame, text="NÃO", style="Large.danger.TButton", width=12, 
-                            command=on_no, padding=(20, 15))
-        btn_no.pack(side=RIGHT, padx=20, expand=YES, fill=X)
+        btn_no = ttk.Button(btn_frame, text="NÃO", bootstyle="danger", width=15, 
+                            command=on_no, padding=(30, 20))
+        btn_no.pack(side=RIGHT, padx=30, expand=YES, fill=X)
 
         # Configurar cierre con protocolo
         dialog.protocol("WM_DELETE_WINDOW", on_no)
         
-        dialog.transient(self)
+        dialog.transient(parent)
+        dialog.grab_set()
+        dialog.lift()
+        dialog.focus_force()
+        
+        # Esperar respuesta con loop manual
+        while not result['done']:
+            dialog.update()
+            self.update()
+        
+        # Limpiar
         try:
-            dialog.grab_set()
+            dialog.grab_release()
+            dialog.destroy()
         except:
-            pass  # Ignorar si no se puede obtener el grab
-        self.wait_window(dialog)
+            pass
+        
+        # Restaurar grab del padre
+        try:
+            if parent and parent.winfo_exists():
+                parent.grab_set()
+        except:
+            pass
         
         return result['value']
 
@@ -2314,7 +2326,20 @@ class BalanzaGUI(ttk.Window):
         f_fields.pack(fill=X)
         f_fields.columnconfigure(0, weight=1)
         f_fields.columnconfigure(1, weight=1)
-        f_fields.columnconfigure(2, weight=0)
+        
+        # Función para manejar Enter en los campos
+        def on_weight_enter(event):
+            # Al presionar Enter en peso, pasar a lectura
+            e_reading.focus_set()
+            return "break"
+        
+        def on_reading_enter(event):
+            # Al presionar Enter en lectura, agregar punto automáticamente si hay datos
+            w_str = self._cal_input_weight.get()
+            r_str = self._cal_input_reading.get()
+            if w_str and r_str:
+                cmd_add_point()
+            return "break"
         
         # Weight (en t)
         f_w = ttk.Frame(f_fields)
@@ -2322,30 +2347,33 @@ class BalanzaGUI(ttk.Window):
         ttk.Label(f_w, text="Peso Padrão (t):", font=("Segoe UI", 11)).pack(anchor="w")
         e_weight = ttk.Entry(f_w, textvariable=self._cal_input_weight, font=("Consolas", 16))
         e_weight.pack(fill=X, ipady=8)
+        e_weight.bind("<Return>", on_weight_enter)
+        e_weight.bind("<KP_Enter>", on_weight_enter)
         self._bind_numeric_keypad(e_weight, "Peso Padrão (t)")
+        
+        # Botón ADICIONAR debajo de Peso
+        btn_add = ttk.Button(f_w, text="ADICIONAR PONTO", 
+                   command=cmd_add_point, 
+                   bootstyle="success",
+                   padding=(20, 15))
+        btn_add.pack(fill=X, pady=(10, 0))
         
         # Reading
         f_r = ttk.Frame(f_fields)
-        f_r.grid(row=0, column=1, sticky="ew", padx=(0, 10))
+        f_r.grid(row=0, column=1, sticky="ew", padx=(10, 0))
         ttk.Label(f_r, text="Leitura Sensor:", font=("Segoe UI", 11)).pack(anchor="w")
         e_reading = ttk.Entry(f_r, textvariable=self._cal_input_reading, font=("Consolas", 16))
         e_reading.pack(fill=X, ipady=8)
+        e_reading.bind("<Return>", on_reading_enter)
+        e_reading.bind("<KP_Enter>", on_reading_enter)
         self._bind_numeric_keypad(e_reading, "Leitura Sensor")
         
-        # Capture Button - mismo tamaño que los demás
-        btn_capture = ttk.Button(f_fields, text="CAPTURAR", 
+        # Botón CAPTURAR debajo de Leitura
+        btn_capture = ttk.Button(f_r, text="CAPTURAR", 
                                   command=cmd_capture, 
                                   bootstyle="info",
-                                  padding=(20, 15),
-                                  width=12)
-        btn_capture.grid(row=0, column=2, sticky="ns", padx=(10, 0))
-        
-        # Add Button - Grande y prominente
-        ttk.Button(f_in, text="ADICIONAR PONTO", 
-                   command=cmd_add_point, 
-                   bootstyle="success",
-                   padding=(20, 15),
-                   width=20).pack(fill=X, pady=(15, 0))
+                                  padding=(20, 15))
+        btn_capture.pack(fill=X, pady=(10, 0))
         
         # Separador
         ttk.Separator(left).pack(fill=X, pady=15)
