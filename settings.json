@@ -6,20 +6,24 @@
     "tcp_port": "",
     "nodes": {
         "celda_1": {
-            "id": 0,
-            "ch": "ch1"
+            "id": 99,
+            "ch": "ch1",
+            "serial": "3101"
         },
         "celda_2": {
             "id": 0,
-            "ch": "ch2"
+            "ch": "ch2",
+            "serial": ""
         },
         "celda_3": {
-            "id": 0,
-            "ch": "ch1"
+            "id": 5555,
+            "ch": "ch1",
+            "serial": "10312"
         },
         "celda_4": {
             "id": 0,
-            "ch": "ch2"
+            "ch": "ch2",
+            "serial": ""
         }
     }
 }

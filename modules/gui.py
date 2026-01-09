@@ -212,6 +212,21 @@ class BalanzaGUI(ttk.Window):
         actions_frame = ttk.Frame(header_frame, style='Header.TFrame')
         actions_frame.pack(side=RIGHT)
         
+        # Espaciador para centrar mejor los botones
+        ttk.Frame(actions_frame, width=50, style='Header.TFrame').pack(side=LEFT)
+        
+        # Botn de decimales - Antes de CONFIG, ms al centro
+        self.btn_decimals = ttk.Button(
+            actions_frame, 
+            text="0.00", 
+            bootstyle="primary", 
+            command=self.toggle_decimals, 
+            style='Header.TButton',
+            width=8,
+            padding=(15, 12)
+        )
+        self.btn_decimals.pack(side=LEFT, padx=5)
+        
         # Botn de Configuracin - Color info (azul)
         self.btn_config = ttk.Button(
             actions_frame, 
@@ -400,21 +415,6 @@ class BalanzaGUI(ttk.Window):
         )
         btn_reset.pack(side=LEFT, expand=YES, padx=5)
         
-        # Segunda fila para botón de decimales
-        btn_row2 = ttk.Frame(actions_section, style='CardNoBorder.TFrame')
-        btn_row2.pack(fill=X, pady=(15, 0))
-        
-        # Botón para mostrar/ocultar decimales
-        self.btn_decimals = ttk.Button(
-            btn_row2, 
-            text="MOSTRAR DECIMAIS", 
-            command=self.toggle_decimals, 
-            bootstyle="info-outline", 
-            width=26, 
-            padding=(15, 10)
-        )
-        self.btn_decimals.pack(expand=YES)
-
         # --- Log Area con LOGOS GRANDES a cada lado ---
         log_frame = ttk.Frame(main_container, style='Card.TFrame', padding=12)
         log_frame.pack(fill=X, side=BOTTOM, pady=(10, 0))
@@ -602,142 +602,163 @@ class BalanzaGUI(ttk.Window):
             )
 
     def _show_numeric_keypad(self, entry_widget, title="Inserir Valor"):
-        """Mostra um teclado numérico virtual para entrada de valores em tablets."""
-        # Obter valor atual do entry
-        current_value = entry_widget.get() if hasattr(entry_widget, 'get') else ""
-        
-        # Criar janela popup
-        keypad = tk.Toplevel(self)
-        keypad.title(title)
-        keypad.transient(self)
-        keypad.overrideredirect(True)  # Sin barra de título
-        
-        # Tamaño y posición centrada
-        kp_width = 350
-        kp_height = 450
-        x = self.winfo_x() + (self.winfo_width() - kp_width) // 2
-        y = self.winfo_y() + (self.winfo_height() - kp_height) // 2
-        keypad.geometry(f"{kp_width}x{kp_height}+{x}+{y}")
-        
-        # Frame principal con borde
-        main_frame = ttk.Frame(keypad, padding=10)
-        main_frame.pack(fill=BOTH, expand=YES)
-        
-        # Título
-        ttk.Label(main_frame, text=title, font=("Segoe UI", 16, "bold")).pack(pady=(0, 10))
-        
-        # Display del valor actual
-        display_var = tk.StringVar(value=current_value)
-        display = ttk.Entry(main_frame, textvariable=display_var, font=("Consolas", 28), 
-                           justify="center", state="readonly")
-        display.pack(fill=X, pady=(0, 15), ipady=10)
-        
-        # Frame para botones numéricos
-        btn_frame = ttk.Frame(main_frame)
-        btn_frame.pack(fill=BOTH, expand=YES)
-        
-        # Configurar grid 4x3
-        for i in range(4):
-            btn_frame.rowconfigure(i, weight=1)
-        for i in range(3):
-            btn_frame.columnconfigure(i, weight=1)
-        
-        # Función para agregar dígito
-        def add_digit(d):
-            current = display_var.get()
-            # Evitar múltiples puntos decimales
-            if d == "." and "." in current:
-                return
-            display_var.set(current + d)
-        
-        # Función para borrar
-        def backspace():
-            current = display_var.get()
-            display_var.set(current[:-1])
-        
-        # Función para limpiar
-        def clear():
-            display_var.set("")
-        
-        # Función para confirmar
-        def confirm():
-            value = display_var.get()
-            # Actualizar el entry original
-            entry_widget.delete(0, tk.END)
-            entry_widget.insert(0, value)
-            # Disparar evento de cambio si tiene variable asociada
+        """Teclado numérico virtual grande y funcional."""
+        # Cerrar teclado anterior si existe
+        if hasattr(self, '_active_keypad') and self._active_keypad:
             try:
-                if hasattr(entry_widget, 'cget'):
-                    var = entry_widget.cget('textvariable')
-                    if var:
-                        self.nametowidget(var).set(value)
+                self._active_keypad.destroy()
             except:
                 pass
+            self._active_keypad = None
+        
+        # Valor actual del entry
+        current_value = entry_widget.get() if hasattr(entry_widget, 'get') else ""
+        
+        # Tamaño del teclado
+        kp_width, kp_height = 480, 650
+        
+        # Calcular posición centrada en pantalla
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+        x = (screen_w - kp_width) // 2
+        y = (screen_h - kp_height) // 2
+        
+        # Obtener la ventana padre (puede ser un diálogo)
+        parent = entry_widget.winfo_toplevel()
+        
+        # Crear ventana del teclado como hija del padre del entry
+        keypad = tk.Toplevel(parent)
+        keypad.title(title)
+        keypad.geometry(f"{kp_width}x{kp_height}+{x}+{y}")
+        keypad.resizable(False, False)
+        keypad.transient(parent)  # Asociado al padre
+        keypad.attributes('-topmost', True)
+        keypad.configure(bg="#222222")
+        self._active_keypad = keypad
+        
+        # Variable para el valor
+        kp_value = tk.StringVar(value=current_value)
+        
+        # Flag para saber si es la primera pulsación
+        first_press = [True]
+        
+        # Funciones
+        def press_digit(d):
+            current = kp_value.get()
+            # Si es la primera pulsación y el valor es "0", reemplazarlo
+            if first_press[0] and current == "0" and d != ".":
+                kp_value.set(d)
+                first_press[0] = False
+                return
+            first_press[0] = False
+            if d == "." and "." in current:
+                return
+            kp_value.set(current + d)
+        
+        def press_backspace():
+            kp_value.set(kp_value.get()[:-1])
+        
+        def press_clear():
+            kp_value.set("")
+        
+        def close_keypad():
+            self._active_keypad = None
+            keypad.grab_release()
             keypad.destroy()
         
-        # Función para cancelar
-        def cancel():
+        def confirm_and_close():
+            val = kp_value.get()
+            try:
+                entry_widget.delete(0, tk.END)
+                entry_widget.insert(0, val)
+            except:
+                pass
+            try:
+                var_name = entry_widget.cget('textvariable')
+                if var_name:
+                    entry_widget.nametowidget(var_name).set(val)
+            except:
+                pass
+            self._active_keypad = None
+            keypad.grab_release()
             keypad.destroy()
         
-        # Estilo de botones grandes
-        btn_style = {"padding": (15, 20)}
+        # Cerrar con X de la ventana
+        keypad.protocol("WM_DELETE_WINDOW", close_keypad)
         
-        # Crear botones numéricos (1-9)
-        buttons = [
-            ('7', 0, 0), ('8', 0, 1), ('9', 0, 2),
-            ('4', 1, 0), ('5', 1, 1), ('6', 1, 2),
-            ('1', 2, 0), ('2', 2, 1), ('3', 2, 2),
-            ('.', 3, 0), ('0', 3, 1), ('C', 3, 2),
-        ]
+        # Frame principal con padding
+        main = ttk.Frame(keypad, padding=20)
+        main.pack(fill=BOTH, expand=YES, padx=4, pady=4)
         
-        for (text, row, col) in buttons:
-            if text == 'C':
-                btn = ttk.Button(btn_frame, text=text, command=clear, 
-                                bootstyle="warning", **btn_style)
-            elif text == '.':
-                btn = ttk.Button(btn_frame, text=text, command=lambda d=text: add_digit(d),
-                                bootstyle="secondary", **btn_style)
-            else:
-                btn = ttk.Button(btn_frame, text=text, command=lambda d=text: add_digit(d),
-                                bootstyle="light", **btn_style)
-            btn.grid(row=row, column=col, sticky="nsew", padx=3, pady=3)
+        # Display
+        display = ttk.Entry(main, textvariable=kp_value, font=("Consolas", 36), 
+                           justify="center", state="readonly")
+        display.pack(fill=X, pady=(0, 20), ipady=12)
         
-        # Frame para botones de acción
-        action_frame = ttk.Frame(main_frame)
-        action_frame.pack(fill=X, pady=(15, 0))
-        action_frame.columnconfigure(0, weight=1)
-        action_frame.columnconfigure(1, weight=1)
-        action_frame.columnconfigure(2, weight=1)
+        # Frame para botones
+        all_btns = ttk.Frame(main)
+        all_btns.pack(fill=BOTH, expand=YES)
         
-        # Botón Borrar (Backspace)
-        ttk.Button(action_frame, text="<", command=backspace,
-                  bootstyle="secondary", padding=(20, 15)).grid(row=0, column=0, sticky="ew", padx=3)
+        for i in range(5):
+            all_btns.rowconfigure(i, weight=1)
+        for i in range(3):
+            all_btns.columnconfigure(i, weight=1)
         
-        # Botón Cancelar
-        ttk.Button(action_frame, text="CANCELAR", command=cancel,
-                  bootstyle="danger", padding=(20, 15)).grid(row=0, column=1, sticky="ew", padx=3)
+        # Padding de botones
+        pad_num = (25, 22)
+        pad_act = (20, 22)
         
-        # Botón Confirmar
-        ttk.Button(action_frame, text="OK", command=confirm,
-                  bootstyle="success", padding=(20, 15)).grid(row=0, column=2, sticky="ew", padx=3)
+        # Fila 0: 7 8 9
+        ttk.Button(all_btns, text="7", command=lambda: press_digit("7"), 
+                  bootstyle="light", padding=pad_num).grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+        ttk.Button(all_btns, text="8", command=lambda: press_digit("8"), 
+                  bootstyle="light", padding=pad_num).grid(row=0, column=1, sticky="nsew", padx=4, pady=4)
+        ttk.Button(all_btns, text="9", command=lambda: press_digit("9"), 
+                  bootstyle="light", padding=pad_num).grid(row=0, column=2, sticky="nsew", padx=4, pady=4)
         
-        # Hacer modal - SIN grab_set para evitar bloqueos en tablets
-        # keypad.grab_set()  # REMOVIDO - causa bloqueo
+        # Fila 1: 4 5 6
+        ttk.Button(all_btns, text="4", command=lambda: press_digit("4"), 
+                  bootstyle="light", padding=pad_num).grid(row=1, column=0, sticky="nsew", padx=4, pady=4)
+        ttk.Button(all_btns, text="5", command=lambda: press_digit("5"), 
+                  bootstyle="light", padding=pad_num).grid(row=1, column=1, sticky="nsew", padx=4, pady=4)
+        ttk.Button(all_btns, text="6", command=lambda: press_digit("6"), 
+                  bootstyle="light", padding=pad_num).grid(row=1, column=2, sticky="nsew", padx=4, pady=4)
+        
+        # Fila 2: 1 2 3
+        ttk.Button(all_btns, text="1", command=lambda: press_digit("1"), 
+                  bootstyle="light", padding=pad_num).grid(row=2, column=0, sticky="nsew", padx=4, pady=4)
+        ttk.Button(all_btns, text="2", command=lambda: press_digit("2"), 
+                  bootstyle="light", padding=pad_num).grid(row=2, column=1, sticky="nsew", padx=4, pady=4)
+        ttk.Button(all_btns, text="3", command=lambda: press_digit("3"), 
+                  bootstyle="light", padding=pad_num).grid(row=2, column=2, sticky="nsew", padx=4, pady=4)
+        
+        # Fila 3: . 0 DEL
+        ttk.Button(all_btns, text=".", command=lambda: press_digit("."), 
+                  bootstyle="secondary", padding=pad_num).grid(row=3, column=0, sticky="nsew", padx=4, pady=4)
+        ttk.Button(all_btns, text="0", command=lambda: press_digit("0"), 
+                  bootstyle="light", padding=pad_num).grid(row=3, column=1, sticky="nsew", padx=4, pady=4)
+        ttk.Button(all_btns, text="DEL", command=press_backspace, 
+                  bootstyle="warning", padding=pad_act).grid(row=3, column=2, sticky="nsew", padx=4, pady=4)
+        
+        # Fila 4: X | OK (OK ocupa 2 columnas)
+        ttk.Button(all_btns, text="X", command=close_keypad, 
+                  bootstyle="danger", padding=pad_act).grid(row=4, column=0, sticky="nsew", padx=4, pady=4)
+        ttk.Button(all_btns, text="OK", command=confirm_and_close, 
+                  bootstyle="success", padding=pad_act).grid(row=4, column=1, columnspan=2, sticky="nsew", padx=4, pady=4)
+        
+        # El teclado captura los eventos (importante para que funcione sobre diálogos con grab)
+        keypad.grab_set()
         keypad.focus_set()
-        keypad.lift()  # Traer al frente
-        
-        # Cerrar con Escape
-        keypad.bind("<Escape>", lambda e: cancel())
-        keypad.bind("<Return>", lambda e: confirm())
+        keypad.lift()
 
     def _bind_numeric_keypad(self, entry_widget, title="Inserir Valor"):
-        """Vincula un Entry para mostrar teclado numérico al recibir foco."""
-        def on_focus(event):
-            # Pequeño delay para evitar conflictos
-            self.after(100, lambda: self._show_numeric_keypad(entry_widget, title))
-        entry_widget.bind("<FocusIn>", on_focus)
-        # También al hacer click
-        entry_widget.bind("<Button-1>", on_focus)
+        """Vincula un Entry para mostrar teclado numérico al hacer click."""
+        def on_click(event):
+            self.after(50, lambda: self._show_numeric_keypad(entry_widget, title))
+            return "break"
+        entry_widget.bind("<Button-1>", on_click)
+        entry_widget.bind("<Return>", lambda e: "break")
+        entry_widget.bind("<KP_Enter>", lambda e: "break")
 
     def do_tare(self):
         self.command_queue.put({'cmd': 'TARE'})
@@ -746,10 +767,28 @@ class BalanzaGUI(ttk.Window):
         """Alterna entre mostrar valores con o sin decimales."""
         self._show_decimals = not self._show_decimals
         if self._show_decimals:
-            self.btn_decimals.configure(text="OCULTAR DECIMAIS", bootstyle="info")
+            # Decimales activos - botón oscuro/gris
+            self.btn_decimals.configure(
+                text="0.00", 
+                bootstyle="dark",
+                style='Header.TButton',
+                width=8,
+                padding=(15, 12)
+            )
         else:
-            self.btn_decimals.configure(text="MOSTRAR DECIMAIS", bootstyle="info-outline")
-        # Forzar actualización visual inmediata
+            # Decimales inactivos - botón azul brillante
+            self.btn_decimals.configure(
+                text="0.00", 
+                bootstyle="primary",
+                style='Header.TButton',
+                width=8,
+                padding=(15, 12)
+            )
+        # Forzar actualización visual inmediata de todos los valores
+        self.after(10, self._refresh_all_displays)
+    
+    def _refresh_all_displays(self):
+        """Actualiza todos los displays con el formato actual."""
         if hasattr(self, '_last_sensor_data') and self._last_sensor_data:
             self._update_display(self._last_sensor_data)
 
@@ -1174,6 +1213,7 @@ class BalanzaGUI(ttk.Window):
                 # Agregar nodos y canales
                 for node in nodes_list:
                     node_id = node.get('id', 0)
+                    serial = node.get('serial', str(node_id))
                     rssi = node.get('rssi', 0)
                     channels = node.get('channels', [])
                     
@@ -1183,6 +1223,7 @@ class BalanzaGUI(ttk.Window):
                         
                         self._disc_tree.insert("", "end", values=(
                             node_id,
+                            serial,
                             ch_name,
                             f"{rssi} dBm",
                             f"{ch_value:.4f}",
@@ -1505,9 +1546,9 @@ class BalanzaGUI(ttk.Window):
         # pero aqui podemos forzar aun mas
         style = ttk.Style()
         style.configure('BigTab.TNotebook.Tab', 
-                       font=('Segoe UI', 24, 'bold'), 
-                       padding=(100, 20),
-                       width=30, # Fija el ancho minimo
+                       font=('Segoe UI', 16, 'bold'), 
+                       padding=(60, 12),
+                       width=25,
                        background="#e2e8f0",
                        foreground="#475569")
         
@@ -1530,45 +1571,32 @@ class BalanzaGUI(ttk.Window):
         border_frame = ttk.Frame(dialog, bootstyle="dark", padding=4)
         border_frame.pack(fill=BOTH, expand=YES)
         
-        main_frame = ttk.Frame(border_frame, padding=20)
+        main_frame = ttk.Frame(border_frame, padding=10)
         main_frame.pack(fill=BOTH, expand=YES)
         
-        # Titulo
-        title_frame = ttk.Frame(main_frame, style='Header.TFrame', padding=10)
-        title_frame.pack(fill=X, pady=(0, 15))
+        # Variable para almacenar referencia a save_config (se define después)
+        save_config_ref = [None]
         
-        ttk.Label(title_frame, text="  CONFIGURAÇÃO DO SISTEMA", 
-                  font=("Segoe UI", 26, "bold"), 
-                  foreground="#1e293b", 
-                  background="#ffffff").pack(side=LEFT)
+        def do_save():
+            if save_config_ref[0]:
+                save_config_ref[0]()
         
-        btn_close = ttk.Button(title_frame, text="FECHAR", 
-                               bootstyle="danger", 
-                               command=safe_close_dialog,
-                               width=12,
-                               padding=(20, 12))
-        btn_close.pack(side=RIGHT)
+        # Header: Solo Tabs (ocupa todo el ancho)
+        header_frame = ttk.Frame(main_frame)
+        header_frame.pack(fill=X, pady=(0, 5))
+        
+        # Notebook/Tabs
+        notebook = ttk.Notebook(header_frame, style='BigTab.TNotebook')
+        notebook.pack(fill=X)
 
-        # --- Container com SCROLL ---
-        from ttkbootstrap.scrolled import ScrolledFrame
-        scroll_container = ScrolledFrame(main_frame, autohide=True)
-        scroll_container.pack(fill=BOTH, expand=YES)
-        
-        # --- Abas ---
-        notebook = ttk.Notebook(scroll_container, style='BigTab.TNotebook')
-        notebook.pack(fill=BOTH, expand=YES)
-        
         # ==================== Tab Sensores ====================
-        tab_nodes = ttk.Frame(notebook, padding=30)
-        notebook.add(tab_nodes, text="    SENSORES   ")
-        
-        ttk.Label(tab_nodes, text="Configuração de Células de Carga", 
-                  font=("Segoe UI", 18, "bold")).pack(anchor="w", pady=(0, 10))
+        tab_nodes = ttk.Frame(notebook, padding=10)
+        notebook.add(tab_nodes, text="  SENSORES  ")
         
         
-        # === Porta Serial (USB Gateway) ===
-        port_frame = ttk.Labelframe(tab_nodes, text="Porta Serial (Gateway USB)", padding=15)
-        port_frame.pack(fill=X, pady=(0, 20))
+        # === Porta Serial (USB Gateway) - Compacto ===
+        port_frame = ttk.Labelframe(tab_nodes, text="Porta Serial (Gateway USB)", padding=10)
+        port_frame.pack(fill=X, pady=(0, 10))
         
         # Layout con grid para mejor alineacion
         port_grid = ttk.Frame(port_frame)
@@ -1624,165 +1652,155 @@ class BalanzaGUI(ttk.Window):
                 
         ttk.Button(port_grid, text="Atualizar", command=refresh_ports, bootstyle="secondary-outline", width=10).grid(row=0, column=2, padx=(15, 0))
         
-        # === Frame de Descubrimento ===
-        discover_frame = ttk.Labelframe(tab_nodes, text="Descoberta de Nos", padding=15)
-        discover_frame.pack(fill=X, pady=(0, 20))
+        node_entries = {}
+        
+        # === CONTENEDOR PRINCIPAL: Dos columnas lado a lado (ocupa todo el espacio) ===
+        main_content = ttk.Frame(tab_nodes)
+        main_content.pack(fill=BOTH, expand=True, pady=(5, 0))
+        main_content.columnconfigure(0, weight=1, uniform="cols")
+        main_content.columnconfigure(1, weight=1, uniform="cols")
+        main_content.rowconfigure(0, weight=1)
+        
+        # === COLUMNA IZQUIERDA: Búsqueda de Nodos ===
+        discover_frame = ttk.Labelframe(main_content, text="Descoberta de Nós", padding=15)
+        discover_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
         
         discover_btn_frame = ttk.Frame(discover_frame)
         discover_btn_frame.pack(fill=X, pady=(0, 10))
         
         # Variable para almacenar nodos descubiertos
         self._discovered_nodes = []
-        self._discovered_nodes_var = tk.StringVar(value="Conecte o sistema e pressione 'Buscar' para descobrir nós")
+        self._discovered_nodes_var = tk.StringVar(value="Pressione 'Buscar' para descobrir nós")
         
         def discover_nodes_action():
             """Inicia descubrimiento de nodos."""
-            self._discovered_nodes_var.set(" Procurando nós na rede... aguarde...")
+            self._discovered_nodes_var.set(" Procurando nós na rede...")
             self.command_queue.put({'cmd': 'DISCOVER_NODES'})
             self.log_message("Iniciando descoberta de nós SG-Link...")
         
         ttk.Button(
             discover_btn_frame, 
-            text=" BUSCAR NÓS NA REDE", 
+            text=" BUSCAR NÓS", 
             command=discover_nodes_action,
             bootstyle="info",
-            padding=(25, 15)
+            padding=(20, 12)
         ).pack(side=LEFT)
-        
-        # Botn para autoasignar
-        def auto_assign_nodes():
-            """Autoasigna nodos descubiertos a las celdas."""
-            if not self._discovered_nodes:
-                self._discovered_nodes_var.set(" Primeiro busque os nós na rede")
-                return
-            
-            # Autoasignar: recorrer nodos y canales
-            celda_idx = 1
-            for node in self._discovered_nodes:
-                node_id = node.get('id', 0)
-                channels = node.get('channels', [])
-                
-                for ch_info in channels:
-                    if celda_idx > 4:
-                        break
-                    ch_name = ch_info.get('channel', 'ch1')
-                    
-                    # Actualizar entries
-                    key = f"celda_{celda_idx}"
-                    if key in node_entries:
-                        node_entries[key]["id"].delete(0, END)
-                        node_entries[key]["id"].insert(0, str(node_id))
-                        node_entries[key]["ch"].delete(0, END)
-                        node_entries[key]["ch"].insert(0, ch_name)
-                    
-                    celda_idx += 1
-                
-                if celda_idx > 4:
-                    break
-            
-            self._discovered_nodes_var.set(f"{celda_idx - 1} celulas auto-atribuidas")
-        
-        ttk.Button(
-            discover_btn_frame, 
-            text="AUTO-ATRIBUIR", 
-            command=auto_assign_nodes,
-            bootstyle="warning",
-            padding=(20, 15)
-        ).pack(side=LEFT, padx=(15, 0))
         
         # Label de status
         ttk.Label(
             discover_frame, 
             textvariable=self._discovered_nodes_var, 
-            font=("Segoe UI", 12), 
-            foreground="#64748b"
+            font=("Segoe UI", 11), 
+            foreground="#64748b",
+            wraplength=350
         ).pack(anchor="w", pady=(10, 5))
         
-        # Frame para mostrar nodos descubiertos
-        discovered_list_frame = ttk.Frame(discover_frame)
-        discovered_list_frame.pack(fill=X, pady=(5, 0))
-        
         # Treeview para mostrar nodos descubiertos
-        disc_columns = ("node_id", "channel", "rssi", "value", "status")
-        self._disc_tree = ttk.Treeview(discovered_list_frame, columns=disc_columns, 
-                                        show="headings", height=4)
+        disc_columns = ("node_id", "serial", "channel", "rssi", "status")
+        self._disc_tree = ttk.Treeview(discover_frame, columns=disc_columns, 
+                                        show="headings", height=10)
         
-        self._disc_tree.heading("node_id", text="ID do No")
+        self._disc_tree.heading("node_id", text="ID do Nó")
+        self._disc_tree.heading("serial", text="Nº Série")
         self._disc_tree.heading("channel", text="Canal")
         self._disc_tree.heading("rssi", text="RSSI")
-        self._disc_tree.heading("value", text="Valor Atual")
         self._disc_tree.heading("status", text="Estado")
         
-        self._disc_tree.column("node_id", width=100, anchor="center")
-        self._disc_tree.column("channel", width=80, anchor="center")
-        self._disc_tree.column("rssi", width=80, anchor="center")
-        self._disc_tree.column("value", width=120, anchor="center")
-        self._disc_tree.column("status", width=100, anchor="center")
+        self._disc_tree.column("node_id", width=90, anchor="center")
+        self._disc_tree.column("serial", width=110, anchor="center")
+        self._disc_tree.column("channel", width=70, anchor="center")
+        self._disc_tree.column("rssi", width=70, anchor="center")
+        self._disc_tree.column("status", width=90, anchor="center")
         
-        self._disc_tree.pack(fill=X, pady=(5, 0))
+        self._disc_tree.pack(fill=BOTH, expand=True, pady=(10, 0))
         
-        node_entries = {}
+        # === COLUMNA DERECHA: Asignación de Células ===
+        assign_frame = ttk.Labelframe(main_content, text="Atribuição de Células", padding=15)
+        assign_frame.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
         
-        # === CONFIGURACION DE 4 CELDAS NUMERADAS ===
-        ttk.Label(tab_nodes, text="Atribuicao de Celulas (1-4):", 
-                  font=("Segoe UI", 14, "bold")).pack(anchor="w", pady=(20, 10))
+        # Matriz 2x2 con tamaño fijo para evitar resize al abrir keypad
+        matrix_frame = ttk.Frame(assign_frame)
+        matrix_frame.pack(fill=BOTH, expand=True)
+        matrix_frame.columnconfigure(0, weight=1, uniform="cells")
+        matrix_frame.columnconfigure(1, weight=1, uniform="cells")
+        matrix_frame.rowconfigure(0, weight=1, uniform="cells")
+        matrix_frame.rowconfigure(1, weight=1, uniform="cells")
         
-        # Frame para las 4 celdas
-        cells_frame = ttk.Frame(tab_nodes)
-        cells_frame.pack(fill=X, pady=(0, 15))
+        # Posiciones de la matriz (esquinas de la balanza)
+        # [1] [2]   <- Frente
+        # [3] [4]   <- Atrás
+        positions = [
+            (0, 0, 1, "FRENTE ESQ"),   # Celda 1: arriba-izquierda
+            (0, 1, 2, "FRENTE DIR"),   # Celda 2: arriba-derecha
+            (1, 0, 3, "ATRÁS ESQ"),    # Celda 3: abajo-izquierda
+            (1, 1, 4, "ATRÁS DIR"),    # Celda 4: abajo-derecha
+        ]
         
-        for i in range(4):
-            cells_frame.columnconfigure(i, weight=1)
-        
-        # Crear las 4 celdas
-        for celda_num in range(1, 5):
+        for row, col, celda_num, pos_name in positions:
             key = f"celda_{celda_num}"
-            current_node_data = current_config["nodes"].get(key, {"id": 0, "ch": "ch1", "nombre": f"Celda {celda_num}"})
+            current_node_data = current_config["nodes"].get(key, {"id": 0, "ch": "ch1", "nombre": f"Celda {celda_num}", "serial": ""})
             
-            # Frame de cada celda
-            cell_frame = ttk.Labelframe(cells_frame, text=f"CELULA {celda_num}", padding=10)
-            cell_frame.grid(row=0, column=celda_num-1, sticky="nsew", padx=8, pady=5)
+            # Frame de cada celda con borde más visible
+            cell_frame = ttk.Labelframe(matrix_frame, text=f"CÉL {celda_num} - {pos_name}", padding=15)
+            cell_frame.grid(row=row, column=col, sticky="nsew", padx=8, pady=8)
+            # Evitar que el frame propague cambios de tamaño
+            cell_frame.grid_propagate(False)
+            cell_frame.pack_propagate(False)
             
-            # Layout con grid para alineacion
+            # Layout interno centrado
             cell_grid = ttk.Frame(cell_frame)
-            cell_grid.pack(fill=X)
-            cell_grid.columnconfigure(1, weight=1)
+            cell_grid.pack(fill=BOTH, expand=True)
+            
+            field_width = 12
             
             # Node ID
-            ttk.Label(cell_grid, text="ID do Nó:", font=("Segoe UI", 12)).grid(row=0, column=0, sticky="w", pady=5)
-            e_id = ttk.Entry(cell_grid, font=("Segoe UI", 14), width=8)
+            id_frame = ttk.Frame(cell_grid)
+            id_frame.pack(fill=X, pady=4)
+            ttk.Label(id_frame, text="ID:", font=("Segoe UI", 12), width=6).pack(side=LEFT)
+            e_id = ttk.Entry(id_frame, font=("Segoe UI", 13), width=field_width)
             e_id.insert(0, str(current_node_data.get("id", 0)))
-            e_id.grid(row=0, column=1, sticky="e", pady=5, ipady=4)
+            e_id.pack(side=LEFT, ipady=4)
             self._bind_numeric_keypad(e_id, f"ID do Nó - Célula {celda_num}")
             
-            # Channel
-            ttk.Label(cell_grid, text="Canal:", font=("Segoe UI", 12)).grid(row=1, column=0, sticky="w", pady=5)
-            # Limitado a 3 canais conforme conexões físicas do SG-Link-200 (OEM)
-            ch_combo = ttk.Combobox(cell_grid, values=["ch1", "ch2", "ch3"], 
-                                     font=("Segoe UI", 14), width=8, state="readonly")
-            ch_combo.set(current_node_data.get("ch", "ch1"))
-            ch_combo.grid(row=1, column=1, sticky="e", pady=5, ipady=6)
+            # Número de Serie
+            serial_frame = ttk.Frame(cell_grid)
+            serial_frame.pack(fill=X, pady=4)
+            ttk.Label(serial_frame, text="Série:", font=("Segoe UI", 12), width=6).pack(side=LEFT)
+            e_serial = ttk.Entry(serial_frame, font=("Segoe UI", 13), width=field_width)
+            e_serial.insert(0, str(current_node_data.get("serial", "")))
+            e_serial.pack(side=LEFT, ipady=4)
+            self._bind_numeric_keypad(e_serial, f"Nº Série - Célula {celda_num}")
             
-            node_entries[key] = {"id": e_id, "ch": ch_combo}
+            # Channel - RadioButtons
+            ch_frame = ttk.Frame(cell_grid)
+            ch_frame.pack(fill=X, pady=4)
+            ttk.Label(ch_frame, text="Canal:", font=("Segoe UI", 12), width=6).pack(side=LEFT)
+            
+            ch_var = tk.StringVar(value=current_node_data.get("ch", "ch1"))
+            ch_btn_frame = ttk.Frame(ch_frame)
+            ch_btn_frame.pack(side=LEFT)
+            
+            for ch_opt in ["ch1", "ch2", "ch3"]:
+                ch_btn = ttk.Radiobutton(
+                    ch_btn_frame, 
+                    text=ch_opt[-1],
+                    variable=ch_var,
+                    value=ch_opt,
+                    bootstyle="info-toolbutton",
+                    width=3,
+                    padding=(8, 5)
+                )
+                ch_btn.pack(side=LEFT, padx=2)
+            
+            node_entries[key] = {"id": e_id, "ch": ch_var, "serial": e_serial}
         
         # ==================== Tab CALIBRACAO ====================
-        tab_cal = ttk.Frame(notebook, padding=30)
-        notebook.add(tab_cal, text="    CALIBRAÇÃO   ")
+        tab_cal = ttk.Frame(notebook, padding=15)
+        notebook.add(tab_cal, text="  CALIBRAÇÃO  ")
         
-        self._setup_calibration_tab(tab_cal, current_config, safe_close_dialog)
+        self._setup_calibration_tab(tab_cal, current_config, safe_close_dialog, dialog)
 
-        # ==================== Botes de Ao ====================
-        # Frame de botes fixo na parte inferior con borda superior
-        btn_frame = ttk.Frame(border_frame, padding=(30, 20))
-        btn_frame.pack(fill=X, side=BOTTOM)
-        
-        # Separador visual
-        ttk.Separator(btn_frame, orient="horizontal").pack(fill=X, pady=(0, 15))
-        
-        # Container para botes
-        btn_container = ttk.Frame(btn_frame)
-        btn_container.pack(fill=X)
-        
+        # Definir la función save_config y asignarla a la referencia del header
         def save_config():
             new_config = {
                 "execution_mode": "REAL",
@@ -1798,47 +1816,68 @@ class BalanzaGUI(ttk.Window):
                     nid = int(inputs["id"].get())
                 except:
                     nid = 0
+                serial_num = inputs.get("serial", None)
+                serial_val = serial_num.get() if serial_num else ""
                 new_config["nodes"][key] = {
                     "id": nid,
-                    "ch": inputs["ch"].get()
+                    "ch": inputs["ch"].get(),
+                    "serial": serial_val
                 }
             
             try:
                 with open(config_path, 'w') as f:
                     json.dump(new_config, f, indent=4)
                 
-                # Liberar grab antes de mostrar alerta
-                try:
-                    dialog.grab_release()
-                except:
-                    pass
+                # Aplicar cambios en caliente al driver si existe
+                if hasattr(self, 'driver') and self.driver:
+                    try:
+                        self.driver.update_nodes_config(new_config["nodes"])
+                    except Exception as e:
+                        print(f"[GUI] Aviso: No se pudo actualizar driver: {e}")
                 
-                self.show_alert("Salvo", "Configuração salva.\nReinicie a aplicação para aplicar as alterações.", "success", parent=self)
-                safe_close_dialog()
+                self.show_alert("Salvo", "Configuração salva e aplicada.", "success", parent=dialog)
             except Exception as e:
                 try:
                     dialog.grab_release()
                 except:
                     pass
                 self.show_alert("Erro", f"Não foi possível salvar: {e}", "error", parent=self)
-        # Botes GRANDES para tablet - ms visibles
-        btn_salvar = ttk.Button(
-            btn_container, 
-            text="  SALVAR  ", 
-            bootstyle="success", 
-            command=save_config,
-            padding=(50, 18)
-        )
-        btn_salvar.pack(side=RIGHT, ipadx=20, ipady=5)
         
-        btn_cancelar = ttk.Button(
-            btn_container, 
-            text="  CANCELAR  ", 
-            bootstyle="secondary", 
-            command=safe_close_dialog,
-            padding=(50, 18)
-        )
-        btn_cancelar.pack(side=RIGHT, padx=25, ipadx=20, ipady=5)
+        # Asignar la función a la referencia del header
+        save_config_ref[0] = save_config
+
+        # ==================== BOTONES ABAJO ====================
+        btn_bottom_frame = ttk.Frame(main_frame, padding=(0, 10))
+        btn_bottom_frame.pack(fill=X, side=BOTTOM)
+        
+        ttk.Separator(btn_bottom_frame, orient="horizontal").pack(fill=X, pady=(0, 10))
+        
+        btn_container = ttk.Frame(btn_bottom_frame)
+        btn_container.pack()
+        
+        btn_salvar = ttk.Button(btn_container, text="SALVAR", 
+                               bootstyle="success", 
+                               command=do_save,
+                               width=12,
+                               padding=(20, 12))
+        btn_salvar.pack(side=LEFT, padx=10)
+        
+        btn_cancelar = ttk.Button(btn_container, text="CANCELAR", 
+                               bootstyle="secondary", 
+                               command=safe_close_dialog,
+                               width=12,
+                               padding=(20, 12))
+        btn_cancelar.pack(side=LEFT, padx=10)
+        
+        # Separador visual
+        ttk.Frame(btn_container, width=30).pack(side=LEFT)
+        
+        btn_fechar = ttk.Button(btn_container, text="FECHAR", 
+                               bootstyle="danger-outline", 
+                               command=safe_close_dialog,
+                               width=12,
+                               padding=(20, 12))
+        btn_fechar.pack(side=LEFT, padx=10)
 
         # Configurar protocolo de cierre
         dialog.protocol("WM_DELETE_WINDOW", safe_close_dialog)
@@ -1851,19 +1890,15 @@ class BalanzaGUI(ttk.Window):
             pass
         self.wait_window(dialog)
 
-    def _setup_calibration_tab(self, parent, current_config, close_config_dialog=None):
+    def _setup_calibration_tab(self, parent, current_config, close_config_dialog=None, config_dialog=None):
         """Configura a aba de calibração de sensores (Layout Tablet Grande)."""
         from modules.calibration import CalibrationManager
         
-        # Titulo - fonte grande para tablet
-        ttk.Label(parent, text="Calibração de Células de Carga", 
-                  font=("Segoe UI", 26, "bold")).pack(anchor="w", pady=(0, 20))
-        
-        # Descricao - fonte legivel
+        # Descricao breve
         ttk.Label(parent, 
-                  text="Selecione o sensor abaixo para iniciar o ensaio de calibração com pesos padrão.",
-                  font=("Segoe UI", 16), foreground="#64748b",
-                  wraplength=900).pack(anchor="w", pady=(0, 25))
+                  text="Selecione o sensor para iniciar o ensaio de calibração.",
+                  font=("Segoe UI", 12), foreground="#64748b",
+                  wraplength=800).pack(anchor="w", pady=(0, 15))
         
         # === SELECCION DE SENSOR (GRIGO DE BOTONES GRANDES) ===
         # Reemplazamos el combobox viejo por algo mas tactil
@@ -1946,14 +1981,17 @@ class BalanzaGUI(ttk.Window):
             action_frame = ttk.Frame(parent)
             action_frame.pack(fill=X, pady=20)
             
-            # Funcion para cerrar dialogo config y abrir wizard
+            # Funcion para abrir wizard SIN cerrar el dialogo de configuracion
             def start_calibration_action():
                 sensor_name = self._cal_sensor_selected.get()
-                # Cerrar el dialogo de configuracion primero
-                if close_config_dialog:
-                    close_config_dialog()
-                # Abrir wizard despues de un breve delay para asegurar cierre
-                self.after(100, lambda: self._open_calibration_wizard(current_config, sensor_name))
+                # Liberar grab del diálogo de config para que wizard funcione
+                if config_dialog:
+                    try:
+                        config_dialog.grab_release()
+                    except:
+                        pass
+                # Abrir wizard
+                self._open_calibration_wizard(current_config, sensor_name, config_dialog)
             
             # Botao INICIAR - Texto en bold explicitamente si el estilo no lo toma
             # Se ha configurado style='Large.warning.TButton' en _configure_styles con font bold
@@ -2073,7 +2111,7 @@ class BalanzaGUI(ttk.Window):
                     try: content_frame.configure(bootstyle="default")
                     except: pass
     
-    def _open_calibration_wizard(self, current_config, sensor_name_override=None):
+    def _open_calibration_wizard(self, current_config, sensor_name_override=None, config_dialog=None):
         """
         Wizard de Calibração Avançado.
         Permite entrada manual ou captura, múltiplos pontos, e seleção de curva.
@@ -2082,6 +2120,9 @@ class BalanzaGUI(ttk.Window):
         if not self.data_processor:
             self.show_alert("Erro", "DataProcessor não disponível", "error")
             return
+
+        # Guardar referencia al diálogo de config para restaurar grab
+        self._config_dialog_ref = config_dialog
 
         # Setup manager
         from modules.calibration import CalibrationManager
@@ -2095,12 +2136,15 @@ class BalanzaGUI(ttk.Window):
         self._cal_input_reading = tk.StringVar(value="")
         self._cal_wizard_active = True
 
-        # Crear Ventana - SIN overrideredirect para evitar bloqueos
+        # Crear Ventana - Pantalla completa con estado fullscreen
         wizard = ttk.Toplevel(self)
         wizard.title("Assistente de Calibração")
         w, h = self.winfo_screenwidth(), self.winfo_screenheight()
         wizard.geometry(f"{w}x{h}+0+0")
-        wizard.state('zoomed')  # Maximizar en Windows
+        wizard.attributes('-fullscreen', True)  # Fullscreen nativo de Windows
+        wizard.grab_set()  # Capturar eventos para el wizard
+        wizard.lift()
+        wizard.focus_force()
         self._cal_wizard = wizard
 
         # === HELPERS ===
@@ -2111,31 +2155,86 @@ class BalanzaGUI(ttk.Window):
             except:
                 pass
             try:
+                wizard.grab_release()
+            except:
+                pass
+            try:
                 wizard.destroy()
             except:
                 pass
+            # Restaurar grab del diálogo de configuración
+            if self._config_dialog_ref:
+                try:
+                    self._config_dialog_ref.grab_set()
+                    self._config_dialog_ref.lift()
+                    self._config_dialog_ref.focus_force()
+                except:
+                    pass
             self._cal_wizard = None
         
         wizard.protocol("WM_DELETE_WINDOW", close_wizard)
         
         def check_connection():
             return self.connected
+        
+        def get_reading_by_unit():
+            """Obtiene la lectura según la unidad seleccionada."""
+            unit = self._cal_unit_var.get()
+            
+            if unit == "Bits (Raw)":
+                # Valor raw sin procesar
+                return self.data_processor.get_last_total_raw()
+            elif unit == "t":
+                # Peso calibrado en toneladas (usa calibración actual)
+                # Si hay calibración, devuelve el peso; si no, devuelve raw
+                try:
+                    # Obtener el último peso procesado
+                    result = getattr(self, '_last_process_result', None)
+                    if result and 'total' in result:
+                        return result['total']
+                except:
+                    pass
+                return self.data_processor.get_last_total_raw()
+            elif unit == "kg":
+                # Peso en kg (toneladas * 1000)
+                try:
+                    result = getattr(self, '_last_process_result', None)
+                    if result and 'total' in result:
+                        return result['total'] * 1000
+                except:
+                    pass
+                return self.data_processor.get_last_total_raw()
+            elif unit == "mV/V":
+                # Conversión aproximada de bits a mV/V
+                # Asumiendo ADC de 24 bits y rango típico
+                raw = self.data_processor.get_last_total_raw()
+                # Conversión aproximada (ajustar según especificaciones del sensor)
+                mv_per_v = (raw / 16777216) * 2.5  # Ejemplo: 24-bit ADC, 2.5mV/V full scale
+                return mv_per_v
+            else:
+                return self.data_processor.get_last_total_raw()
             
         def cmd_capture():
             if not check_connection():
-                msg = "O sistema não está conectado aos sensores.\nPara capturar valores, deve conectar o hardware."
-                messagebox.showwarning("Não Conectado", msg, parent=wizard)
+                self.show_alert("Aviso", "Sistema não conectado.\nConecte o hardware para capturar.", "warning", parent=wizard)
                 return
             
-            val = self.data_processor.get_last_total_raw()
-            self._cal_input_reading.set(f"{val:.0f}")
+            val = get_reading_by_unit()
+            unit = self._cal_unit_var.get()
+            
+            if unit == "mV/V":
+                self._cal_input_reading.set(f"{val:.4f}")
+            elif unit in ["t", "kg"]:
+                self._cal_input_reading.set(f"{val:.2f}")
+            else:
+                self._cal_input_reading.set(f"{val:.0f}")
             
         def cmd_add_point():
             try:
                 w_str = self._cal_input_weight.get()
                 r_str = self._cal_input_reading.get()
                 if not w_str or not r_str: 
-                    messagebox.showwarning("Aviso", "Complete ambos os campos", parent=wizard)
+                    self.show_alert("Aviso", "Complete ambos os campos", "warning", parent=wizard)
                     return
                 
                 weight = float(w_str)
@@ -2148,33 +2247,28 @@ class BalanzaGUI(ttk.Window):
                 self._cal_input_weight.set("")
                 self._cal_input_reading.set("")
             except ValueError:
-                messagebox.showerror("Erro", "Valores numéricos inválidos", parent=wizard)
+                self.show_alert("Erro", "Valores numéricos inválidos", "error", parent=wizard)
                 
         def cmd_apply_cal():
             # Método fijo: Interpolación por Segmentos
             points = self._cal_manager.get_points()
             
             if len(points) < 2:
-                messagebox.showerror("Erro", "São necessários pelo menos 2 pontos para calibrar.", parent=wizard)
+                self.show_alert("Erro", "São necessários pelo menos 2 pontos para calibrar.", "error", parent=wizard)
                 return
             
             # Crear modelo de interpolación por segmentos
             sorted_points = sorted(points, key=lambda p: p[1])  # Ordenar por lectura
             
-            info = f"Método: Interpolação Linear por Segmentos\n"
-            info += f"Pontos: {len(sorted_points)}\n"
-            info += f"Faixa: {sorted_points[0][1]:.0f} - {sorted_points[-1][1]:.0f}"
-            
-            if messagebox.askyesno("Aplicar", f"{info}\n\nAplicar esta calibração?", parent=wizard):
-                # Guardar puntos de calibración para interpolación
-                cal_data = {
-                    "method": "segments",
-                    "points": [(p[0], p[1]) for p in sorted_points],  # (peso, lectura)
-                    "valid": True
-                }
-                self._cal_manager.apply_calibration(cal_data)
-                messagebox.showinfo("Sucesso", "Calibração salva.", parent=wizard)
-                close_wizard()
+            # Guardar puntos de calibración para interpolación
+            cal_data = {
+                "method": "segments",
+                "points": [(p[0], p[1]) for p in sorted_points],  # (peso, lectura)
+                "valid": True
+            }
+            self._cal_manager.apply_calibration(cal_data)
+            self.show_alert("Sucesso", f"Calibração salva com {len(sorted_points)} pontos.", "success", parent=wizard)
+            close_wizard()
 
         # === UI LAYOUT ===
         
@@ -2268,7 +2362,7 @@ class BalanzaGUI(ttk.Window):
                   bootstyle="inverse-dark").grid(row=0, column=0)
         ttk.Label(h_frame, text="LEITURA", font=("Segoe UI", 10, "bold"),
                   bootstyle="inverse-dark").grid(row=0, column=1)
-        ttk.Label(h_frame, text="", width=5).grid(row=0, column=2)
+        # Columna vacía para alinear con botones de eliminar (sin texto)
         
         # Scrollable table
         from ttkbootstrap.scrolled import ScrolledFrame
@@ -2279,22 +2373,18 @@ class BalanzaGUI(ttk.Window):
         right = ttk.Labelframe(main, text="Análise e Ajuste  ", padding=15, bootstyle="warning")
         right.grid(row=0, column=1, sticky="nsew")
         
-        # Config Frame - Solo unidad, método fijo: Interpolación por Segmentos
+        # Config Frame - Solo unidad
         f_cfg = ttk.Frame(right)
         f_cfg.pack(fill=X, pady=(0, 10))
         
-        # Mostrar método fijo (informativo, no editable)
-        ttk.Label(f_cfg, text="Método: Interpolação Linear por Segmentos", 
-                  font=("Segoe UI", 12, "bold"), foreground="#2563eb").pack(anchor="w", pady=(0, 10))
-        
-        # Forzar método internamente
+        # Forzar método internamente (sin mostrar texto)
         self._cal_method_var.set("Interpolação Segmentos")
         
         # Unit selector
         f_unit = ttk.Frame(f_cfg)
         f_unit.pack(fill=X)
-        ttk.Label(f_unit, text="Unidade Leitura:", font=("Segoe UI", 12)).pack(anchor="w")
-        units = ["Bits (Raw)", "mV/V", "t", "lbf"]
+        ttk.Label(f_unit, text="Unidade de Leitura:", font=("Segoe UI", 12)).pack(anchor="w")
+        units = ["Bits (Raw)", "mV/V", "kg", "t"]
         ttk.Combobox(f_unit, textvariable=self._cal_unit_var, values=units, 
                      state="readonly", font=("Segoe UI", 14)).pack(fill=X, ipady=6)
         
@@ -2378,14 +2468,12 @@ class BalanzaGUI(ttk.Window):
             e_w = ttk.Entry(row, textvariable=v_w, font=("Consolas", 12), justify="center")
             e_w.grid(row=0, column=0, sticky="ew", padx=5)
             e_w.bind("<FocusOut>", lambda e, idx=i, var=v_w: update_model(idx, var, 'w'))
-            e_w.bind("<Return>", lambda e, idx=i, var=v_w: update_model(idx, var, 'w'))
             e_w.bind("<Button-1>", lambda e, ew=e_w: self.after(50, lambda: self._show_numeric_keypad(ew, "Peso (t)")))
 
             # Entry Leitura - con teclado numérico
             e_r = ttk.Entry(row, textvariable=v_r, font=("Consolas", 12), justify="center")
             e_r.grid(row=0, column=1, sticky="ew", padx=5)
             e_r.bind("<FocusOut>", lambda e, idx=i, var=v_r: update_model(idx, var, 'r'))
-            e_r.bind("<Return>", lambda e, idx=i, var=v_r: update_model(idx, var, 'r'))
             e_r.bind("<Button-1>", lambda e, er=e_r: self.after(50, lambda: self._show_numeric_keypad(er, "Leitura")))
             
             # Botón Eliminar - más visible
@@ -2395,9 +2483,21 @@ class BalanzaGUI(ttk.Window):
             btn_del.grid(row=0, column=2, padx=5)
 
     def _cal_remove_point(self, idx):
-        self._cal_manager.remove_point(idx)
-        self._refresh_cal_wizard_table_ui()
-        self._update_cal_wizard_graph()
+        """Elimina un punto de calibración con confirmación."""
+        # Obtener info del punto
+        points = self._cal_manager.get_points()
+        if idx >= len(points):
+            return
+        peso, lectura = points[idx]
+        
+        # Mostrar confirmación con el estilo del programa
+        if self.show_large_confirmation(
+            "Eliminar Ponto", 
+            f"Tem certeza que deseja eliminar o ponto?\n\nPeso: {peso:.2f} t\nLeitura: {lectura:.2f}"
+        ):
+            self._cal_manager.remove_point(idx)
+            self._refresh_cal_wizard_table_ui()
+            self._update_cal_wizard_graph()
 
     def _update_cal_wizard_graph(self):
         """Actualiza el gráfico usando interpolación lineal por segmentos."""
@@ -2432,10 +2532,9 @@ class BalanzaGUI(ttk.Window):
             # Interpolación Lineal por Segmentos (unir puntos con líneas rectas)
             if len(x) >= 2:
                 # Dibujar líneas conectando los puntos ordenados
-                self._cal_ax.plot(x, y, 'r-', linewidth=2, label="Segmentos", zorder=4)
-                self._cal_ax.set_title(f"Interpolação por Segmentos ({len(points)} pontos)", 
+                self._cal_ax.plot(x, y, 'r-', linewidth=2, zorder=4)
+                self._cal_ax.set_title(f"Curva de Calibração ({len(points)} pontos)", 
                                        fontsize=11, fontweight='bold')
-                self._cal_ax.legend(loc='best')
             else:
                 self._cal_ax.set_title(f"{len(points)} ponto(s) - Adicione mais para ajustar", 
                                        fontsize=11, color='gray')

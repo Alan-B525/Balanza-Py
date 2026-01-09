@@ -12,10 +12,10 @@ PUERTO_COM = "COM3"
 BAUDRATE = 921600
 
 NODOS_CONFIG = {
-    "celda_1": {"id": 0, "ch": "ch1", "nombre": "Célula 1", "posicion": "1"},
-    "celda_2": {"id": 0, "ch": "ch2", "nombre": "Célula 2", "posicion": "2"},
-    "celda_3": {"id": 0, "ch": "ch1", "nombre": "Célula 3", "posicion": "3"},
-    "celda_4": {"id": 0, "ch": "ch2", "nombre": "Célula 4", "posicion": "4"},
+    "celda_1": {"id": 0, "ch": "ch1", "nombre": "Célula 1", "posicion": "1", "serial": ""},
+    "celda_2": {"id": 0, "ch": "ch2", "nombre": "Célula 2", "posicion": "2", "serial": ""},
+    "celda_3": {"id": 0, "ch": "ch1", "nombre": "Célula 3", "posicion": "3", "serial": ""},
+    "celda_4": {"id": 0, "ch": "ch2", "nombre": "Célula 4", "posicion": "4", "serial": ""},
 }
 
 RECONNECT_ATTEMPTS = 3

@@ -263,6 +263,20 @@ class MSCLDriver(ISistemaPesaje):
         
         self._log("INFO", f"Configuración: {len(self._expected_node_ids)} nodos esperados: {self._expected_node_ids}")
     
+    def update_nodes_config(self, new_config: Dict) -> None:
+        """Actualiza la configuración de nodos en caliente sin reconectar."""
+        self._log("INFO", "Actualizando configuración de nodos...")
+        self.nodos_config = new_config
+        
+        # Limpiar estructuras anteriores
+        self._expected_node_ids.clear()
+        self._node_status.clear()
+        self._value_cache.clear()
+        
+        # Re-inicializar con nueva configuración
+        self._initialize_node_structures()
+        self._log("INFO", "Configuración de nodos actualizada")
+    
     # =========================================================================
     # LOGGING
     # =========================================================================
