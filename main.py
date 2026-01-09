@@ -1,12 +1,3 @@
-"""
-Balanza-Py - Sistema de Pesagem Industrial
-Ponto de entrada principal da aplicacao.
-
-Arquitetura: Producer-Consumer com threads
-- Thread Principal: GUI (Tkinter)
-- Thread Backend: Aquisicao de dados e processamento
-"""
-
 import sys
 import os
 import time
@@ -314,36 +305,26 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
 
 def main():
     """Funcao principal da aplicacao."""
-    # Carregar configuracao personalizada primeiro (para ter ACTIVE_MODE)
-    load_custom_settings()
+    # El modo de pantalla se determina por configuración
+    # Si el modo es 'tablet', se usará pantalla completa sin barra
+    # Si no, se usará ventana normal
     
-    # Mostrar informacoes de inicializacao
+    load_custom_settings()
     show_startup_info()
-
-    # Filas de comunicacao thread-safe
     data_queue = queue.Queue()
     command_queue = queue.Queue()
-    
-    # Inicializar Logica de Negocio
     procesador = DataProcessor(ACTIVE_NODOS)
-    
-    # Carregar estado de tara anterior (persistencia)
     if procesador.load_tara_state():
         print("[INFO] Estado de tara carregado de app_state.json")
-    
-    # Inicializar Hardware (Mock ou Real) usando a factory e modo configurado
     print(f"[INFO] Criando sistema de pesagem no modo: {ACTIVE_MODE}")
     sistema_pesaje = criar_sistema_pesaje(ACTIVE_MODE, ACTIVE_NODOS)
-    
-    # Iniciar Thread de Backend
     backend_thread = threading.Thread(
         target=hilo_adquisicion,
         args=(data_queue, command_queue, sistema_pesaje, procesador),
         daemon=True
     )
     backend_thread.start()
-    
-    # Iniciar GUI (Thread Principal)
+    # Solo modo tablet: sin barra superior
     app = BalanzaGUI(data_queue, command_queue, procesador)
     app.mainloop()
 

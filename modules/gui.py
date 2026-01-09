@@ -25,18 +25,30 @@ except ImportError:
     print("[GUI] Warning: Matplotlib no disponible para gráficos de calibración")
 
 class BalanzaGUI(ttk.Window):
+    
+    BASE_WIDTH = 1280
+    BASE_HEIGHT = 800
+
     def __init__(self, data_queue, command_queue, data_processor=None):
         super().__init__(themename=THEME_NAME)
         self.data_processor = data_processor
         self.title(APP_TITLE)
-        
-        # Remover barra de ttulo de Windows (modo frameless)
-        self.overrideredirect(True)
-        
-        # Obtener tamao de pantalla y usar pantalla completa
-        screen_width = self.winfo_screenwidth()
-        screen_height = self.winfo_screenheight()
-        self.geometry(f"{screen_width}x{screen_height}+0+0")
+
+        real_screen_width = self.winfo_screenwidth()
+        real_screen_height = self.winfo_screenheight()
+
+        # Si la resolución es 1280x800, quitar barra superior
+        if real_screen_width == 1280 and real_screen_height == 800:
+            self.overrideredirect(True)
+            self.geometry(f"{real_screen_width}x{real_screen_height}+0+0")
+        else:
+            # En otras resoluciones: ventana maximizada con barra
+            try:
+                self.state("zoomed")  # Solo en Windows
+            except Exception:
+                self.geometry(f"{real_screen_width}x{real_screen_height}+0+0")
+
+        self._calculate_scale_factors(real_screen_width, real_screen_height)
         
         # Guardar referencia para mover ventana (drag)
         self._drag_data = {"x": 0, "y": 0}
@@ -70,6 +82,31 @@ class BalanzaGUI(ttk.Window):
         
         # Iniciar conexo automaticamente removida para evitar travamento na inicializacao
         # self.after(500, self._auto_connect_on_startup)
+    
+    def _calculate_scale_factors(self, screen_width, screen_height):
+        """Calcula factores de escala basados en la resolución de pantalla."""
+        # Factor de escala (relativo a la resolución base 1280x800)
+        self.scale_x = screen_width / self.BASE_WIDTH
+        self.scale_y = screen_height / self.BASE_HEIGHT
+        
+        # Factor de escala general (promedio geométrico para mantener proporciones)
+        self.scale = min(self.scale_x, self.scale_y)
+        
+        # Factor específico para fuentes (no escalar demasiado en pantallas grandes)
+        # Limitar entre 0.8 y 1.5 para mantener legibilidad
+        self.font_scale = max(0.8, min(1.5, self.scale))
+        
+        # Log para debug
+        print(f"[GUI] Resolución detectada: {screen_width}x{screen_height}")
+        print(f"[GUI] Factor de escala: {self.scale:.2f} (fuentes: {self.font_scale:.2f})")
+    
+    def scaled(self, value):
+        """Escala un valor numérico según la resolución."""
+        return int(value * self.scale)
+    
+    def scaled_font(self, size):
+        """Escala el tamaño de fuente según la resolución."""
+        return int(size * self.font_scale)
 
     def _configure_styles(self):
         # Colors
@@ -83,74 +120,77 @@ class BalanzaGUI(ttk.Window):
         TEXT_MUTED = "#64748b"
         BORDER_COLOR = "#cbd5e1"
         
-        # Fonts - Ms grandes para tablet
+        # Fonts - Escalados según resolución
         FONT_MAIN = "Segoe UI"
         FONT_MONO = "Consolas"
+        
+        # Función helper local para escalar fuentes
+        sf = self.scaled_font
         
         # Configure TFrame styles
         self.style.configure('Body.TFrame', background=BG_BODY)
         self.style.configure('Card.TFrame', background=BG_CARD, relief="solid", borderwidth=1)
         self.style.configure('CardNoBorder.TFrame', background=BG_CARD)
         
-        # Configure Label styles - MS GRANDES para mejor visibilidad
-        self.style.configure('CardTitle.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, 16, "bold"))
-        self.style.configure('CardValue.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_MONO, 48, "bold"))
-        self.style.configure('Unit.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, 18))
-        self.style.configure('SensorStatus.TLabel', background=BG_CARD, foreground=SUCCESS, font=(FONT_MAIN, 13, "bold"))
+        # Configure Label styles - Escalados
+        self.style.configure('CardTitle.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, sf(16), "bold"))
+        self.style.configure('CardValue.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_MONO, sf(48), "bold"))
+        self.style.configure('Unit.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, sf(18)))
+        self.style.configure('SensorStatus.TLabel', background=BG_CARD, foreground=SUCCESS, font=(FONT_MAIN, sf(13), "bold"))
         
         # Total Panel - MUY PROMINENTE para nfasis mximo
         self.style.configure('TotalPanel.TFrame', background=PRIMARY)
-        self.style.configure('TotalLabel.TLabel', background=PRIMARY, foreground="white", font=(FONT_MAIN, 28, "bold"))
-        self.style.configure('TotalValue.TLabel', background=PRIMARY, foreground="white", font=(FONT_MONO, 120, "bold"))
-        self.style.configure('TotalUnit.TLabel', background=PRIMARY, foreground="white", font=(FONT_MAIN, 36))
+        self.style.configure('TotalLabel.TLabel', background=PRIMARY, foreground="white", font=(FONT_MAIN, sf(28), "bold"))
+        self.style.configure('TotalValue.TLabel', background=PRIMARY, foreground="white", font=(FONT_MONO, sf(120), "bold"))
+        self.style.configure('TotalUnit.TLabel', background=PRIMARY, foreground="white", font=(FONT_MAIN, sf(36)))
         
         # Total Panel DANGER - Cuando hay sensor desconectado (ROJO)
         self.style.configure('TotalPanelDanger.TFrame', background=DANGER)
-        self.style.configure('TotalLabelDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MAIN, 28, "bold"))
-        self.style.configure('TotalValueDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MONO, 120, "bold"))
-        self.style.configure('TotalUnitDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MAIN, 36))
+        self.style.configure('TotalLabelDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MAIN, sf(28), "bold"))
+        self.style.configure('TotalValueDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MONO, sf(120), "bold"))
+        self.style.configure('TotalUnitDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MAIN, sf(36)))
         
         # Tara Info - Ms visible
-        self.style.configure('TareInfo.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, 18, "bold"))
+        self.style.configure('TareInfo.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, sf(18), "bold"))
         
-        # Buttons - Todos ms grandes para tablet
-        self.style.configure('TButton', font=(FONT_MAIN, 14, 'bold'))  # Default global BOLD
-        self.style.configure('Tare.TButton', font=(FONT_MAIN, 22, 'bold'))
-        self.style.configure('Reset.TButton', font=(FONT_MAIN, 18, 'bold'))
-        self.style.configure('Header.TButton', font=(FONT_MAIN, 16, 'bold'))
+        # Buttons - Escalados
+        self.style.configure('TButton', font=(FONT_MAIN, sf(14), 'bold'))  # Default global BOLD
+        self.style.configure('Tare.TButton', font=(FONT_MAIN, sf(22), 'bold'))
+        self.style.configure('Reset.TButton', font=(FONT_MAIN, sf(18), 'bold'))
+        self.style.configure('Header.TButton', font=(FONT_MAIN, sf(16), 'bold'))
         
         # Large Dialog Buttons
-        self.style.configure('Large.success.TButton', font=(FONT_MAIN, 18, 'bold'))
-        self.style.configure('Large.danger.TButton', font=(FONT_MAIN, 18, 'bold'))
-        self.style.configure('Large.info.TButton', font=(FONT_MAIN, 18, 'bold'))
-        self.style.configure('Large.warning.TButton', font=(FONT_MAIN, 18, 'bold'))
+        self.style.configure('Large.success.TButton', font=(FONT_MAIN, sf(18), 'bold'))
+        self.style.configure('Large.danger.TButton', font=(FONT_MAIN, sf(18), 'bold'))
+        self.style.configure('Large.info.TButton', font=(FONT_MAIN, sf(18), 'bold'))
+        self.style.configure('Large.warning.TButton', font=(FONT_MAIN, sf(18), 'bold'))
 
         # Tabs config - Pestañas gruesas, anchas y centradas
-        self.style.configure('TNotebook.Tab', font=(FONT_MAIN, 16, 'bold'), padding=(40, 15))
+        self.style.configure('TNotebook.Tab', font=(FONT_MAIN, sf(16), 'bold'), padding=(self.scaled(40), self.scaled(15)))
         self.style.map('TNotebook.Tab', 
                       background=[('selected', PRIMARY)], 
                       foreground=[('selected', 'white')])
 
-        # Combobox - Más grandes para tablet (dropdown legible)
-        self.style.configure('TCombobox', font=(FONT_MAIN, 14), padding=8)
+        # Combobox - Escalados
+        self.style.configure('TCombobox', font=(FONT_MAIN, sf(14)), padding=self.scaled(8))
         # Aumentar altura del dropdown list
-        self.option_add('*TCombobox*Listbox.font', (FONT_MAIN, 14))
+        self.option_add('*TCombobox*Listbox.font', (FONT_MAIN, sf(14)))
         self.option_add('*TCombobox*Listbox*selectBackground', PRIMARY)
         self.option_add('*TCombobox*Listbox*selectForeground', 'white')
 
         # Header
         self.style.configure('Header.TFrame', background=BG_CARD)
-        self.style.configure('HeaderTitle.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_MAIN, 22, "bold"))
-        self.style.configure('HeaderSub.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, 12))
+        self.style.configure('HeaderTitle.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_MAIN, sf(22), "bold"))
+        self.style.configure('HeaderSub.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, sf(12)))
 
     def _setup_ui(self):
-        # Main Container
-        main_container = ttk.Frame(self, style='Body.TFrame', padding=15)
+        # Main Container - padding escalado
+        main_container = ttk.Frame(self, style='Body.TFrame', padding=self.scaled(10))
         main_container.pack(fill=BOTH, expand=YES)
         
         # --- Header (Barra personalizada para reemplazar barra de Windows) ---
-        header_frame = ttk.Frame(main_container, style='Header.TFrame', padding=12)
-        header_frame.pack(fill=X, pady=(0, 15))
+        header_frame = ttk.Frame(main_container, style='Header.TFrame', padding=self.scaled(8))
+        header_frame.pack(fill=X, pady=(0, self.scaled(10)))
         
         # Permitir arrastrar la ventana desde el header
         header_frame.bind("<Button-1>", self._start_drag)
@@ -174,8 +214,8 @@ class BalanzaGUI(ttk.Window):
         self.logo_left_img = None
         self.logo_right_img = None
         
-        # Tamao de logos (ms grandes)
-        logo_height = 100
+        # Tamao de logos (escalado)
+        logo_height = self.scaled(100)
         resample_method = getattr(Image, 'Resampling', Image).LANCZOS
         
         def load_logo(path, height):
@@ -204,7 +244,7 @@ class BalanzaGUI(ttk.Window):
         # Ttulo sin logo
         title_box = ttk.Frame(brand_frame, style='Header.TFrame')
         title_box.pack(side=LEFT)
-        ttk.Label(title_box, text="Sistema de Pesagem Industrial", style='HeaderTitle.TLabel').pack(anchor="w")
+        ttk.Label(title_box, text="Sistema de Pesagem", style='HeaderTitle.TLabel').pack(anchor="w")
         self.lbl_status = ttk.Label(title_box, text="Desconectado", style='HeaderSub.TLabel')
         self.lbl_status.pack(anchor="w")
         
@@ -272,12 +312,12 @@ class BalanzaGUI(ttk.Window):
         grid_area = ttk.Frame(main_container, style='Body.TFrame')
         grid_area.pack(fill=BOTH, expand=YES)
         
-        # Columnas con tamao FIJO usando minsize para evitar que cambien
-        grid_area.columnconfigure(0, weight=1, minsize=280)
-        grid_area.columnconfigure(1, weight=2, minsize=400)  # Centro ms ancho para el TOTAL
-        grid_area.columnconfigure(2, weight=1, minsize=280)
-        grid_area.rowconfigure(0, weight=1, minsize=200)
-        grid_area.rowconfigure(1, weight=1, minsize=200)
+        # Columnas con tamao escalado según resolución
+        grid_area.columnconfigure(0, weight=1, minsize=self.scaled(250))
+        grid_area.columnconfigure(1, weight=2, minsize=self.scaled(350))  # Centro ms ancho para el TOTAL
+        grid_area.columnconfigure(2, weight=1, minsize=self.scaled(250))
+        grid_area.rowconfigure(0, weight=1, minsize=self.scaled(160))
+        grid_area.rowconfigure(1, weight=1, minsize=self.scaled(160))
 
         self.sensor_widgets = {} 
 
@@ -339,23 +379,23 @@ class BalanzaGUI(ttk.Window):
         # Crear sensores en posiciones: izquierda y derecha (numerados)
         keys = list(NODOS_CONFIG.keys())
         if len(keys) >= 4:
-            create_sensor_card(keys[0], "CELULA 1", 0, 0)
-            create_sensor_card(keys[1], "CELULA 2", 0, 2)
-            create_sensor_card(keys[2], "CELULA 3", 1, 0)
-            create_sensor_card(keys[3], "CELULA 4", 1, 2)
+            create_sensor_card(keys[0], "CÉLULA 1", 0, 0)
+            create_sensor_card(keys[1], "CÉLULA 2", 0, 2)
+            create_sensor_card(keys[2], "CÉLULA 3", 1, 0)
+            create_sensor_card(keys[3], "CÉLULA 4", 1, 2)
         elif len(keys) >= 2:
             # Fallback si solo hay 2 celdas configuradas
-            create_sensor_card(keys[0], "CELULA 1", 0, 0)
-            create_sensor_card(keys[1], "CELULA 2", 0, 2)
+            create_sensor_card(keys[0], "CÉLULA 1", 0, 0)
+            create_sensor_card(keys[1], "CÉLULA 2", 0, 2)
 
         # --- PANEL CENTRAL: TOTAL (MS GRANDE) ---
-        control_panel = ttk.Frame(grid_area, style='Card.TFrame', padding=15)
-        control_panel.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=8, pady=8)
+        control_panel = ttk.Frame(grid_area, style='Card.TFrame', padding=self.scaled(10))
+        control_panel.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=self.scaled(6), pady=self.scaled(6))
         control_panel.grid_propagate(False)  # Tamao fijo
         
         # Seccin TOTAL con fondo azul - MUY GRANDE Y PROMINENTE
         # Guardar referencia para poder cambiar color en caso de desconexin
-        self.total_section = ttk.Frame(control_panel, style='TotalPanel.TFrame', padding=35)
+        self.total_section = ttk.Frame(control_panel, style='TotalPanel.TFrame', padding=self.scaled(25))
         self.total_section.pack(fill=BOTH, expand=YES)
         
         self.lbl_total_title = ttk.Label(self.total_section, text="PESO TOTAL", style='TotalLabel.TLabel', anchor="center")
@@ -372,10 +412,10 @@ class BalanzaGUI(ttk.Window):
         self.lbl_total_unit.pack()
         
         # Separador dentro del panel
-        ttk.Separator(control_panel, orient=HORIZONTAL).pack(fill=X, pady=15)
+        ttk.Separator(control_panel, orient=HORIZONTAL).pack(fill=X, pady=self.scaled(10))
         
         # Seccin de Acciones debajo del total
-        actions_section = ttk.Frame(control_panel, style='CardNoBorder.TFrame', padding=10)
+        actions_section = ttk.Frame(control_panel, style='CardNoBorder.TFrame', padding=self.scaled(5))
         actions_section.pack(fill=X)
         
         # Info de Tara - MS GRANDE Y VISIBLE
@@ -385,7 +425,7 @@ class BalanzaGUI(ttk.Window):
             style='TareInfo.TLabel',
             anchor="center"
         )
-        self.lbl_tare_info.pack(pady=(0, 20))
+        self.lbl_tare_info.pack(pady=(0, self.scaled(15)))
         
         # Frame para botones lado a lado
         btn_row = ttk.Frame(actions_section, style='CardNoBorder.TFrame')
@@ -398,26 +438,26 @@ class BalanzaGUI(ttk.Window):
             command=self.do_tare, 
             bootstyle="warning", 
             style='Tare.TButton', 
-            width=12, 
-            padding=(25, 18)
+            width=10, 
+            padding=(self.scaled(20), self.scaled(12))
         )
-        btn_tare.pack(side=LEFT, expand=YES, padx=5)
+        btn_tare.pack(side=LEFT, expand=YES, padx=3)
         
         # Botão Limpar Tara - MESMO TAMANHO que TARA
         btn_reset = ttk.Button(
             btn_row, 
-            text="LIMPAR TARA", 
+            text="RESET TARA", 
             command=self.reset_tare, 
             bootstyle="secondary", 
             style='Tare.TButton',  # Mesmo estilo que TARA
-            width=12, 
-            padding=(25, 18)  # Mesmo padding que TARA
+            width=10, 
+            padding=(self.scaled(20), self.scaled(12))  # Mesmo padding que TARA
         )
-        btn_reset.pack(side=LEFT, expand=YES, padx=5)
+        btn_reset.pack(side=LEFT, expand=YES, padx=3)
         
         # --- Log Area con LOGOS GRANDES a cada lado ---
-        log_frame = ttk.Frame(main_container, style='Card.TFrame', padding=12)
-        log_frame.pack(fill=X, side=BOTTOM, pady=(10, 0))
+        log_frame = ttk.Frame(main_container, style='Card.TFrame', padding=self.scaled(8))
+        log_frame.pack(fill=X, side=BOTTOM, pady=(self.scaled(5), 0))
         
         # Usar grid para que coincida con las proporciones de la columna central
         log_container = ttk.Frame(log_frame, style='CardNoBorder.TFrame')
@@ -1093,6 +1133,11 @@ class BalanzaGUI(ttk.Window):
             self.command_queue.put({'cmd': 'RESUME_ACQUISITION'})
             self._close_disconnect_dialog(node_id)
             self.log_message(f"Continuando sin sensor {nombre} (ID: {node_id})")
+        # Estilo para labels seleccionados en calibración
+        sf = self.scaled_font
+        self.style.configure('SelectedSensor.TLabel', background=PRIMARY, foreground='white', font=(FONT_MAIN, sf(26), 'bold'))
+        self.style.configure('SelectedSensorSerial.TLabel', background=PRIMARY, foreground='white', font=(FONT_MAIN, sf(14)))
+        self.style.configure('SelectedSensorStatus.TLabel', background=PRIMARY, foreground='white', font=(FONT_MAIN, sf(12), 'bold'))
         
         def on_pause():
             # Pausar y cerrar dialogo
@@ -1537,21 +1582,20 @@ class BalanzaGUI(ttk.Window):
             except:
                 pass
 
-        # Criar janela modal - SEM BARRA DE TTULO
+        # Crear ventana modal - FULLSCREEN (sin barra de título)
         dialog = ttk.Toplevel(self)
         dialog.overrideredirect(True)
-        
-        # Tamanho quase tela cheia para tablet
+        # Pantalla completa real
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
-        dialog_w = screen_w - 40
-        dialog_h = screen_h - 40
-        x = 20
-        y = 20
-        dialog.geometry(f"{dialog_w}x{dialog_h}+{x}+{y}")
-        
+        dialog.geometry(f"{screen_w}x{screen_h}+0+0")
         dialog.lift()
         dialog.focus_force()
+        # Ocupar toda la pantalla (Tkinter fullscreen)
+        try:
+            dialog.attributes('-fullscreen', True)
+        except Exception:
+            pass
 
         # Estilos para abas grandes (touch-friendly) y CENTRADAS (simulado com padding o fill)
         # Nota: El estilo 'TNotebook.Tab' ya fue ajustado en _configure_styles,
@@ -1594,12 +1638,13 @@ class BalanzaGUI(ttk.Window):
                 save_config_ref[0]()
         
         # Header: Solo Tabs (ocupa todo el ancho)
+        # Header: Solo Tabs (ocupa todo el alto)
         header_frame = ttk.Frame(main_frame)
-        header_frame.pack(fill=X, pady=(0, 5))
-        
+        header_frame.pack(fill=BOTH, expand=YES, pady=(0, 5))
+
         # Notebook/Tabs
         notebook = ttk.Notebook(header_frame, style='BigTab.TNotebook')
-        notebook.pack(fill=X)
+        notebook.pack(fill=BOTH, expand=YES)
 
         # ==================== Tab Sensores ====================
         tab_nodes = ttk.Frame(notebook, padding=10)
@@ -1668,7 +1713,7 @@ class BalanzaGUI(ttk.Window):
         
         # === CONTENEDOR PRINCIPAL: Dos columnas lado a lado (ocupa todo el espacio) ===
         main_content = ttk.Frame(tab_nodes)
-        main_content.pack(fill=BOTH, expand=True, pady=(5, 0))
+        main_content.pack(fill=BOTH, expand=True, pady=(15, 0))
         main_content.columnconfigure(0, weight=1, uniform="cols")
         main_content.columnconfigure(1, weight=1, uniform="cols")
         main_content.rowconfigure(0, weight=1)
@@ -1676,9 +1721,12 @@ class BalanzaGUI(ttk.Window):
         # === COLUMNA IZQUIERDA: Búsqueda de Nodos ===
         discover_frame = ttk.Labelframe(main_content, text="Descoberta de Nós", padding=15)
         discover_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+        main_content.rowconfigure(0, weight=1)
+        main_content.columnconfigure(0, weight=1)
+        discover_frame.grid_propagate(False)
         
         discover_btn_frame = ttk.Frame(discover_frame)
-        discover_btn_frame.pack(fill=X, pady=(0, 10))
+        discover_btn_frame.pack(anchor="n", fill=X, pady=(0, 10))
         
         # Variable para almacenar nodos descubiertos
         self._discovered_nodes = []
@@ -1705,12 +1753,11 @@ class BalanzaGUI(ttk.Window):
             font=("Segoe UI", 11), 
             foreground="#64748b",
             wraplength=350
-        ).pack(anchor="w", pady=(10, 5))
+        ).pack(anchor="n", fill=X, pady=(10, 5))
         
         # Treeview para mostrar nodos descubiertos
         disc_columns = ("node_id", "serial", "channel", "rssi", "status")
-        self._disc_tree = ttk.Treeview(discover_frame, columns=disc_columns, 
-                                        show="headings", height=10)
+        self._disc_tree = ttk.Treeview(discover_frame, columns=disc_columns, show="headings")
         
         self._disc_tree.heading("node_id", text="ID do Nó")
         self._disc_tree.heading("serial", text="Nº Série")
@@ -1738,14 +1785,11 @@ class BalanzaGUI(ttk.Window):
         matrix_frame.rowconfigure(0, weight=1, uniform="cells")
         matrix_frame.rowconfigure(1, weight=1, uniform="cells")
         
-        # Posiciones de la matriz (esquinas de la balanza)
-        # [1] [2]   <- Frente
-        # [3] [4]   <- Atrás
         positions = [
-            (0, 0, 1, "FRENTE ESQ"),   # Celda 1: arriba-izquierda
-            (0, 1, 2, "FRENTE DIR"),   # Celda 2: arriba-derecha
-            (1, 0, 3, "ATRÁS ESQ"),    # Celda 3: abajo-izquierda
-            (1, 1, 4, "ATRÁS DIR"),    # Celda 4: abajo-derecha
+            (0, 0, 1, "ATRÁS ESQUERDA"),
+            (0, 1, 2, "ATRÁS DIREITA"),
+            (1, 0, 3, "FRENTE ESQUERDA"),
+            (1, 1, 4, "FRENTE DIREITA"),
         ]
         
         for row, col, celda_num, pos_name in positions:
@@ -1753,7 +1797,7 @@ class BalanzaGUI(ttk.Window):
             current_node_data = current_config["nodes"].get(key, {"id": 0, "ch": "ch1", "nombre": f"Celda {celda_num}", "serial": ""})
             
             # Frame de cada celda con borde más visible
-            cell_frame = ttk.Labelframe(matrix_frame, text=f"CÉL {celda_num} - {pos_name}", padding=15)
+            cell_frame = ttk.Labelframe(matrix_frame, text=f"CÉLULA {celda_num} - {pos_name}", padding=15)
             cell_frame.grid(row=row, column=col, sticky="nsew", padx=8, pady=8)
             # Evitar que el frame propague cambios de tamaño
             cell_frame.grid_propagate(False)
@@ -1906,6 +1950,20 @@ class BalanzaGUI(ttk.Window):
         """Configura a aba de calibração de sensores (Layout Tablet Grande)."""
         from modules.calibration import CalibrationManager
         
+        # Mapeo de nombres internos a nombres en portugués para display
+        def get_display_name(internal_name):
+            """Convierte nombre interno a nombre legible en portugués."""
+            display_map = {
+                'celda_1': 'Célula 1',
+                'celda_2': 'Célula 2', 
+                'celda_3': 'Célula 3',
+                'celda_4': 'Célula 4',
+            }
+            return display_map.get(internal_name, internal_name.replace('_', ' ').title())
+        
+        # Guardar mapeo inverso para recuperar nombre interno
+        self._sensor_display_to_internal = {}
+        
         # Descricao breve
         ttk.Label(parent, 
                   text="Selecione o sensor para iniciar o ensaio de calibração.",
@@ -1930,7 +1988,12 @@ class BalanzaGUI(ttk.Window):
             # Mostrar mensaje y deshabilitar botones
             self._cal_sensor_selected = tk.StringVar(value="")
         else:
-            # Variable para controlar la seleccion. Inicializada con el primer sensor.
+            # Crear mapeo de display a interno
+            for name in sensor_names:
+                display_name = get_display_name(name)
+                self._sensor_display_to_internal[display_name] = name
+            
+            # Variable para controlar la seleccion (usa nombre interno)
             self._cal_sensor_selected = tk.StringVar(value=sensor_names[0])
             
             # Grid layout para botones de sensores (Max 2 por fila para ser enormes)
@@ -1939,48 +2002,44 @@ class BalanzaGUI(ttk.Window):
             MAX_COLS = 2
             
             for name in sensor_names:
-                # Creamos un frame que actua como boton grande
+                display_name = get_display_name(name)
+                serial_number = str(current_config["nodes"].get(name, {}).get("serial", ""))
+
                 def select_sensor(s_name=name):
                     self._cal_sensor_selected.set(s_name)
-                    # Actualizar visualmente
                     self._update_sensor_buttons_visuals(inner_container)
 
-                # Frame principal del boton
                 btn_frame = ttk.Frame(inner_container, style='Card.TFrame', cursor="hand2")
-                
-                # GRID con GAP GRANDE (20px) para que se note la separacion
                 btn_frame.grid(row=row, column=col, sticky="nsew", padx=15, pady=15)
-                
                 btn_frame.grid_propagate(False)
-                btn_frame.configure(height=140) # Altura aumentada
-                
-                # Binding para click
+                btn_frame.configure(height=140)
                 btn_frame.bind("<Button-1>", lambda e, n=name: select_sensor(n))
-                
-                # Contenido interno
+
                 content_frame = ttk.Frame(btn_frame, style='CardNoBorder.TFrame')
                 content_frame.pack(expand=YES, fill=BOTH, padx=5, pady=5)
                 content_frame.bind("<Button-1>", lambda e, n=name: select_sensor(n))
-                
-                # 1. Nombre del Sensor
-                lbl_name = ttk.Label(content_frame, text=name, font=("Segoe UI", 26, "bold"))
-                lbl_name.pack(expand=YES, side=TOP, pady=(20, 5))
+
+                # Nombre del Sensor
+                lbl_name = ttk.Label(content_frame, text=display_name, font=("Segoe UI", 26, "bold"))
+                lbl_name.pack(expand=YES, side=TOP, pady=(12, 2))
                 lbl_name.bind("<Button-1>", lambda e, n=name: select_sensor(n))
-                
-                # 2. Indicador Estado (Texto o Icono)
+
+                # Número de serie debajo del nombre, si existe
+                if serial_number:
+                    lbl_serial = ttk.Label(content_frame, text=f"Nº Serie: {serial_number}", font=("Segoe UI", 14), foreground="#64748b")
+                    lbl_serial.pack(side=TOP, pady=(0, 8))
+                    lbl_serial.bind("<Button-1>", lambda e, n=name: select_sensor(n))
+                    lbl_serial.tag = "serial"
+
+                # Indicador Estado
                 lbl_status = ttk.Label(content_frame, text="Clicar para selecionar", font=("Segoe UI", 12))
                 lbl_status.pack(side=BOTTOM, pady=(0, 20))
                 lbl_status.bind("<Button-1>", lambda e, n=name: select_sensor(n))
-                
-                # Guardar referencia para actualizar estilo
+
                 btn_frame.sensor_name = name
-                
-                # Tags para encontrar hijos facilmente en update
                 lbl_name.tag = "name"
                 lbl_status.tag = "status"
-                
                 inner_container.columnconfigure(col, weight=1)
-                
                 col += 1
                 if col >= MAX_COLS:
                     col = 0
@@ -1991,7 +2050,7 @@ class BalanzaGUI(ttk.Window):
 
             # === BOTONES DE ACCION (ENORMES) ===
             action_frame = ttk.Frame(parent)
-            action_frame.pack(fill=X, pady=20)
+            action_frame.pack(fill=X, pady=self.scaled(10))
             
             # Funcion para abrir wizard SIN cerrar el dialogo de configuracion
             def start_calibration_action():
@@ -2014,7 +2073,7 @@ class BalanzaGUI(ttk.Window):
                 command=start_calibration_action
             )
             btn_start.configure(style='Large.warning.TButton') 
-            btn_start.pack(side=LEFT, fill=X, expand=YES, padx=(0, 10), ipady=15)
+            btn_start.pack(side=LEFT, fill=X, expand=YES, padx=(0, self.scaled(6)), ipady=self.scaled(8))
             
             # Botão CARREGAR
             btn_load = ttk.Button(
@@ -2025,7 +2084,7 @@ class BalanzaGUI(ttk.Window):
             )
             # Aplicamos estilo grande tambien aqui
             btn_load.configure(style='Large.info.TButton')
-            btn_load.pack(side=LEFT, fill=X, expand=YES, padx=(10, 0), ipady=15)
+            btn_load.pack(side=LEFT, fill=X, expand=YES, padx=(self.scaled(6), 0), ipady=self.scaled(8))
         
         # === TEXTO DE AYUDA LIMPIO (Removido a pedido) ===
         # help_text = (...)
@@ -2075,53 +2134,46 @@ class BalanzaGUI(ttk.Window):
                     break
             
             # APLICAR ESTILOS
+            PRIMARY = "#2563eb"
+            BG_CARD = "#ffffff"
+            TEXT_MAIN = "#1e293b"
+            TEXT_MUTED = "#64748b"
             if s_name == selected:
                 # == SELECCIONADO ==
-                # Marco
                 try: widget.configure(bootstyle="primary") 
                 except: pass
-                
-                # Fondo interno (Simulado con labels pq Frame bg es dificil en ttk)
-                # El truco es usar un Labelframe o style custom, pero aqui iteramos
-                
-                if lbl_name:
-                    lbl_name.configure(background=COLOR_SELECTED_BG, foreground=COLOR_SELECTED_FG)
-                
-                if lbl_status:
-                    lbl_status.configure(
-                        text="SELECIONADO", 
-                        background=COLOR_SELECTED_BG, 
-                        foreground=COLOR_SELECTED_FG,
-                        font=("Segoe UI", 12, "bold")
-                    )
-                
-                # Hack para el background del frame contenedor
-                # Si content_frame es un TFrame, el background depende del style.
-                # Configuramos un style dinamico o usamos bootstyle="primary" inverse
                 if content_frame:
                     try: content_frame.configure(bootstyle="primary")
                     except: pass
-
+                for sub in content_frame.winfo_children():
+                    if isinstance(sub, ttk.Label):
+                        # Aplica estilos personalizados según el tipo de label
+                        if hasattr(sub, 'tag') and sub.tag == "name":
+                            sub.configure(style='SelectedSensor.TLabel')
+                        elif hasattr(sub, 'tag') and sub.tag == "serial":
+                            sub.configure(style='SelectedSensorSerial.TLabel')
+                        elif hasattr(sub, 'tag') and sub.tag == "status":
+                            sub.configure(style='SelectedSensorStatus.TLabel')
+                if lbl_status:
+                    lbl_status.configure(text="SELECIONADO")
             else:
                 # == NORMAL / NO SELECCIONADO ==
-                # Marco
                 try: widget.configure(bootstyle="secondary") 
                 except: pass
-                
-                if lbl_name:
-                    lbl_name.configure(background=COLOR_NORMAL_BG, foreground=COLOR_NORMAL_FG)
-                
-                if lbl_status:
-                    lbl_status.configure(
-                        text="Clicar para selecionar", 
-                        background=COLOR_NORMAL_BG, 
-                        foreground=COLOR_NORMAL_SUB,
-                        font=("Segoe UI", 12)
-                    )
-                    
                 if content_frame:
                     try: content_frame.configure(bootstyle="default")
                     except: pass
+                for sub in content_frame.winfo_children():
+                    if isinstance(sub, ttk.Label):
+                        # Aplica estilos normales
+                        if hasattr(sub, 'tag') and sub.tag == "name":
+                            sub.configure(background=BG_CARD, foreground=TEXT_MAIN, font=("Segoe UI", 26, "bold"))
+                        elif hasattr(sub, 'tag') and sub.tag == "serial":
+                            sub.configure(background=BG_CARD, foreground=TEXT_MUTED, font=("Segoe UI", 14))
+                        elif hasattr(sub, 'tag') and sub.tag == "status":
+                            sub.configure(background=BG_CARD, foreground=TEXT_MUTED, font=("Segoe UI", 12))
+                if lbl_status:
+                    lbl_status.configure(text="Clicar para selecionar")
     
     def _open_calibration_wizard(self, current_config, sensor_name_override=None, config_dialog=None):
         """
@@ -2293,8 +2345,8 @@ class BalanzaGUI(ttk.Window):
         
         # Icono y título
         ttk.Label(header_inner, text="ASSISTENTE DE CALIBRAÇÃO", 
-                  font=("Segoe UI", 22, "bold"), 
-                  bootstyle="inverse-primary").pack(side=LEFT)
+              font=("Segoe UI", 22, "bold"), 
+              foreground="#1e293b").pack(side=LEFT)
         
         # Botón cerrar grande
         btn_close = ttk.Button(header_inner, text="FECHAR", 
@@ -2377,10 +2429,6 @@ class BalanzaGUI(ttk.Window):
         
         # Separador
         ttk.Separator(left).pack(fill=X, pady=15)
-        
-        # Table Header
-        ttk.Label(left, text="Pontos Capturados:", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0, 5))
-        
         h_frame = ttk.Frame(left, bootstyle="dark", padding=8)
         h_frame.pack(fill=X)
         h_frame.columnconfigure(0, weight=1)

@@ -257,9 +257,15 @@ class MSCLDriver(ISistemaPesaje):
             node_id = cfg['id']
             channel = cfg.get('ch', 'ch1')
             
+            # Ignorar nodos con ID 0 o inválidos (no configurados)
+            if node_id <= 0:
+                self._log("INFO", f"  Saltando {key}: ID no configurado (ID={node_id})")
+                continue
+            
             self._expected_node_ids.add(node_id)
             self._node_status[node_id] = NodeStatus(node_id=node_id, channel=channel)
             self._value_cache[node_id] = deque(maxlen=self.VALUE_CACHE_SIZE)
+            self._log("INFO", f"  Nodo registrado: {key} -> ID={node_id}, Canal={channel}")
         
         self._log("INFO", f"Configuración: {len(self._expected_node_ids)} nodos esperados: {self._expected_node_ids}")
     
