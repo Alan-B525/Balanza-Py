@@ -61,7 +61,7 @@ class CalibrationManager:
         if serial and str(serial).strip():
             self.load_points()
         else:
-            print(f"[CALIB] Advertencia: serial no definido o vacío, no se cargará archivo de calibración.")
+            self._log_to_file("Advertencia: serial no definido o vacío, no se cargará archivo de calibración.")
     def _get_calib_path(self):
         if self.serial and str(self.serial).strip():
             return os.path.join(self._calib_dir, f"{self.serial}.json")
@@ -77,19 +77,28 @@ class CalibrationManager:
 
     def load_points(self):
         path = self._get_calib_path()
-        print(f"[CALIB] Intentando cargar puntos de calibración desde: {path}")
+        self._log_to_file(f"Intentando cargar puntos de calibración desde: {path}")
         if not path or not os.path.exists(path):
-            print(f"[CALIB] Archivo de calibración no existe: {path}")
+            self._log_to_file(f"Archivo de calibración no existe: {path}")
             return
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            print(f"[CALIB] Datos crudos cargados: {data}")
+            self._log_to_file(f"Datos crudos cargados: {data}")
             self.points = [CalibrationPoint(**d) for d in data]
-            print(f"[CALIB] Puntos cargados: {self.points}")
+            self._log_to_file(f"Puntos cargados: {self.points}")
         except Exception as e:
-            print(f"[CALIB] Error al cargar puntos: {e}")
+            self._log_to_file(f"Error al cargar puntos: {e}")
             self.points = []
+    def _log_to_file(self, message):
+        import datetime, os
+        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'balanza.log')
+        timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        try:
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(f"[{timestamp}] {message}\n")
+        except Exception:
+            pass
 
     def clear_points(self):
         self.points = []

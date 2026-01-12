@@ -41,6 +41,16 @@ class DataProcessor:
     - Mapeo de nodos a posiciones logicas
     - Deteccion de desconexion de sensores con eventos
     """
+
+    def _log_to_file(self, message):
+        import datetime, os
+        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'balanza.log')
+        timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        try:
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(f"[{timestamp}] [DATA_PROCESSOR] {message}\n")
+        except Exception:
+            pass
     
     MEDIAN_WINDOW_SIZE = 5
     EMA_ALPHA = 0.3
@@ -82,6 +92,7 @@ class DataProcessor:
             self._tares[node_id] = 0.0
             self._last_seen[node_id] = 0.0
             self._node_connected_state[node_id] = False
+            self._log_to_file(f"Inicializado nodo {nombre_logico} (ID={node_id})")
     
     def _apply_median_filter(self, node_id: int, value: float) -> float:
         if node_id not in self._median_buffers:

@@ -24,12 +24,27 @@ try:
     MATPLOTLIB_AVAILABLE = True
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
-    print("[GUI] Warning: Matplotlib no disponible para gráficos de calibración")
+    # Mensaje de advertencia eliminado (solo log si es necesario)
+
+
+BASE_WIDTH = 1280
+BASE_HEIGHT = 800
 
 class BalanzaGUI(ttk.Window):
-    
-    BASE_WIDTH = 1280
-    BASE_HEIGHT = 800
+    def _load_calibration_session(self, parent=None):
+        """Carga los puntos de calibración desde disco y refresca la UI."""
+        try:
+            if hasattr(self, '_cal_manager') and self._cal_manager:
+                self._cal_manager.load_points()
+                self.log_message("Sesión de calibración cargada desde disco.")
+                if hasattr(self, '_refresh_cal_wizard_table_ui'):
+                    self._refresh_cal_wizard_table_ui()
+                if hasattr(self, '_update_cal_wizard_graph'):
+                    self._update_cal_wizard_graph()
+            else:
+                self.log_message("No existe un gestor de calibración activo.")
+        except Exception as e:
+            self.log_message(f"Error cargando sesión de calibración: {e}")
 
     def __init__(self, data_queue, command_queue, data_processor=None):
         super().__init__(themename=THEME_NAME)
@@ -88,8 +103,8 @@ class BalanzaGUI(ttk.Window):
     def _calculate_scale_factors(self, screen_width, screen_height):
         """Calcula factores de escala basados en la resolución de pantalla."""
         # Factor de escala (relativo a la resolución base 1280x800)
-        self.scale_x = screen_width / self.BASE_WIDTH
-        self.scale_y = screen_height / self.BASE_HEIGHT
+        self.scale_x = screen_width / BASE_WIDTH
+        self.scale_y = screen_height / BASE_HEIGHT
         
         # Factor de escala general (promedio geométrico para mantener proporciones)
         self.scale = min(self.scale_x, self.scale_y)
@@ -98,9 +113,9 @@ class BalanzaGUI(ttk.Window):
         # Limitar entre 0.8 y 1.5 para mantener legibilidad
         self.font_scale = max(0.8, min(1.5, self.scale))
         
-        # Log para debug
-        print(f"[GUI] Resolución detectada: {screen_width}x{screen_height}")
-        print(f"[GUI] Factor de escala: {self.scale:.2f} (fuentes: {self.font_scale:.2f})")
+        # Log en archivo
+        self.log_message(f"[GUI] Resolución detectada: {screen_width}x{screen_height}")
+        self.log_message(f"[GUI] Factor de escala: {self.scale:.2f} (fuentes: {self.font_scale:.2f})")
     
     def scaled(self, value):
         """Escala un valor numérico según la resolución."""
@@ -230,7 +245,7 @@ class BalanzaGUI(ttk.Window):
                     pil_img_resized = pil_img.resize((w_size, height), resample_method)
                     return ImageTk.PhotoImage(pil_img_resized)
                 except Exception as e:
-                    print(f"Erro carregando logo {path}: {e}")
+                    self.log_message(f"Erro carregando logo {path}: {e}")
             return None
         
         # Cargar logo izquierdo
@@ -555,14 +570,15 @@ class BalanzaGUI(ttk.Window):
             self.after(50, self.actualizar_gui)
 
     def log_message(self, message):
-        # Acceder al widget de texto interno para evitar error de 'unknown option -state'
-        self.log_text.text.configure(state='normal')
-        # Add timestamp
-        import datetime
-        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-        self.log_text.text.insert(END, f"[{timestamp}] {message}\n")
-        self.log_text.text.see(END)
-        self.log_text.text.configure(state='disabled')
+        """Guarda mensajes y errores en el archivo log."""
+        import datetime, os
+        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'balanza.log')
+        timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        try:
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(f"[{timestamp}] {message}\n")
+        except Exception:
+            pass
 
     def _update_display(self, data):
         # Guardar datos para actualización cuando cambie modo decimales
@@ -713,91 +729,89 @@ class BalanzaGUI(ttk.Window):
         def press_clear():
             kp_value.set("")
         
-        def close_keypad():
-            self._active_keypad = None
-            keypad.grab_release()
-            keypad.destroy()
-        
-        def confirm_and_close():
-            val = kp_value.get()
+        def actualizar_gui(self):
+            """Consume mensajes de la cola y actualiza la UI (sin registro visual)."""
             try:
-                entry_widget.delete(0, tk.END)
-                entry_widget.insert(0, val)
-            except:
+                while True:
+                    msg = self.data_queue.get_nowait()
+                    if msg['type'] == 'DATA':
+                        data = msg['payload']
+                        self._last_sensor_data = data
+                        self._update_display(data)
+                    elif msg['type'] == 'STATUS':
+                        self._update_status(msg['payload'])
+                    elif msg['type'] == 'ERROR':
+                        self.show_alert("Erro", msg['payload'], "error")
+                        self.log_message(f"[ERRO] {msg['payload']}")
+                    elif msg['type'] == 'LOG':
+                        self.log_message(msg['payload'])
+                    elif msg['type'] == 'CONNECTION_PROGRESS':
+                        payload = msg['payload']
+                        self._update_connection_progress(payload)
+                    elif msg['type'] == 'SENSOR_DISCONNECT':
+                        payload = msg['payload']
+                        self._show_sensor_disconnect_dialog(payload)
+                    elif msg['type'] == 'SENSOR_RECONNECTED':
+                        payload = msg['payload']
+                        self._handle_sensor_reconnected(payload)
+                    elif msg['type'] == 'RECONNECT_PROGRESS':
+                        payload = msg['payload']
+                        self._update_reconnect_progress(payload)
+                    elif msg['type'] == 'RECONNECT_FAILED':
+                        payload = msg['payload']
+                        self._handle_reconnect_failed(payload)
+                    elif msg['type'] == 'DISCOVERED_NODES':
+                        payload = msg['payload']
+                        self._handle_discovered_nodes(payload)
+            except queue.Empty:
                 pass
-            try:
-                var_name = entry_widget.cget('textvariable')
-                if var_name:
-                    entry_widget.nametowidget(var_name).set(val)
-            except:
-                pass
-            self._active_keypad = None
-            keypad.grab_release()
-            keypad.destroy()
-        
-        # Cerrar con X de la ventana
-        keypad.protocol("WM_DELETE_WINDOW", close_keypad)
-        
-        # Frame principal con padding
-        main = ttk.Frame(keypad, padding=20)
-        main.pack(fill=BOTH, expand=YES, padx=4, pady=4)
-        
-        # Display
-        display = ttk.Entry(main, textvariable=kp_value, font=("Consolas", 36), 
-                           justify="center", state="readonly")
-        display.pack(fill=X, pady=(0, 20), ipady=12)
-        
-        # Frame para botones
-        all_btns = ttk.Frame(main)
-        all_btns.pack(fill=BOTH, expand=YES)
-        
+            finally:
+                self.after(50, self.actualizar_gui)
+        # Definir el frame contenedor de los botones
+        all_btns = ttk.Frame(keypad)
+        all_btns.place(relx=0.5, rely=0.5, anchor="center", width=400, height=500)
         for i in range(5):
             all_btns.rowconfigure(i, weight=1)
-        for i in range(3):
-            all_btns.columnconfigure(i, weight=1)
-        
-        # Padding de botones
-        pad_num = (25, 22)
-        pad_act = (20, 22)
-        
+        for j in range(3):
+            all_btns.columnconfigure(j, weight=1)
+
+        pad_num = (18, 18)
+        pad_act = (18, 22)
+
+        def confirm_and_close():
+            entry_widget.delete(0, tk.END)
+            entry_widget.insert(0, kp_value.get())
+            try:
+                keypad.grab_release()
+            except:
+                pass
+            keypad.destroy()
+            self._active_keypad = None
+
         # Fila 0: 7 8 9
-        ttk.Button(all_btns, text="7", command=lambda: press_digit("7"), 
-                  bootstyle="light", padding=pad_num).grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
-        ttk.Button(all_btns, text="8", command=lambda: press_digit("8"), 
-                  bootstyle="light", padding=pad_num).grid(row=0, column=1, sticky="nsew", padx=4, pady=4)
-        ttk.Button(all_btns, text="9", command=lambda: press_digit("9"), 
-                  bootstyle="light", padding=pad_num).grid(row=0, column=2, sticky="nsew", padx=4, pady=4)
-        
+        ttk.Button(all_btns, text="7", command=lambda: press_digit("7"), bootstyle="light", padding=pad_num).grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+        ttk.Button(all_btns, text="8", command=lambda: press_digit("8"), bootstyle="light", padding=pad_num).grid(row=0, column=1, sticky="nsew", padx=4, pady=4)
+        ttk.Button(all_btns, text="9", command=lambda: press_digit("9"), bootstyle="light", padding=pad_num).grid(row=0, column=2, sticky="nsew", padx=4, pady=4)
+
         # Fila 1: 4 5 6
-        ttk.Button(all_btns, text="4", command=lambda: press_digit("4"), 
-                  bootstyle="light", padding=pad_num).grid(row=1, column=0, sticky="nsew", padx=4, pady=4)
-        ttk.Button(all_btns, text="5", command=lambda: press_digit("5"), 
-                  bootstyle="light", padding=pad_num).grid(row=1, column=1, sticky="nsew", padx=4, pady=4)
-        ttk.Button(all_btns, text="6", command=lambda: press_digit("6"), 
-                  bootstyle="light", padding=pad_num).grid(row=1, column=2, sticky="nsew", padx=4, pady=4)
-        
+        ttk.Button(all_btns, text="4", command=lambda: press_digit("4"), bootstyle="light", padding=pad_num).grid(row=1, column=0, sticky="nsew", padx=4, pady=4)
+        ttk.Button(all_btns, text="5", command=lambda: press_digit("5"), bootstyle="light", padding=pad_num).grid(row=1, column=1, sticky="nsew", padx=4, pady=4)
+        ttk.Button(all_btns, text="6", command=lambda: press_digit("6"), bootstyle="light", padding=pad_num).grid(row=1, column=2, sticky="nsew", padx=4, pady=4)
+
         # Fila 2: 1 2 3
-        ttk.Button(all_btns, text="1", command=lambda: press_digit("1"), 
-                  bootstyle="light", padding=pad_num).grid(row=2, column=0, sticky="nsew", padx=4, pady=4)
-        ttk.Button(all_btns, text="2", command=lambda: press_digit("2"), 
-                  bootstyle="light", padding=pad_num).grid(row=2, column=1, sticky="nsew", padx=4, pady=4)
-        ttk.Button(all_btns, text="3", command=lambda: press_digit("3"), 
-                  bootstyle="light", padding=pad_num).grid(row=2, column=2, sticky="nsew", padx=4, pady=4)
-        
+        ttk.Button(all_btns, text="1", command=lambda: press_digit("1"), bootstyle="light", padding=pad_num).grid(row=2, column=0, sticky="nsew", padx=4, pady=4)
+        ttk.Button(all_btns, text="2", command=lambda: press_digit("2"), bootstyle="light", padding=pad_num).grid(row=2, column=1, sticky="nsew", padx=4, pady=4)
+        ttk.Button(all_btns, text="3", command=lambda: press_digit("3"), bootstyle="light", padding=pad_num).grid(row=2, column=2, sticky="nsew", padx=4, pady=4)
+
         # Fila 3: . 0 DEL
-        ttk.Button(all_btns, text=".", command=lambda: press_digit("."), 
-                  bootstyle="secondary", padding=pad_num).grid(row=3, column=0, sticky="nsew", padx=4, pady=4)
-        ttk.Button(all_btns, text="0", command=lambda: press_digit("0"), 
-                  bootstyle="light", padding=pad_num).grid(row=3, column=1, sticky="nsew", padx=4, pady=4)
-        ttk.Button(all_btns, text="DEL", command=press_backspace, 
-                  bootstyle="warning", padding=pad_act).grid(row=3, column=2, sticky="nsew", padx=4, pady=4)
-        
+        ttk.Button(all_btns, text=".", command=lambda: press_digit("."), bootstyle="secondary", padding=pad_num).grid(row=3, column=0, sticky="nsew", padx=4, pady=4)
+        ttk.Button(all_btns, text="0", command=lambda: press_digit("0"), bootstyle="light", padding=pad_num).grid(row=3, column=1, sticky="nsew", padx=4, pady=4)
+        ttk.Button(all_btns, text="DEL", command=press_backspace, bootstyle="warning", padding=pad_act).grid(row=3, column=2, sticky="nsew", padx=4, pady=4)
+
         # Fila 4: - | OK (OK ocupa 2 columnas)
-        ttk.Button(all_btns, text="-", command=lambda: press_digit("-"), 
-              bootstyle="secondary", padding=pad_act).grid(row=4, column=0, sticky="nsew", padx=4, pady=4)
-        ttk.Button(all_btns, text="OK", command=confirm_and_close, 
-              bootstyle="success", padding=pad_act).grid(row=4, column=1, columnspan=2, sticky="nsew", padx=4, pady=4)
-        
+        ttk.Button(all_btns, text="-", command=lambda: press_digit("-"), bootstyle="secondary", padding=pad_act).grid(row=4, column=0, sticky="nsew", padx=4, pady=4)
+        ttk.Button(all_btns, text="OK", command=confirm_and_close, bootstyle="success", padding=pad_act).grid(row=4, column=1, columnspan=2, sticky="nsew", padx=4, pady=4)
+
         # El teclado captura los eventos (importante para que funcione sobre diálogos con grab)
         keypad.grab_set()
         keypad.focus_set()
@@ -1020,16 +1034,13 @@ class BalanzaGUI(ttk.Window):
         target.wait_window(dialog)
 
     def reset_tare(self):
-        print("DEBUG: Botão Limpar Tara pressionado")
         self.log_message("Solicitando limpar tara...")
         # Usar after para permitir que a UI seja atualizada
         self.after(100, self._show_reset_confirmation)
 
     def _show_reset_confirmation(self):
         resposta = self.show_large_confirmation("Confirmação", "Tem certeza que deseja limpar a tara?")
-        
-        print(f"DEBUG: Resposta diálogo: {resposta}")
-        
+        self.log_message(f"Resposta diálogo: {resposta}")
         if resposta:
             self.command_queue.put({'cmd': 'RESET_TARE'})
             self.log_message("Tara limpa com sucesso.")
@@ -1903,8 +1914,14 @@ class BalanzaGUI(ttk.Window):
                         self.driver.update_nodes_config(new_config["nodes"])
                     except Exception as e:
                         print(f"[GUI] Aviso: No se pudo actualizar driver: {e}")
+
                 
-                self.show_alert("Salvo", "Configuração salva e aplicada.", "success", parent=dialog)
+                # Mostrar el mensaje de éxito anclado a la ventana de configuración
+                from tkinter import messagebox
+                messagebox.showinfo("Salvo", "Configuração salva e aplicada.", parent=dialog)
+                # Asegurar que la ventana de configuración permanezca al frente y con foco
+                dialog.lift()
+                dialog.focus_force()
             except Exception as e:
                 try:
                     dialog.grab_release()
@@ -2088,16 +2105,57 @@ class BalanzaGUI(ttk.Window):
             btn_start.configure(style='Large.warning.TButton') 
             btn_start.pack(side=LEFT, fill=X, expand=YES, padx=(0, self.scaled(6)), ipady=self.scaled(8))
             
-            # Botão CARREGAR
-            btn_load = ttk.Button(
-                action_frame, 
-                text=" HISTÓRICO / CARREGAR ",
-                bootstyle="info", 
-                command=lambda: self._load_calibration_session(parent)
+            # Botón EXPORTAR CURVAS (CSV)
+            def export_curves_csv():
+                import os, json, csv
+                from tkinter import filedialog
+                calib_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'calibrations')
+                files = [f for f in os.listdir(calib_dir) if f.endswith('.json')]
+                data = {}
+                pesos = set()
+                for fname in files:
+                    serial = fname.replace('.json','')
+                    with open(os.path.join(calib_dir, fname), 'r', encoding='utf-8') as f:
+                        puntos = json.load(f)
+                        for p in puntos:
+                            pesos.add(p['weight'])
+                        data[serial] = {p['weight']: p['reading'] for p in puntos}
+                pesos = sorted(pesos)
+                serials = sorted(data.keys())
+                # Diálogo para elegir ubicación y nombre del archivo
+                out_path = filedialog.asksaveasfilename(
+                    title="Exportar curvas de calibración",
+                    defaultextension=".csv",
+                    filetypes=[("Archivos CSV", "*.csv")],
+                    initialdir=calib_dir,
+                    initialfile="curvas_celdas.csv"
+                )
+                if not out_path:
+                    self.log_message("Exportación cancelada por el usuario.")
+                    return
+                with open(out_path, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(['Carga Real'] + serials)
+                    for peso in pesos:
+                        row = [peso] + [data[s].get(peso, '') for s in serials]
+                        writer.writerow(row)
+                self.log_message(f"Curvas exportadas a {out_path}")
+                # Restaurar ventana de configuración si existe
+                if config_dialog:
+                    try:
+                        config_dialog.lift()
+                        config_dialog.focus_force()
+                    except Exception:
+                        pass
+
+            btn_export = ttk.Button(
+                action_frame,
+                text=" EXPORTAR CURVAS (CSV) ",
+                bootstyle="info",
+                command=export_curves_csv
             )
-            # Aplicamos estilo grande tambien aqui
-            btn_load.configure(style='Large.info.TButton')
-            btn_load.pack(side=LEFT, fill=X, expand=YES, padx=(self.scaled(6), 0), ipady=self.scaled(8))
+            btn_export.configure(style='Large.info.TButton')
+            btn_export.pack(side=LEFT, fill=X, expand=YES, padx=(self.scaled(6), 0), ipady=self.scaled(8))
         
         # === TEXTO DE AYUDA LIMPIO (Removido a pedido) ===
         # help_text = (...)
@@ -2195,7 +2253,7 @@ class BalanzaGUI(ttk.Window):
         """
         # Permitir abrir el asistente aunque no haya data_processor conectado
         if not self.data_processor:
-            print("[DEBUG] DataProcessor não disponível, pero se permite abrir el asistente para edición offline.")
+            self.log_message("DataProcessor no disponible, se permite abrir el asistente para edición offline.")
             # Crear un mock mínimo para permitir cargar puntos
             class DummyDP:
                 def get_last_total_raw(self):
@@ -2223,7 +2281,7 @@ class BalanzaGUI(ttk.Window):
             except Exception:
                 pass
 
-        print(f"[DEBUG] Abriendo asistente calibración para celda_id={celda_id}, serial={serial}")
+        self.log_message(f"Abriendo asistente calibración para celda_id={celda_id}, serial={serial}")
         self._cal_manager = CalibrationManager(self.data_processor, celda_id=celda_id, serial=serial)
         # Forzar recarga de puntos desde disco
         self._cal_manager.load_points()
@@ -2231,13 +2289,13 @@ class BalanzaGUI(ttk.Window):
         try:
             path = self._cal_manager._get_calib_path()
             if path and os.path.exists(path):
-                print(f"[DEBUG] Archivo de calibración encontrado: {path}")
+                self.log_message(f"Archivo de calibración encontrado: {path}")
             else:
-                print(f"[DEBUG] Archivo de calibración NO encontrado para celda_id={celda_id}, serial={serial}")
+                self.log_message(f"Archivo de calibración NO encontrado para celda_id={celda_id}, serial={serial}")
         except Exception as e:
-            print(f"[DEBUG] Error comprobando archivo calibración: {e}")
+            self.log_message(f"Error comprobando archivo calibración: {e}")
         # Debug: imprimir puntos cargados
-        print(f"[DEBUG] Puntos cargados: {self._cal_manager.get_points()}")
+        self.log_message(f"Puntos cargados: {self._cal_manager.get_points()}")
         # ...existing code...
         # (mover refresco de tabla y gráfico al final del método, después de crear los widgets)
 
@@ -2551,7 +2609,7 @@ class BalanzaGUI(ttk.Window):
                 # Dibujo diferido para evitar bloqueo
                 wizard.after(100, lambda: self._cal_canvas.draw_idle() if self._cal_wizard_active else None)
             except Exception as e:
-                print(f"[GUI] Error matplotlib: {e}")
+                self.log_message(f"Error matplotlib: {e}")
                 ttk.Label(g_frame, text="Erro ao inicializar gráfico", 
                           font=("Segoe UI", 12)).pack(expand=YES)
         else:
@@ -2726,7 +2784,7 @@ class BalanzaGUI(ttk.Window):
             self._cal_ax.set_facecolor('#ffffff')
 
             points = self._cal_manager.get_points()
-            print(f"[DEBUG] Graficando puntos: {points}")
+            # self.log_message(f"Graficando puntos: {points}")
             if not points:
                 self._cal_ax.set_title("Sem dados", fontsize=11, color='gray')
                 self._cal_canvas.draw_idle()
@@ -2737,11 +2795,11 @@ class BalanzaGUI(ttk.Window):
             x = np.array([p[1] for p in sorted_points])
             y = np.array([p[0] for p in sorted_points])
 
-            print(f"[DEBUG] x (lectura): {x}")
-            print(f"[DEBUG] y (peso): {y}")
+            # self.log_message(f"x (lectura): {x}")
+            # self.log_message(f"y (peso): {y}")
 
             # Scatter - puntos más grandes y visibles
-            self._cal_ax.scatter(x, y, c='#2563eb', s=80, zorder=5, edgecolors='white', linewidth=2)
+            self._cal_ax.scatter(x, y, c='#2563eb', s=80, zorder=5, edgecolors='white', linewidth=1)
 
             # Interpolación Lineal por Segmentos (unir puntos con líneas rectas)
             if len(x) >= 2:
@@ -2755,4 +2813,4 @@ class BalanzaGUI(ttk.Window):
 
             self._cal_canvas.draw_idle()
         except Exception as e:
-            print(f"[GUI] Erro atualizando gráfico: {e}")
+            self.log_message(f"Erro atualizando gráfico: {e}")

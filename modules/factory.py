@@ -23,7 +23,14 @@ def criar_sistema_pesaje(modo: str, nodos_config: Dict[str, Any], use_sensor_con
         ImportError: Se MSCL nao estiver disponivel
     """
     from .sensor_driver import MSCLDriver
-    print("[FACTORY] Iniciando MSCLDriver (modo producao)")
+    import datetime, os
+    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'balanza.log')
+    timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    try:
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(f"[{timestamp}] [FACTORY] Iniciando MSCLDriver (modo producao)\n")
+    except Exception:
+        pass
     return MSCLDriver(nodos_config, use_sensor_config=use_sensor_config)
 
 

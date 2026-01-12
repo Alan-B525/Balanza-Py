@@ -289,14 +289,20 @@ class MSCLDriver(ISistemaPesaje):
     # =========================================================================
     
     def _log(self, level: str, message: str) -> None:
-        """Log interno con timestamp."""
-        timestamp = time.strftime("%H:%M:%S")
+        """Log interno con timestamp. Guarda en balanza.log en la ruta del ejecutable."""
+        import datetime, os
+        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'balanza.log')
+        timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         # Sanitizar mensaje para evitar errores de codificación con surrogates
         try:
             safe_message = str(message).encode('utf-8', errors='replace').decode('utf-8')
         except Exception:
             safe_message = repr(message)
-        print(f"[{timestamp}] [{level}] [MSCL-DRIVER] {safe_message}")
+        try:
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(f"[{timestamp}] [{level}] [MSCL-DRIVER] {safe_message}\n")
+        except Exception:
+            pass
     
     # =========================================================================
     # GESTIÓN DE ESTADO

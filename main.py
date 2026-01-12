@@ -65,22 +65,32 @@ def load_custom_settings():
 
 def show_startup_info():
     """Mostra informacoes de inicializacao."""
-    print("=" * 60)
-    print("  BALANZA-PY - Sistema de Pesagem Industrial")
-    print("=" * 60)
-    print(f"  Modo de Execucao: {ACTIVE_MODE}")
-    print(f"  Usar config de nodo (SensorConnect): {USE_SENSOR_CONFIG}")
-    
-    # Verificar MSCL
+    # Toda la información se guarda en el log, no se imprime en consola
+    mscl_info = check_mscl_installation()
+    import datetime
+    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'balanza.log')
+    timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    lines = [
+        "=" * 60,
+        "  BALANZA-PY - Sistema de Pesagem Industrial",
+        "=" * 60,
+        f"  Modo de Execucao: {ACTIVE_MODE}",
+        f"  Usar config de nodo (SensorConnect): {USE_SENSOR_CONFIG}",
+    ]
     mscl_info = check_mscl_installation()
     if mscl_info["installed"]:
-        print(f"  MSCL: Instalado")
+        lines.append(f"  MSCL: Instalado")
         if mscl_info["version"]:
-            print(f"  MSCL Versao: {mscl_info['version']}")
+            lines.append(f"  Versão: {mscl_info['version']}")
     else:
-        print(f"  MSCL: Nao encontrado")
-    
-    print("=" * 60)
+        lines.append(f"  MSCL: Nao encontrado")
+    lines.append("=" * 60)
+    try:
+        with open(log_path, 'a', encoding='utf-8') as f:
+            for line in lines:
+                f.write(f"[{timestamp}] {line}\n")
+    except Exception:
+        pass
 
 
 def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
@@ -324,8 +334,22 @@ def main():
     command_queue = queue.Queue()
     procesador = DataProcessor(ACTIVE_NODOS)
     if procesador.load_tara_state():
-        print("[INFO] Estado de tara carregado de app_state.json")
-    print(f"[INFO] Criando sistema de pesagem no modo: {ACTIVE_MODE}")
+        import datetime, os
+        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'balanza.log')
+        timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        try:
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(f"[{timestamp}] [INFO] Estado de tara carregado de app_state.json\n")
+        except Exception:
+            pass
+    import datetime, os
+    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'balanza.log')
+    timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    try:
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(f"[{timestamp}] [INFO] Criando sistema de pesagem no modo: {ACTIVE_MODE}\n")
+    except Exception:
+        pass
     sistema_pesaje = criar_sistema_pesaje(ACTIVE_MODE, ACTIVE_NODOS, use_sensor_config=USE_SENSOR_CONFIG)
     backend_thread = threading.Thread(
         target=hilo_adquisicion,
