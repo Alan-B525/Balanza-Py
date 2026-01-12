@@ -20,29 +20,12 @@ ACTIVE_MODE = MODO_EJECUCION
 USE_SENSOR_CONFIG = False
 
 
-
-def get_settings_dir():
-    """Devuelve la ruta a la carpeta de configuración en Documents."""
-    import os
-    from pathlib import Path
-    # Carpeta en Documents
-    documents = str(Path.home() / "Documents")
-    settings_dir = os.path.join(documents, "BalanzaPySettings")
-    if not os.path.exists(settings_dir):
-        try:
-            os.makedirs(settings_dir, exist_ok=True)
-        except Exception as e:
-            print(f"[ERRO] No se pudo crear la carpeta de configuración: {e}")
-    return settings_dir
-
-def get_settings_path():
-    return os.path.join(get_settings_dir(), "settings.json")
-
 def load_custom_settings():
-    """Carga configuracion de settings.json desde Documents/BalanzaPySettings."""
+    """Carrega configuracao de settings.json se existir."""
     global ACTIVE_COM, ACTIVE_NODOS, ACTIVE_MODE, USE_SENSOR_CONFIG
     import json
-    settings_path = get_settings_path()
+    
+    settings_path = os.path.join(current_dir, "settings.json")
     if os.path.exists(settings_path):
         try:
             with open(settings_path, 'r', encoding='utf-8') as f:
@@ -63,15 +46,16 @@ def load_custom_settings():
                 ACTIVE_COM = f"{ip}:{port}"
             else:
                 ACTIVE_COM = settings.get("serial_port", DEFAULT_COM)
+                
             # Configurar Nos
             if "nodes" in settings:
                 ACTIVE_NODOS = settings["nodes"]
-
+                
             print(f"[INFO] Configuracao carregada de settings.json")
             print(f"       Modo: {ACTIVE_MODE}")
             print(f"       Porta: {ACTIVE_COM}")
             print(f"       Nos: {len(ACTIVE_NODOS)}")
-
+            
         except Exception as e:
             print(f"[ERRO] Erro carregando settings.json: {e}")
 

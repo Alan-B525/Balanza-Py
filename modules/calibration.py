@@ -53,16 +53,9 @@ class CalibrationManager:
         self._cancel = False
         self.celda_id = celda_id
         self.serial = serial
-        # Guardar calibraciones en Documents/BalanzaPySettings/calibrations
-        from pathlib import Path
-        documents = str(Path.home() / "Documents")
-        settings_dir = os.path.join(documents, "BalanzaPySettings")
-        self._calib_dir = os.path.join(settings_dir, "calibrations")
+        self._calib_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "calibrations")
         if not os.path.exists(self._calib_dir):
-            try:
-                os.makedirs(self._calib_dir, exist_ok=True)
-            except Exception as e:
-                print(f"[ERRO] No se pudo crear la carpeta de calibraciones: {e}")
+            os.makedirs(self._calib_dir)
         # Cargar puntos si hay celda y serial
         if celda_id and serial:
             self.load_points()

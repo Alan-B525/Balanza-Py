@@ -2502,9 +2502,9 @@ class BalanzaGUI(ttk.Window):
         h_frame.columnconfigure(1, weight=1)
         h_frame.columnconfigure(2, weight=0)
         ttk.Label(h_frame, text="PESO (t)", font=("Segoe UI", 10, "bold"), 
-              bootstyle="inverse-dark").grid(row=0, column=0)
+            bootstyle="inverse-dark", anchor="center").grid(row=0, column=0, sticky="ew")
         ttk.Label(h_frame, text="LEITURA", font=("Segoe UI", 10, "bold"),
-              bootstyle="inverse-dark").grid(row=0, column=1)
+            bootstyle="inverse-dark", anchor="center").grid(row=0, column=1, sticky="ew")
         # Columna vacía para alinear con botones de eliminar (sin texto)
 
         # Scrollable table
@@ -2641,14 +2641,22 @@ class BalanzaGUI(ttk.Window):
             row.columnconfigure(1, weight=1)
             row.columnconfigure(2, weight=0)
 
-            # Formato: 3 decimales si no es entero, si es entero sin decimales
-            def fmt(val):
+            # Peso: sin decimales si es entero, lectura: 3 decimales si no es entero
+            def fmt_peso(val):
                 if isinstance(val, float) and val.is_integer():
                     return f"{int(val)}"
+                if isinstance(val, int):
+                    return str(val)
+                return f"{val:.3f}"
+            def fmt_lec(val):
+                if isinstance(val, float) and val.is_integer():
+                    return f"{int(val)}"
+                if isinstance(val, int):
+                    return str(val)
                 return f"{val:.3f}"
 
-            v_w = tk.StringVar(value=fmt(peso))
-            v_r = tk.StringVar(value=fmt(lectura))
+            v_w = tk.StringVar(value=fmt_peso(peso))
+            v_r = tk.StringVar(value=fmt_lec(lectura))
             
             # Callback para actualizar modelo
             def update_model(idx=i, var=v_w, field='w'):
