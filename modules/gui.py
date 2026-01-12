@@ -1,3 +1,5 @@
+
+import os
 import queue
 import threading
 import time
@@ -1145,9 +1147,9 @@ class BalanzaGUI(ttk.Window):
             self.log_message(f"Continuando sin sensor {nombre} (ID: {node_id})")
         # Estilo para labels seleccionados en calibración
         sf = self.scaled_font
-        self.style.configure('SelectedSensor.TLabel', background=PRIMARY, foreground='white', font=(FONT_MAIN, sf(26), 'bold'))
-        self.style.configure('SelectedSensorSerial.TLabel', background=PRIMARY, foreground='white', font=(FONT_MAIN, sf(14)))
-        self.style.configure('SelectedSensorStatus.TLabel', background=PRIMARY, foreground='white', font=(FONT_MAIN, sf(12), 'bold'))
+        self.style.configure('SelectedSensor.TLabel', background=PRIMARY, foreground='white', font=("Segoe UI", sf(26), 'bold'))
+        self.style.configure('SelectedSensorSerial.TLabel', background=PRIMARY, foreground='white', font=("Segoe UI", sf(14)))
+        self.style.configure('SelectedSensorStatus.TLabel', background=PRIMARY, foreground='white', font=("Segoe UI", sf(12), 'bold'))
         
         def on_pause():
             # Pausar y cerrar dialogo
@@ -2190,18 +2192,51 @@ class BalanzaGUI(ttk.Window):
         Wizard de Calibração Avançado.
         Permite entrada manual ou captura, múltiplos pontos, e seleção de curva.
         """
-        # validar data processor
+        # Permitir abrir el asistente aunque no haya data_processor conectado
         if not self.data_processor:
-            self.show_alert("Erro", "DataProcessor não disponível", "error")
-            return
+            print("[DEBUG] DataProcessor não disponível, pero se permite abrir el asistente para edición offline.")
+            # Crear un mock mínimo para permitir cargar puntos
+            class DummyDP:
+                def get_last_total_raw(self):
+                    return 0
+                nodos_config = {}
+            self.data_processor = DummyDP()
 
         # Guardar referencia al diálogo de config para restaurar grab
         self._config_dialog_ref = config_dialog
 
-        # Setup manager
+        # Obtener celda y serial para persistencia
         from modules.calibration import CalibrationManager
-        self._cal_manager = CalibrationManager(self.data_processor)
-        self._cal_manager.clear_points()
+        celda_id = None
+        serial = None
+        if hasattr(self, '_cal_sensor_selected'):
+            internal_name = self._cal_sensor_selected.get()
+            if internal_name.startswith("celda_"):
+                celda_id = internal_name.split("_")[-1]
+            # Buscar serial en config
+            try:
+                if hasattr(self.data_processor, 'nodos_config'):
+                    nodos_cfg = self.data_processor.nodos_config
+                    if internal_name in nodos_cfg:
+                        serial = nodos_cfg[internal_name].get('serial', None)
+            except Exception:
+                pass
+
+        print(f"[DEBUG] Abriendo asistente calibración para celda_id={celda_id}, serial={serial}")
+        self._cal_manager = CalibrationManager(self.data_processor, celda_id=celda_id, serial=serial)
+        # Mostrar si existe el archivo de calibración
+        try:
+            path = self._cal_manager._get_calib_path()
+            if path and os.path.exists(path):
+                print(f"[DEBUG] Archivo de calibración encontrado: {path}")
+            else:
+                print(f"[DEBUG] Archivo de calibración NO encontrado para celda_id={celda_id}, serial={serial}")
+        except Exception as e:
+            print(f"[DEBUG] Error comprobando archivo calibración: {e}")
+        # Debug: imprimir puntos cargados
+        print(f"[DEBUG] Puntos cargados: {self._cal_manager.get_points()}")
+        # ...existing code...
+        # (mover refresco de tabla y gráfico al final del método, después de crear los widgets)
 
         # Variables UI
         self._cal_method_var = tk.StringVar(value="Linear (y=mx+b)")
@@ -2342,14 +2377,14 @@ class BalanzaGUI(ttk.Window):
         def cmd_apply_cal():
             # Método fijo: Interpolación por Segmentos
             points = self._cal_manager.get_points()
-            
+
             if len(points) < 2:
                 self.show_alert("Erro", "São necessários pelo menos 2 pontos para calibrar.", "error", parent=wizard)
                 return
-            
+
             # Crear modelo de interpolación por segmentos
             sorted_points = sorted(points, key=lambda p: p[1])  # Ordenar por lectura
-            
+
             # Guardar puntos de calibración para interpolación
             cal_data = {
                 "method": "segments",
@@ -2357,6 +2392,9 @@ class BalanzaGUI(ttk.Window):
                 "valid": True
             }
             self._cal_manager.apply_calibration(cal_data)
+            # Guardar puntos explícitamente al finalizar
+            if hasattr(self._cal_manager, 'save_points'):
+                self._cal_manager.save_points()
             self.show_alert("Sucesso", f"Calibração salva com {len(sorted_points)} pontos.", "success", parent=wizard)
             close_wizard()
 
@@ -2464,15 +2502,65 @@ class BalanzaGUI(ttk.Window):
         h_frame.columnconfigure(1, weight=1)
         h_frame.columnconfigure(2, weight=0)
         ttk.Label(h_frame, text="PESO (t)", font=("Segoe UI", 10, "bold"), 
-                  bootstyle="inverse-dark").grid(row=0, column=0)
+              bootstyle="inverse-dark").grid(row=0, column=0)
         ttk.Label(h_frame, text="LEITURA", font=("Segoe UI", 10, "bold"),
-                  bootstyle="inverse-dark").grid(row=0, column=1)
+              bootstyle="inverse-dark").grid(row=0, column=1)
         # Columna vacía para alinear con botones de eliminar (sin texto)
-        
+
         # Scrollable table
         from ttkbootstrap.scrolled import ScrolledFrame
         self._cal_tbl_scroll = ScrolledFrame(left, autohide=False, height=250)
         self._cal_tbl_scroll.pack(fill=BOTH, expand=YES, pady=5)
+
+        # === RIGHT: Graph & Config ===
+        right = ttk.Labelframe(main, text="Análise e Ajuste  ", padding=15, bootstyle="warning")
+        right.grid(row=0, column=1, sticky="nsew")
+
+        # Config Frame - Solo unidad
+        f_cfg = ttk.Frame(right)
+        f_cfg.pack(fill=X, pady=(0, 10))
+
+        # Forzar método internamente (sin mostrar texto)
+        self._cal_method_var.set("Interpolação Segmentos")
+
+        # Unit selector (oculto)
+        # ...existing code...
+
+        # Graph Frame
+        g_frame = ttk.Frame(right, bootstyle="light", padding=5)
+        g_frame.pack(fill=BOTH, expand=YES, pady=10)
+
+        # Inicializar gráfico de forma segura
+        self._cal_fig = None
+        self._cal_ax = None
+        self._cal_canvas = None
+
+        if MATPLOTLIB_AVAILABLE:
+            try:
+                self._cal_fig = Figure(figsize=(5, 4), dpi=100, facecolor='#f8f9fa')
+                self._cal_ax = self._cal_fig.add_subplot(111)
+                self._cal_ax.set_facecolor('#ffffff')
+                self._cal_ax.set_xlabel("Leitura Sensor", fontsize=10)
+                self._cal_ax.set_ylabel("Peso (t)", fontsize=10)
+                self._cal_ax.grid(True, linestyle='--', alpha=0.5)
+                self._cal_canvas = FigureCanvasTkAgg(self._cal_fig, master=g_frame)
+                self._cal_canvas.get_tk_widget().pack(fill=BOTH, expand=YES)
+                # Dibujo diferido para evitar bloqueo
+                wizard.after(100, lambda: self._cal_canvas.draw_idle() if self._cal_wizard_active else None)
+            except Exception as e:
+                print(f"[GUI] Error matplotlib: {e}")
+                ttk.Label(g_frame, text="Erro ao inicializar gráfico", 
+                          font=("Segoe UI", 12)).pack(expand=YES)
+        else:
+            ttk.Label(g_frame, text="Matplotlib não disponível\nInstale com: pip install matplotlib", 
+                      font=("Segoe UI", 12), justify="center").pack(expand=YES)
+
+        # Refrescar tabla y gráfico con puntos precargados (si existen)
+        self._refresh_cal_wizard_table_ui()
+        self._update_cal_wizard_graph()
+        # Forzar refresco visual del gráfico tras inicialización completa
+        if hasattr(self, '_cal_canvas') and self._cal_canvas:
+            wizard.after(300, lambda: self._update_cal_wizard_graph())
         
         # === RIGHT: Graph & Config ===
         right = ttk.Labelframe(main, text="Análise e Ajuste  ", padding=15, bootstyle="warning")
@@ -2552,10 +2640,15 @@ class BalanzaGUI(ttk.Window):
             row.columnconfigure(0, weight=1)
             row.columnconfigure(1, weight=1)
             row.columnconfigure(2, weight=0)
-            
-            # Variables para edición
-            v_w = tk.StringVar(value=f"{peso:.2f}")
-            v_r = tk.StringVar(value=f"{lectura:.2f}")
+
+            # Formato: 3 decimales si no es entero, si es entero sin decimales
+            def fmt(val):
+                if isinstance(val, float) and val.is_integer():
+                    return f"{int(val)}"
+                return f"{val:.3f}"
+
+            v_w = tk.StringVar(value=fmt(peso))
+            v_r = tk.StringVar(value=fmt(lectura))
             
             # Callback para actualizar modelo
             def update_model(idx=i, var=v_w, field='w'):
@@ -2620,9 +2713,10 @@ class BalanzaGUI(ttk.Window):
             self._cal_ax.set_ylabel("Peso (t)", fontsize=10)
             self._cal_ax.grid(True, linestyle='--', alpha=0.5)
             self._cal_ax.set_facecolor('#ffffff')
-            
+
             points = self._cal_manager.get_points()
-            if not points: 
+            print(f"[DEBUG] Graficando puntos: {points}")
+            if not points:
                 self._cal_ax.set_title("Sem dados", fontsize=11, color='gray')
                 self._cal_canvas.draw_idle()
                 return
@@ -2631,20 +2725,23 @@ class BalanzaGUI(ttk.Window):
             sorted_points = sorted(points, key=lambda p: p[1])
             x = np.array([p[1] for p in sorted_points])
             y = np.array([p[0] for p in sorted_points])
-            
+
+            print(f"[DEBUG] x (lectura): {x}")
+            print(f"[DEBUG] y (peso): {y}")
+
             # Scatter - puntos más grandes y visibles
             self._cal_ax.scatter(x, y, c='#2563eb', s=80, zorder=5, edgecolors='white', linewidth=2)
-            
+
             # Interpolación Lineal por Segmentos (unir puntos con líneas rectas)
             if len(x) >= 2:
                 # Dibujar líneas conectando los puntos ordenados
                 self._cal_ax.plot(x, y, 'r-', linewidth=2, zorder=4)
-                self._cal_ax.set_title(f"Curva de Calibração ({len(points)} pontos)", 
+                self._cal_ax.set_title(f"Curva de Calibração ({len(points)} pontos)",
                                        fontsize=11, fontweight='bold')
             else:
-                self._cal_ax.set_title(f"{len(points)} ponto(s) - Adicione mais para ajustar", 
+                self._cal_ax.set_title(f"{len(points)} ponto(s) - Adicione mais para ajustar",
                                        fontsize=11, color='gray')
-                     
+
             self._cal_canvas.draw_idle()
         except Exception as e:
             print(f"[GUI] Erro atualizando gráfico: {e}")

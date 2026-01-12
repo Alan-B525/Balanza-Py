@@ -1,0 +1,13 @@
+[
+  {"weight": 0, "reading": 0.082, "timestamp": 0},
+  {"weight": 15, "reading": 13.547, "timestamp": 0},
+  {"weight": 30, "reading": 27.970, "timestamp": 0},
+  {"weight": 45, "reading": 42.783, "timestamp": 0},
+  {"weight": 60, "reading": 57.723, "timestamp": 0},
+  {"weight": 75, "reading": 72.020, "timestamp": 0},
+  {"weight": 90, "reading": 88.020, "timestamp": 0},
+  {"weight": 105, "reading": 103.570, "timestamp": 0},
+  {"weight": 120, "reading": 119.000, "timestamp": 0},
+  {"weight": 135, "reading": 135.070, "timestamp": 0},
+  {"weight": 150, "reading": 151.070, "timestamp": 0}
+]

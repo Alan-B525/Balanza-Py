@@ -47,10 +47,41 @@ class CalibrationManager:
     Permite capturar puntos, gestionar sesión y calcular curvas.
     """
     
-    def __init__(self, data_processor):
+    def __init__(self, data_processor, celda_id=None, serial=None):
         self.dp = data_processor
         self.points: List[CalibrationPoint] = []
         self._cancel = False
+        self.celda_id = celda_id
+        self.serial = serial
+        self._calib_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "calibrations")
+        if not os.path.exists(self._calib_dir):
+            os.makedirs(self._calib_dir)
+        # Cargar puntos si hay celda y serial
+        if celda_id and serial:
+            self.load_points()
+    def _get_calib_path(self):
+        if self.celda_id and self.serial:
+            return os.path.join(self._calib_dir, f"celda_{self.celda_id}_serie_{self.serial}.json")
+        return None
+
+    def save_points(self):
+        path = self._get_calib_path()
+        if not path:
+            return
+        data = [{"weight": p.weight, "reading": p.reading, "timestamp": p.timestamp} for p in self.points]
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+    def load_points(self):
+        path = self._get_calib_path()
+        if not path or not os.path.exists(path):
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self.points = [CalibrationPoint(**d) for d in data]
+        except Exception:
+            self.points = []
 
     def clear_points(self):
         self.points = []
@@ -133,12 +164,15 @@ class CalibrationManager:
         return statistics.mean(samples)
 
     def apply_calibration(self, model: Dict[str, Any]):
-        """Aplica la calibración al Data Processor."""
+        """Aplica la calibración al Data Processor y guarda los puntos."""
         if not model.get("valid"):
             return
-            
+
+        # Guardar puntos al aplicar calibración
+        self.save_points()
+
         method = model.get("method", "")
-        
+
         if method == "segments":
             # Interpolación por segmentos - guardar puntos
             points = model.get("points", [])
@@ -148,7 +182,7 @@ class CalibrationManager:
                 # Fallback: guardar en atributo
                 self.dp.calibration_segments = points
                 self.dp.calibration_method = "segments"
-                
+
         elif "Lineal" in method:
             slope = model.get("slope", 1.0)
             offset = model.get("offset", 0.0)
