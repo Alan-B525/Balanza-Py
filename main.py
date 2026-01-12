@@ -5,7 +5,10 @@ import threading
 import queue
 from typing import Dict
 
-current_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Usar la lógica de rutas de config.py para máxima compatibilidad (EXE/script)
+import config
+current_dir = config.get_writable_dir()
 sys.path.append(current_dir)
 
 from config import MODO_EJECUCION, PUERTO_COM as DEFAULT_COM, NODOS_CONFIG as DEFAULT_NODOS

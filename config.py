@@ -11,13 +11,12 @@ APP_NAME = "SistemaDePesagem"  # Nombre de la carpeta en AppData
 
 def get_base_dir():
     """
-    Directorio base de la aplicación (SOLO LECTURA).
-    Aquí están los scripts, imágenes y librerías (MSCL).
+    Directorio base de recursos SOLO LECTURA (imágenes, DLLs, etc).
     """
-    if getattr(sys, 'frozen', False):
-        # Si es un EXE (PyInstaller)
-        return os.path.dirname(sys.executable)
-    # Si es modo desarrollo (Python script)
+    if hasattr(sys, '_MEIPASS'):
+        # PyInstaller: Carpeta temporal donde se extraen los recursos
+        return sys._MEIPASS
+    # Desarrollo o EXE: Carpeta del script o ejecutable
     return os.path.dirname(os.path.abspath(__file__))
 
 def get_writable_dir():
@@ -26,39 +25,44 @@ def get_writable_dir():
     Aquí guardaremos logs, json y configuraciones.
     """
     if getattr(sys, 'frozen', False):
-        # MODO EXE: Usamos %APPDATA% en Windows
-        # Ruta típica: C:\Users\Usuario\AppData\Roaming\SistemaDePesagem
-        if platform.system() == "Windows":
-            base_path = os.environ.get('APPDATA')
-        else:
-            base_path = os.path.join(os.path.expanduser("~"), ".local", "share")
-        
-        path = os.path.join(base_path, APP_NAME)
+        # MODO EXE: SIEMPRE junto al ejecutable
+        path = os.path.dirname(sys.executable)
     else:
         # MODO DESARROLLO: Usamos la carpeta del proyecto
         path = os.path.dirname(os.path.abspath(__file__))
-    
     # ¡IMPORTANTE! Crear el directorio inmediatamente si no existe
     try:
         os.makedirs(path, exist_ok=True)
     except Exception as e:
         print(f"[ERROR CRÍTICO] No se pudo crear directorio de datos: {e}")
-    
     return path
 
 # --- DEFINICIÓN DE RUTAS EXPORTABLES ---
 
-BASE_DIR = get_base_dir()      # Usar para cargar DLLs, Iconos
-DATA_DIR = get_writable_dir()  # Usar para guardar JSONs
+BASE_DIR = get_base_dir()      # Usar para recursos SOLO LECTURA (imágenes, DLLs)
+DATA_DIR = get_writable_dir()  # Usar para guardar JSONs, settings, calibraciones
 
-# Rutas específicas para archivos
+# Función para obtener la ruta real de recursos (soporta PyInstaller)
+def resource_path(relative_path):
+    """
+    Devuelve la ruta absoluta al recurso, compatible con PyInstaller (EXE) y desarrollo.
+    """
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(BASE_DIR, relative_path)
+
+# Rutas específicas para archivos (lectura y escritura JUNTO AL EJECUTABLE o script)
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 CALIBRATIONS_DIR = os.path.join(DATA_DIR, "calibrations")
 
 # Asegurar que la subcarpeta 'calibrations' exista
-os.makedirs(CALIBRATIONS_DIR, exist_ok=True)
+try:
+    os.makedirs(CALIBRATIONS_DIR, exist_ok=True)
+except Exception as e:
+    print(f"[ERROR CRÍTICO] No se pudo crear directorio de calibraciones: {e}")
 
 print(f"[CONFIG] Directorio de Datos (Escritura): {DATA_DIR}")
+print(f"[CONFIG] Directorio Base (Recursos): {BASE_DIR}")
 print(f"[CONFIG] Directorio de Calibraciones: {CALIBRATIONS_DIR}")
 
 # =============================================================================

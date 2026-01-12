@@ -53,15 +53,18 @@ class CalibrationManager:
         self._cancel = False
         self.celda_id = celda_id
         self.serial = serial
-        self._calib_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "calibrations")
+        from config import CALIBRATIONS_DIR
+        self._calib_dir = CALIBRATIONS_DIR
         if not os.path.exists(self._calib_dir):
             os.makedirs(self._calib_dir)
-        # Cargar puntos si hay celda y serial
-        if celda_id and serial:
+        # Cargar puntos si hay serial (aunque celda_id sea None)
+        if serial and str(serial).strip():
             self.load_points()
+        else:
+            print(f"[CALIB] Advertencia: serial no definido o vacío, no se cargará archivo de calibración.")
     def _get_calib_path(self):
-        if self.celda_id and self.serial:
-            return os.path.join(self._calib_dir, f"celda_{self.celda_id}_serie_{self.serial}.json")
+        if self.serial and str(self.serial).strip():
+            return os.path.join(self._calib_dir, f"{self.serial}.json")
         return None
 
     def save_points(self):
@@ -74,13 +77,18 @@ class CalibrationManager:
 
     def load_points(self):
         path = self._get_calib_path()
+        print(f"[CALIB] Intentando cargar puntos de calibración desde: {path}")
         if not path or not os.path.exists(path):
+            print(f"[CALIB] Archivo de calibración no existe: {path}")
             return
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            print(f"[CALIB] Datos crudos cargados: {data}")
             self.points = [CalibrationPoint(**d) for d in data]
-        except Exception:
+            print(f"[CALIB] Puntos cargados: {self.points}")
+        except Exception as e:
+            print(f"[CALIB] Error al cargar puntos: {e}")
             self.points = []
 
     def clear_points(self):

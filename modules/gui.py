@@ -1578,7 +1578,8 @@ class BalanzaGUI(ttk.Window):
         import os
         
         # Carregar configurao atual ou usar defaults
-        config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "settings.json")
+        from config import SETTINGS_FILE
+        config_path = SETTINGS_FILE
         current_config = {
             "execution_mode": "REAL",
             "connection_type": "SERIAL",
@@ -2224,6 +2225,8 @@ class BalanzaGUI(ttk.Window):
 
         print(f"[DEBUG] Abriendo asistente calibración para celda_id={celda_id}, serial={serial}")
         self._cal_manager = CalibrationManager(self.data_processor, celda_id=celda_id, serial=serial)
+        # Forzar recarga de puntos desde disco
+        self._cal_manager.load_points()
         # Mostrar si existe el archivo de calibración
         try:
             path = self._cal_manager._get_calib_path()
