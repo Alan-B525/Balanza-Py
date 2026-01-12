@@ -9,8 +9,15 @@ script_name = "main.py"
 # Formato: (origen, destino)
 # Nota: En Windows el separador para add-data en línea de comandos es ';', 
 # pero aquí pasamos argumentos como lista.
+
+# Carpetas y archivos a incluir como datos precargados
 add_data = [
     ('MSCL', 'MSCL'), # Incluir toda la carpeta MSCL
+    ('calibrations', 'calibrations'), # Archivos JSON de calibración precargados
+    ('settings.json', 'settings.json'),
+    ('requirements.txt', 'requirements.txt'),
+    ('config.py', 'config.py'),
+    ('docs', 'docs'), # Documentación interna
 ]
 
 # Construir el argumento --add-data
