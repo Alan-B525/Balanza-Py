@@ -13,11 +13,10 @@ script_name = "main.py"
 # Carpetas y archivos a incluir como datos precargados
 add_data = [
     ('MSCL', 'MSCL'), # Incluir toda la carpeta MSCL
-    ('calibrations', 'calibrations'), # Archivos JSON de calibración precargados
+    ('calibrations', 'calibrations'),
     ('settings.json', 'settings.json'),
     ('requirements.txt', 'requirements.txt'),
     ('config.py', 'config.py'),
-    ('docs', 'docs'), # Documentación interna
 ]
 
 # Construir el argumento --add-data

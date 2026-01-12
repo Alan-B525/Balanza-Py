@@ -472,40 +472,7 @@ class BalanzaGUI(ttk.Window):
         )
         btn_reset.pack(side=LEFT, expand=YES, padx=3)
         
-        # --- Log Area con LOGOS GRANDES a cada lado ---
-        log_frame = ttk.Frame(main_container, style='Card.TFrame', padding=self.scaled(8))
-        log_frame.pack(fill=X, side=BOTTOM, pady=(self.scaled(5), 0))
-        
-        # Usar grid para que coincida con las proporciones de la columna central
-        log_container = ttk.Frame(log_frame, style='CardNoBorder.TFrame')
-        log_container.pack(fill=X)
-        
-        # Configurar columnas con los mismos pesos que el grid principal (1:2:1)
-        log_container.columnconfigure(0, weight=1)  # Logo izquierdo
-        log_container.columnconfigure(1, weight=2)  # Log central (mismo peso que columna TOTAL)
-        log_container.columnconfigure(2, weight=1)  # Logo derecho
-        
-        # Logo GRANDE a la izquierda (logo_left.png o logo.png)
-        if self.logo_left_img:
-            logo_left = ttk.Label(log_container, image=self.logo_left_img, background="#ffffff")
-            logo_left.grid(row=0, column=0, sticky="", padx=20)
-        
-        # Log centrado (misma proporcin que columna central)
-        log_center = ttk.Frame(log_container, style='CardNoBorder.TFrame')
-        log_center.grid(row=0, column=1, sticky="ew", padx=10)
-        
-        log_header = ttk.Frame(log_center, style='CardNoBorder.TFrame')
-        log_header.pack(fill=X, pady=(0, 5))
-        ttk.Label(log_header, text=" Registro de Eventos", font=("Segoe UI", 11, "bold"), foreground="#64748b", background="#ffffff").pack(anchor="center")
-        
-        self.log_text = ScrolledText(log_center, height=3, state="disabled", font=("Consolas", 9))
-        self.log_text.text.configure(background="#f8fafc", foreground="#1e293b") 
-        self.log_text.pack(fill=X)
-        
-        # Logo GRANDE a la derecha (logo_right.png o logo.png)
-        if self.logo_right_img:
-            logo_right = ttk.Label(log_container, image=self.logo_right_img, background="#ffffff")
-            logo_right.grid(row=0, column=2, sticky="", padx=20)
+
 
     def _start_drag(self, event):
         """Inicio del arrastre de la ventana."""
@@ -767,9 +734,21 @@ class BalanzaGUI(ttk.Window):
                 pass
             finally:
                 self.after(50, self.actualizar_gui)
-        # Definir el frame contenedor de los botones
-        all_btns = ttk.Frame(keypad)
-        all_btns.place(relx=0.5, rely=0.5, anchor="center", width=400, height=500)
+        # Entry para mostrar el valor digitado
+        # Frame superior para layout grid
+        keypad_frame = ttk.Frame(keypad)
+        keypad_frame.pack(fill="both", expand=True)
+        keypad_frame.rowconfigure(0, weight=2)
+        keypad_frame.rowconfigure(1, weight=8)
+        keypad_frame.columnconfigure(0, weight=1)
+
+        # Entry grande en la primera fila
+        entry_display = ttk.Entry(keypad_frame, textvariable=kp_value, font=("Consolas", 32), justify="center", state="readonly")
+        entry_display.grid(row=0, column=0, sticky="nsew", padx=40, pady=(40, 20))
+
+        # Frame de botones en la segunda fila
+        all_btns = ttk.Frame(keypad_frame)
+        all_btns.grid(row=1, column=0, sticky="nsew")
         for i in range(5):
             all_btns.rowconfigure(i, weight=1)
         for j in range(3):
@@ -1760,7 +1739,7 @@ class BalanzaGUI(ttk.Window):
             """Inicia descubrimiento de nodos."""
             self._discovered_nodes_var.set(" Procurando nós na rede...")
             self.command_queue.put({'cmd': 'DISCOVER_NODES'})
-            self.log_message("Iniciando descoberta de nós SG-Link...")
+
         
         ttk.Button(
             discover_btn_frame, 
@@ -2131,7 +2110,7 @@ class BalanzaGUI(ttk.Window):
                     initialfile="curvas_celdas.csv"
                 )
                 if not out_path:
-                    self.log_message("Exportación cancelada por el usuario.")
+
                     return
                 with open(out_path, 'w', newline='', encoding='utf-8') as f:
                     writer = csv.writer(f)
@@ -2139,7 +2118,7 @@ class BalanzaGUI(ttk.Window):
                     for peso in pesos:
                         row = [peso] + [data[s].get(peso, '') for s in serials]
                         writer.writerow(row)
-                self.log_message(f"Curvas exportadas a {out_path}")
+
                 # Restaurar ventana de configuración si existe
                 if config_dialog:
                     try:
@@ -2253,7 +2232,7 @@ class BalanzaGUI(ttk.Window):
         """
         # Permitir abrir el asistente aunque no haya data_processor conectado
         if not self.data_processor:
-            self.log_message("DataProcessor no disponible, se permite abrir el asistente para edición offline.")
+
             # Crear un mock mínimo para permitir cargar puntos
             class DummyDP:
                 def get_last_total_raw(self):
@@ -2281,7 +2260,7 @@ class BalanzaGUI(ttk.Window):
             except Exception:
                 pass
 
-        self.log_message(f"Abriendo asistente calibración para celda_id={celda_id}, serial={serial}")
+
         self._cal_manager = CalibrationManager(self.data_processor, celda_id=celda_id, serial=serial)
         # Forzar recarga de puntos desde disco
         self._cal_manager.load_points()
@@ -2289,13 +2268,12 @@ class BalanzaGUI(ttk.Window):
         try:
             path = self._cal_manager._get_calib_path()
             if path and os.path.exists(path):
-                self.log_message(f"Archivo de calibración encontrado: {path}")
-            else:
-                self.log_message(f"Archivo de calibración NO encontrado para celda_id={celda_id}, serial={serial}")
+                pass  # ...existing code...
         except Exception as e:
-            self.log_message(f"Error comprobando archivo calibración: {e}")
+            pass
+
         # Debug: imprimir puntos cargados
-        self.log_message(f"Puntos cargados: {self._cal_manager.get_points()}")
+
         # ...existing code...
         # (mover refresco de tabla y gráfico al final del método, después de crear los widgets)
 
