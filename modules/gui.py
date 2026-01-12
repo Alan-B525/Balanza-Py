@@ -685,6 +685,16 @@ class BalanzaGUI(ttk.Window):
         # Funciones
         def press_digit(d):
             current = kp_value.get()
+            # Permitir solo un '-' al inicio
+            if d == "-":
+                if current.startswith("-"):
+                    return
+                if current == "":
+                    kp_value.set("-")
+                else:
+                    kp_value.set("-" + current)
+                first_press[0] = False
+                return
             # Si es la primera pulsación y el valor es "0", reemplazarlo
             if first_press[0] and current == "0" and d != ".":
                 kp_value.set(d)
@@ -780,11 +790,11 @@ class BalanzaGUI(ttk.Window):
         ttk.Button(all_btns, text="DEL", command=press_backspace, 
                   bootstyle="warning", padding=pad_act).grid(row=3, column=2, sticky="nsew", padx=4, pady=4)
         
-        # Fila 4: X | OK (OK ocupa 2 columnas)
-        ttk.Button(all_btns, text="X", command=close_keypad, 
-                  bootstyle="danger", padding=pad_act).grid(row=4, column=0, sticky="nsew", padx=4, pady=4)
+        # Fila 4: - | OK (OK ocupa 2 columnas)
+        ttk.Button(all_btns, text="-", command=lambda: press_digit("-"), 
+              bootstyle="secondary", padding=pad_act).grid(row=4, column=0, sticky="nsew", padx=4, pady=4)
         ttk.Button(all_btns, text="OK", command=confirm_and_close, 
-                  bootstyle="success", padding=pad_act).grid(row=4, column=1, columnspan=2, sticky="nsew", padx=4, pady=4)
+              bootstyle="success", padding=pad_act).grid(row=4, column=1, columnspan=2, sticky="nsew", padx=4, pady=4)
         
         # El teclado captura los eventos (importante para que funcione sobre diálogos con grab)
         keypad.grab_set()
@@ -2202,7 +2212,23 @@ class BalanzaGUI(ttk.Window):
 
         # Crear Ventana - Pantalla completa con estado fullscreen
         wizard = ttk.Toplevel(self)
-        wizard.title("Assistente de Calibração")
+        # Obtener número de celda y número de serie para mostrar en el título
+        celda_num = "?"
+        serial_num = "?"
+        if hasattr(self, '_cal_sensor_selected'):
+            internal_name = self._cal_sensor_selected.get()
+            # Buscar número de celda (asume formato 'celda_X')
+            if internal_name.startswith("celda_"):
+                celda_num = internal_name.split("_")[-1]
+            # Buscar número de serie en la configuración de nodos_config
+            try:
+                if hasattr(self.data_processor, 'nodos_config'):
+                    nodos_cfg = self.data_processor.nodos_config
+                    if internal_name in nodos_cfg:
+                        serial_num = nodos_cfg[internal_name].get('serial', '?')
+            except Exception:
+                pass
+        wizard.title(f"Curva da Célula {celda_num} (Nº Série {serial_num})")
         w, h = self.winfo_screenwidth(), self.winfo_screenheight()
         wizard.geometry(f"{w}x{h}+0+0")
         wizard.attributes('-fullscreen', True)  # Fullscreen nativo de Windows
@@ -2336,17 +2362,20 @@ class BalanzaGUI(ttk.Window):
 
         # === UI LAYOUT ===
         
+
         # HEADER - Mejorado visualmente
         header = ttk.Frame(wizard, bootstyle="primary")
         header.pack(fill=X)
-        
+
         header_inner = ttk.Frame(header, padding=(20, 15))
         header_inner.pack(fill=X)
-        
+
         # Icono y título
-        ttk.Label(header_inner, text="ASSISTENTE DE CALIBRAÇÃO", 
-              font=("Segoe UI", 22, "bold"), 
-              foreground="#1e293b").pack(side=LEFT)
+        # Usar el mismo texto que el título de la ventana
+        label_titulo = f"Curva da Célula {celda_num} (Nº Série {serial_num})"
+        ttk.Label(header_inner, text=label_titulo,
+                  font=("Segoe UI", 22, "bold"),
+                  foreground="#1e293b").pack(side=LEFT)
         
         # Botón cerrar grande
         btn_close = ttk.Button(header_inner, text="FECHAR", 
@@ -2457,12 +2486,13 @@ class BalanzaGUI(ttk.Window):
         self._cal_method_var.set("Interpolação Segmentos")
         
         # Unit selector
-        f_unit = ttk.Frame(f_cfg)
-        f_unit.pack(fill=X)
-        ttk.Label(f_unit, text="Unidade de Leitura:", font=("Segoe UI", 12)).pack(anchor="w")
-        units = ["Bits (Raw)", "mV/V", "kg", "t"]
-        ttk.Combobox(f_unit, textvariable=self._cal_unit_var, values=units, 
-                     state="readonly", font=("Segoe UI", 14)).pack(fill=X, ipady=6)
+        # Sección de selección de unidad OCULTA por requerimiento. La lógica y variable se mantienen para posible uso futuro.
+        # f_unit = ttk.Frame(f_cfg)
+        # f_unit.pack(fill=X)
+        # ttk.Label(f_unit, text="Unidade de Leitura:", font=("Segoe UI", 12)).pack(anchor="w")
+        # units = ["Bits (Raw)", "mV/V", "kg", "t"]
+        # ttk.Combobox(f_unit, textvariable=self._cal_unit_var, values=units, 
+        #              state="readonly", font=("Segoe UI", 14)).pack(fill=X, ipady=6)
         
         # Graph Frame
         g_frame = ttk.Frame(right, bootstyle="light", padding=5)

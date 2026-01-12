@@ -8,7 +8,7 @@ from typing import Dict, Any
 from .interfaces import ISistemaPesaje
 
 
-def criar_sistema_pesaje(modo: str, nodos_config: Dict[str, Any]) -> ISistemaPesaje:
+def criar_sistema_pesaje(modo: str, nodos_config: Dict[str, Any], use_sensor_config: bool = False) -> ISistemaPesaje:
     """
     Factory function para criar o sistema de pesagem.
     
@@ -24,7 +24,7 @@ def criar_sistema_pesaje(modo: str, nodos_config: Dict[str, Any]) -> ISistemaPes
     """
     from .sensor_driver import MSCLDriver
     print("[FACTORY] Iniciando MSCLDriver (modo producao)")
-    return MSCLDriver(nodos_config)
+    return MSCLDriver(nodos_config, use_sensor_config=use_sensor_config)
 
 
 def get_available_modes() -> Dict[str, Dict[str, Any]]:

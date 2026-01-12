@@ -4,6 +4,7 @@
     "serial_port": "COM3",
     "tcp_ip": "",
     "tcp_port": "",
+    "use_sensor_config": true,
     "nodes": {
         "celda_1": {
             "id": 4249,

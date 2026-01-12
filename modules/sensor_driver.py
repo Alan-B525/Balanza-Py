@@ -181,7 +181,7 @@ class MSCLDriver(ISistemaPesaje):
     # INICIALIZACIÓN
     # =========================================================================
     
-    def __init__(self, nodos_config: Optional[Dict] = None):
+    def __init__(self, nodos_config: Optional[Dict] = None, use_sensor_config: bool = False):
         """
         Inicializa el driver MSCL.
         
@@ -201,6 +201,7 @@ class MSCLDriver(ISistemaPesaje):
         
         # Configuración de nodos
         self.nodos_config = nodos_config or {}
+        self.use_sensor_config = use_sensor_config
         self._expected_node_ids: Set[int] = set()
         
         # Objetos MSCL
@@ -580,6 +581,9 @@ class MSCLDriver(ISistemaPesaje):
     # =========================================================================
     
     def _apply_node_config(self, node: 'mscl.WirelessNode') -> bool:
+        if self.use_sensor_config:
+            self._log("INFO", f"  Nodo {node.nodeAddress()}: Se mantiene configuración actual del nodo (NO forzada por software)")
+            return True
         """
         Aplica configuración determinista a un nodo.
         

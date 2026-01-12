@@ -13,14 +13,16 @@ from modules.data_processor import DataProcessor
 from modules.gui import BalanzaGUI
 from modules.factory import criar_sistema_pesaje, check_mscl_installation
 
+
 ACTIVE_COM = DEFAULT_COM
 ACTIVE_NODOS = DEFAULT_NODOS
 ACTIVE_MODE = MODO_EJECUCION
+USE_SENSOR_CONFIG = False
 
 
 def load_custom_settings():
     """Carrega configuracao de settings.json se existir."""
-    global ACTIVE_COM, ACTIVE_NODOS, ACTIVE_MODE
+    global ACTIVE_COM, ACTIVE_NODOS, ACTIVE_MODE, USE_SENSOR_CONFIG
     import json
     
     settings_path = os.path.join(current_dir, "settings.json")
@@ -28,11 +30,14 @@ def load_custom_settings():
         try:
             with open(settings_path, 'r', encoding='utf-8') as f:
                 settings = json.load(f)
-            
+
+            # Leer si se debe usar la configuración cargada en el nodo
+            USE_SENSOR_CONFIG = settings.get("use_sensor_config", False)
+
             # Configurar Modo de Execucao
             if "execution_mode" in settings:
                 ACTIVE_MODE = settings["execution_mode"]
-                
+
             # Configurar Porta / Conexao
             conn_type = settings.get("connection_type", "SERIAL")
             if conn_type == "TCP":
@@ -61,6 +66,7 @@ def show_startup_info():
     print("  BALANZA-PY - Sistema de Pesagem Industrial")
     print("=" * 60)
     print(f"  Modo de Execucao: {ACTIVE_MODE}")
+    print(f"  Usar config de nodo (SensorConnect): {USE_SENSOR_CONFIG}")
     
     # Verificar MSCL
     mscl_info = check_mscl_installation()
@@ -317,7 +323,7 @@ def main():
     if procesador.load_tara_state():
         print("[INFO] Estado de tara carregado de app_state.json")
     print(f"[INFO] Criando sistema de pesagem no modo: {ACTIVE_MODE}")
-    sistema_pesaje = criar_sistema_pesaje(ACTIVE_MODE, ACTIVE_NODOS)
+    sistema_pesaje = criar_sistema_pesaje(ACTIVE_MODE, ACTIVE_NODOS, use_sensor_config=USE_SENSOR_CONFIG)
     backend_thread = threading.Thread(
         target=hilo_adquisicion,
         args=(data_queue, command_queue, sistema_pesaje, procesador),
