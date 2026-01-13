@@ -20,7 +20,7 @@ from modules.factory import criar_sistema_pesaje, check_mscl_installation
 ACTIVE_COM = DEFAULT_COM
 ACTIVE_NODOS = DEFAULT_NODOS
 ACTIVE_MODE = MODO_EJECUCION
-USE_SENSOR_CONFIG = False
+USE_SENSOR_CONFIG = True
 
 
 def load_custom_settings():
