@@ -106,7 +106,7 @@ else:
 
 MODO_EJECUCION = "REAL"
 PUERTO_COM = "COM3"
-BAUDRATE = 921600
+BAUDRATE = 3000000
 
 NODOS_CONFIG = {
     "celda_1": {"id": 0, "ch": "ch1", "nombre": "Célula 1", "posicion": "1", "serial": ""},

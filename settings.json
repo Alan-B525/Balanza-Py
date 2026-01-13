@@ -1,4 +1,5 @@
 {
+    "use_sensor_config": true,
     "execution_mode": "REAL",
     "connection_type": "SERIAL",
     "serial_port": "COM3",

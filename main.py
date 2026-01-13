@@ -35,20 +35,13 @@ def load_custom_settings():
                 settings = json.load(f)
 
             # Leer si se debe usar la configuración cargada en el nodo
-            USE_SENSOR_CONFIG = settings.get("use_sensor_config", False)
+            USE_SENSOR_CONFIG = settings.get("use_sensor_config", True)
 
             # Configurar Modo de Execucao
             if "execution_mode" in settings:
                 ACTIVE_MODE = settings["execution_mode"]
 
-            # Configurar Porta / Conexao
-            conn_type = settings.get("connection_type", "SERIAL")
-            if conn_type == "TCP":
-                ip = settings.get("tcp_ip", "127.0.0.1")
-                port = settings.get("tcp_port", "8000")
-                ACTIVE_COM = f"{ip}:{port}"
-            else:
-                ACTIVE_COM = settings.get("serial_port", DEFAULT_COM)
+            ACTIVE_COM = settings.get("serial_port", DEFAULT_COM)
                 
             # Configurar Nos
             if "nodes" in settings:

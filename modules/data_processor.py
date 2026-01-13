@@ -96,12 +96,14 @@ class DataProcessor:
     def _initialize_structures(self) -> None:
         for nombre_logico, cfg in self.nodos_config.items():
             node_id = cfg["id"]
-            self._node_to_name[node_id] = nombre_logico
-            self._median_buffers[node_id] = deque(maxlen=self.median_window)
-            self._ema_values[node_id] = None
-            self._tares[node_id] = 0.0
-            self._last_seen[node_id] = 0.0
-            self._node_connected_state[node_id] = False
+            channel = cfg.get("ch", "ch1")
+            composite = f"{node_id}:{channel}"
+            self._node_to_name[composite] = nombre_logico
+            self._median_buffers[composite] = deque(maxlen=self.median_window)
+            self._ema_values[composite] = None
+            self._tares[composite] = 0.0
+            self._last_seen[composite] = 0.0
+            self._node_connected_state[composite] = False
             self._log_to_file(f"Inicializado nodo {nombre_logico} (ID={node_id})")
     
     def _apply_median_filter(self, node_id: int, value: float) -> float:
@@ -150,14 +152,15 @@ class DataProcessor:
         
         current_time = time.time()
         datos_por_nodo = self._extract_node_data(raw_data)
-        
-        # 1. Detectar conexiones / desconexiones
-        for node_id, value in datos_por_nodo.items():
-            self._last_seen[node_id] = current_time
-            if not self._node_connected_state.get(node_id, False):
-                self._node_connected_state[node_id] = True
-                nombre = self._node_to_name.get(node_id, f"Nodo {node_id}")
-                resultado["logs"].append(f"Sensor {nombre} (ID:{node_id}) conectado")
+
+        # 1. Detectar conexiones / desconexiones (datos indexados por clave compuesta)
+        for node_key, value in datos_por_nodo.items():
+            # node_key es algo como '4248:ch1'
+            self._last_seen[node_key] = current_time
+            if not self._node_connected_state.get(node_key, False):
+                self._node_connected_state[node_key] = True
+                nombre = self._node_to_name.get(node_key, f"Nodo {node_key}")
+                resultado["logs"].append(f"Sensor {nombre} (Key:{node_key}) conectado")
         
         # 2. Estrategia "Suma de Fuerzas": Sumar Raw PRIMERO
         sum_raw_connected = 0.0
@@ -167,10 +170,12 @@ class DataProcessor:
 
         for nombre_logico, cfg in self.nodos_config.items():
             node_id = cfg["id"]
-            is_connected = self._check_connection(node_id, current_time, resultado)
+            channel = cfg.get("ch", "ch1")
+            composite = f"{node_id}:{channel}"
+            is_connected = self._check_connection(composite, current_time, resultado)
             valor_crudo = 0.0
-            if node_id in datos_por_nodo:
-                valor_crudo = datos_por_nodo[node_id]
+            if composite in datos_por_nodo:
+                valor_crudo = datos_por_nodo[composite]
                 # Conversión de unidad si el dato viene en toneladas
                 if self.input_unit == "t":
                     valor_crudo = valor_crudo * 1000.0
@@ -187,8 +192,9 @@ class DataProcessor:
                 "raw": int(valor_filtrado),
                 "crudo": int(valor_crudo),
                 "id": node_id,
+                "key": composite,
                 "connected": is_connected,
-                "last_seen": self._last_seen.get(node_id, 0.0)
+                "last_seen": self._last_seen.get(composite, 0.0)
             }
 
         # Guardar la última suma raw válida; NO sobrescribir con 0 para
@@ -235,11 +241,13 @@ class DataProcessor:
             if sum_raw_connected > 0:
                 for nombre_logico, cfg in self.nodos_config.items():
                     node_id = cfg["id"]
+                    channel = cfg.get("ch", "ch1")
+                    composite = f"{node_id}:{channel}"
                     sensor_entry = resultado["sensores"].get(nombre_logico)
                     if not sensor_entry:
                         continue
                     if sensor_entry.get("connected"):
-                        vf = _valor_filtrado_por_nodo.get(node_id, 0.0)
+                        vf = _valor_filtrado_por_nodo.get(composite, 0.0)
                         # Distribuir el peso neto proporcionalmente al aporte raw
                         sensor_val = (vf / sum_raw_connected) * peso_neto
                         sensor_entry["valor"] = round(sensor_val, 3)
@@ -253,7 +261,7 @@ class DataProcessor:
         
         return resultado
 
-    def _extract_node_data(self, raw_data: List[Dict[str, Any]]) -> Dict[int, float]:
+    def _extract_node_data(self, raw_data: List[Dict[str, Any]]) -> Dict[str, float]:
         """Extrae un diccionario node_id -> valor_crudo desde raw_data.
 
         Soporta dos formatos comunes:
@@ -261,7 +269,7 @@ class DataProcessor:
         - Lista vacía o formato desconocido -> retorna dict vacío
         En caso de múltiples frames, se toma el último valor observado por nodo.
         """
-        result: Dict[int, float] = {}
+        result: Dict[str, float] = {}
         try:
             if not raw_data:
                 return result
@@ -270,17 +278,39 @@ class DataProcessor:
             for item in raw_data:
                 if isinstance(item, dict) and 'values' in item and isinstance(item['values'], dict):
                     for nid, val in item['values'].items():
+                        # Si la clave ya es compuesta 'id:ch', usar tal cual
                         try:
-                            node_id = int(nid)
+                            nid_str = str(nid)
+                            if ':' in nid_str:
+                                key = nid_str
+                            else:
+                                # Nid numérico: intentar mapear al primer canal conocido
+                                num = int(nid)
+                                # Buscar cualquier composite registrado para este id
+                                matches = [k for k in self._node_to_name.keys() if k.startswith(f"{num}:")]
+                                if matches:
+                                    key = matches[0]
+                                else:
+                                    key = str(num)
                         except Exception:
-                            node_id = nid
-                        result[int(node_id)] = float(val)
+                            key = str(nid)
+                        result[key] = float(val)
                 else:
                     # Intentar interpretar item como un frame simple con 'timestamp' y 'values'
                     try:
                         if hasattr(item, 'values') and isinstance(item.values, dict):
                             for nid, val in item.values.items():
-                                result[int(nid)] = float(val)
+                                nid_str = str(nid)
+                                if ':' in nid_str:
+                                    key = nid_str
+                                else:
+                                    try:
+                                        num = int(nid)
+                                        matches = [k for k in self._node_to_name.keys() if k.startswith(f"{num}:")]
+                                        key = matches[0] if matches else str(num)
+                                    except Exception:
+                                        key = nid_str
+                                result[key] = float(val)
                     except Exception:
                         # Ignorar formatos no reconocidos
                         continue
@@ -289,22 +319,27 @@ class DataProcessor:
 
         return result
 
-    def _check_connection(self, node_id: int, current_time: float, resultado: Dict[str, Any]) -> bool:
+    def _check_connection(self, node_key: str, current_time: float, resultado: Dict[str, Any]) -> bool:
         """Verifica si un nodo está conectado según último timestamp observado.
 
         Si se detecta timeout, genera un evento de desconexión y actualiza el estado.
         Devuelve True si conectado, False si desconectado.
         """
-        last = self._last_seen.get(node_id, 0.0)
-        was_connected = self._node_connected_state.get(node_id, False)
+        last = self._last_seen.get(node_key, 0.0)
+        was_connected = self._node_connected_state.get(node_key, False)
         if (current_time - last) > self.SENSOR_TIMEOUT_S:
             if was_connected:
                 # marcar desconectado y encolar evento
-                self._node_connected_state[node_id] = False
-                nombre = self._node_to_name.get(node_id, f"Nodo {node_id}")
-                ev = SensorDisconnectEvent(node_id=node_id, nombre_logico=nombre, timestamp=current_time, was_connected=True)
+                self._node_connected_state[node_key] = False
+                nombre = self._node_to_name.get(node_key, f"Nodo {node_key}")
+                # Extraer node_id numérico para el evento si es posible
+                try:
+                    node_num = int(str(node_key).split(":")[0])
+                except Exception:
+                    node_num = 0
+                ev = SensorDisconnectEvent(node_id=node_num, nombre_logico=nombre, timestamp=current_time, was_connected=True)
                 self._disconnect_events.append(ev)
-                resultado.setdefault("logs", []).append(f"Sensor {nombre} (ID:{node_id}) desconectado")
+                resultado.setdefault("logs", []).append(f"Sensor {nombre} (Key:{node_key}) desconectado")
             return False
         else:
             return True
@@ -401,10 +436,19 @@ class DataProcessor:
             print(f"[DATA_PROCESSOR] Error guardando estado de tara: {e}")
             return False
     
-    def get_tara(self, node_id: int) -> float:
-        return self._tares.get(node_id, 0.0)
+    def get_tara(self, node_key) -> float:
+        """Devuelve la tara para una clave compuesta ('id:ch') o un id numérico.
+        Si se pasa un int, intenta sumar/retornar la primera coincidencia.
+        """
+        if isinstance(node_key, int):
+            # Buscar la primera clave que empiece con el id
+            matches = [k for k in self._tares.keys() if str(k).startswith(f"{node_key}:")]
+            if matches:
+                return self._tares.get(matches[0], 0.0)
+            return 0.0
+        return self._tares.get(node_key, 0.0)
     
-    def get_all_taras(self) -> Dict[int, float]:
+    def get_all_taras(self) -> Dict[str, float]:
         return dict(self._tares)
     
     def reset_filters(self) -> None:
@@ -413,14 +457,14 @@ class DataProcessor:
         for node_id in self._ema_values:
             self._ema_values[node_id] = None
     
-    def get_filter_state(self, node_id: int) -> Dict[str, Any]:
+    def get_filter_state(self, node_key: str) -> Dict[str, Any]:
         return {
-            "median_buffer": list(self._median_buffers.get(node_id, [])),
-            "median_buffer_size": len(self._median_buffers.get(node_id, [])),
-            "ema_value": self._ema_values.get(node_id),
-            "tare": self._tares.get(node_id, 0.0),
-            "last_seen": self._last_seen.get(node_id, 0.0),
-            "is_connected": self._node_connected_state.get(node_id, False)
+            "median_buffer": list(self._median_buffers.get(node_key, [])),
+            "median_buffer_size": len(self._median_buffers.get(node_key, [])),
+            "ema_value": self._ema_values.get(node_key),
+            "tare": self._tares.get(node_key, 0.0),
+            "last_seen": self._last_seen.get(node_key, 0.0),
+            "is_connected": self._node_connected_state.get(node_key, False)
         }
     
     def get_statistics(self) -> Dict[str, Any]:
