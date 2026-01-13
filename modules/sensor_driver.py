@@ -126,7 +126,7 @@ class NodeConfigurationError(Exception):
 class MSCLDriver(ISistemaPesaje):
 
     # Timeouts
-    DATA_TIMEOUT_MS = 100           # Timeout para getData()
+    DATA_TIMEOUT_MS = 300           # Timeout para getData() (aumentado para diagnósticos)
     FRAME_AGGREGATION_TIMEOUT_MS = 50  # Timeout para completar un frame
     NODE_TIMEOUT_S = 5.0            # Tiempo para considerar nodo offline
     BEACON_CHECK_INTERVAL_S = 2.0   # Intervalo de verificación del beacon
@@ -149,10 +149,12 @@ class MSCLDriver(ISistemaPesaje):
     TIMESTAMP_TOLERANCE_NS = 10_000_000
     
     # Configuración de muestreo forzada
-    TARGET_SAMPLE_RATE_HZ = 32
+    TARGET_SAMPLE_RATE_HZ = 4
+    # Baudrate por defecto para WSDA-200 (coincide con SensorConnect)
+    DEFAULT_BAUD = 3000000
     
 
-    def __init__(self, nodos_config: Optional[Dict] = None, use_sensor_config: bool = False):
+    def __init__(self, nodos_config: Optional[Dict] = None, use_sensor_config: bool = False, avoid_eeprom: bool = False):
         """
         Inicializa el driver MSCL.
         
@@ -173,6 +175,10 @@ class MSCLDriver(ISistemaPesaje):
         # Configuración de nodos
         self.nodos_config = nodos_config or {}
         self.use_sensor_config = use_sensor_config
+        # Si True, evitamos cualquier lectura/instanciación que pueda causar
+        # lecturas de metadatos EEPROM en los nodos (p.ej. model/serial).
+        # Esto fuerza al driver a operar en modo pasivo usando solo BaseStation.getData().
+        self.avoid_eeprom = avoid_eeprom
         self._expected_node_ids: Set[int] = set()
         
         # Objetos MSCL
@@ -260,6 +266,14 @@ class MSCLDriver(ISistemaPesaje):
         try:
             from . import logger
             msg = str(message)
+            # Suprimir mensajes que provengan de lecturas de metadatos EEPROM
+            # (p.ej. 'EEPROM', 'Model Number') para evitar ruido en logs.
+            try:
+                lower_msg = msg.lower()
+                if 'eeprom' in lower_msg or 'model number' in lower_msg or 'modelnumber' in lower_msg:
+                    return
+            except Exception:
+                pass
             if level.upper() == 'INFO':
                 logger.info(f"[MSCL-DRIVER] {msg}")
             elif level.upper() == 'WARNING':
@@ -273,6 +287,14 @@ class MSCLDriver(ISistemaPesaje):
                 import datetime, os
                 log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'balanza.log')
                 timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                # Cuando no hay logger central disponible, escribimos en el archivo
+                # pero igualmente suprimimos mensajes de EEPROM/Model Number.
+                try:
+                    lower_msg = str(message).lower()
+                    if 'eeprom' in lower_msg or 'model number' in lower_msg or 'modelnumber' in lower_msg:
+                        return
+                except Exception:
+                    pass
                 with open(log_path, 'a', encoding='utf-8') as f:
                     f.write(f"[{timestamp}] [{level}] [MSCL-DRIVER] {message}\n")
             except Exception:
@@ -334,14 +356,20 @@ class MSCLDriver(ISistemaPesaje):
                 self._set_state(ConnectionState.ERROR)
                 return False
             
-            # Inicializar red sincronizada - OBLIGATORIO para esta balanza
-            if not self._initialize_sync_network():
-                self._log("ERROR", "FALLO CRÍTICO: No se pudo inicializar SyncSamplingNetwork")
-                self._set_state(ConnectionState.ERROR)
-                raise SyncNetworkError(
-                    "No se pudo iniciar el muestreo sincronizado. "
-                    "Una red desincronizada es inaceptable para esta balanza."
-                )
+            # Inicializar red sincronizada - por defecto se requiere
+            if self.avoid_eeprom:
+                # Modo pasivo: evitamos instanciar WirelessNode u operaciones
+                # que puedan leer EEPROM/metadata en los nodos.
+                self._log("INFO", "avoid_eeprom activo: se omite SyncSamplingNetwork (modo pasivo)")
+                self._set_state(ConnectionState.CONNECTED)
+            else:
+                if not self._initialize_sync_network():
+                    self._log("ERROR", "FALLO CRÍTICO: No se pudo inicializar SyncSamplingNetwork")
+                    self._set_state(ConnectionState.ERROR)
+                    raise SyncNetworkError(
+                        "No se pudo iniciar el muestreo sincronizado. "
+                        "Una red desincronizada es inaceptable para esta balanza."
+                    )
             
             # Iniciar beacon monitor
             self._start_beacon_monitor()
@@ -433,8 +461,13 @@ class MSCLDriver(ISistemaPesaje):
         self._connection_type = ConnectionType.SERIAL
         
         try:
-            self._log("INFO", f"Conectando Serial: {puerto}")
-            self._connection = mscl.Connection.Serial(puerto)
+            self._log("INFO", f"Conectando Serial: {puerto} @ {self.DEFAULT_BAUD}")
+            try:
+                self._connection = mscl.Connection.Serial(puerto, self.DEFAULT_BAUD)
+            except TypeError:
+                # Algunas bindings de MSCL no aceptan baud como argumento
+                self._log("DEBUG", "mscl.Connection.Serial() no acepta baud en esta binding; usando llamada sin baud")
+                self._connection = mscl.Connection.Serial(puerto)
             return self._initialize_base_station()
             
         except mscl.Error_Connection as e:
@@ -532,9 +565,13 @@ class MSCLDriver(ISistemaPesaje):
                 if not port_is_safe:
                     continue
 
-                self._log("INFO", f"  -> Puerto {port} parece seguro. Iniciando MSCL...")
+                self._log("INFO", f"  -> Puerto {port} parece seguro. Iniciando MSCL @ {self.DEFAULT_BAUD}...")
                 # Agora seguro tentar com MSCL
-                self._connection = mscl.Connection.Serial(port)
+                try:
+                    self._connection = mscl.Connection.Serial(port, self.DEFAULT_BAUD)
+                except TypeError:
+                    self._log("DEBUG", "mscl.Connection.Serial() no acepta baud en esta binding; usando llamada sin baud")
+                    self._connection = mscl.Connection.Serial(port)
                 temp_base = mscl.BaseStation(self._connection)
                 
                 if temp_base.ping():
@@ -716,7 +753,6 @@ class MSCLDriver(ISistemaPesaje):
             # Algunos nodos pueden no soportar todas las opciones
             # Intentamos continuar con configuración por defecto
             return False
-    
     # =========================================================================
     # SYNC SAMPLING NETWORK
     # =========================================================================
@@ -748,16 +784,28 @@ class MSCLDriver(ISistemaPesaje):
             for node_id in self._expected_node_ids:
                 try:
                     # Crear objeto WirelessNode
-                    node = mscl.WirelessNode(node_id, self._base_station)
+                    self._log("DEBUG", f"  -> creando WirelessNode({node_id})")
+                    try:
+                        node = mscl.WirelessNode(node_id, self._base_station)
+                    except Exception as e:
+                        self._log("ERROR", f"  -> fallo al instanciar WirelessNode({node_id}): {e}")
+                        raise
                     self._wireless_nodes[node_id] = node
                     
                     # Verificar que el nodo responde
                     try:
-                        node.ping()
-                        self._log("INFO", f"  Nodo {node_id}: ping OK")
-                    except mscl.Error:
-                        self._log("WARNING", f"  Nodo {node_id}: no responde a ping")
-                        # Continuar de todos modos
+                        ping_ok = False
+                        try:
+                            ping_ok = node.ping()
+                        except Exception as pe:
+                            self._log("WARNING", f"  Nodo {node_id}: ping falló con excepción: {pe}")
+                        if ping_ok:
+                            self._log("INFO", f"  Nodo {node_id}: ping OK")
+                        else:
+                            self._log("WARNING", f"  Nodo {node_id}: no responde a ping")
+                    except Exception:
+                        # Ya registrado arriba; continuar
+                        pass
                     
                     # APLICAR CONFIGURACIÓN FORZADA antes de agregar a la red
                     try:
@@ -767,8 +815,14 @@ class MSCLDriver(ISistemaPesaje):
                         # Intentar continuar con configuración existente
                     
                     # Agregar nodo a la red sincronizada
-                    self._sync_network.addNode(node)
-                    nodes_added += 1
+                    try:
+                        self._sync_network.addNode(node)
+                        nodes_added += 1
+                        self._log("INFO", f"  Nodo {node_id}: agregado a SyncNetwork ✓")
+                    except Exception as e:
+                        self._log("ERROR", f"  Nodo {node_id}: fallo agregando a SyncNetwork: {e}")
+                        nodes_failed.append(node_id)
+                        # continuar con los demás nodos
                     
                     # Marcar como configurado
                     if node_id in self._node_status:
@@ -789,7 +843,13 @@ class MSCLDriver(ISistemaPesaje):
             
             # Verificar estado de la red
             try:
-                if self._sync_network.ok():
+                try:
+                    ok = self._sync_network.ok()
+                except Exception as e:
+                    ok = False
+                    self._log("WARNING", f"SyncNetwork.ok() falló: {e}")
+
+                if ok:
                     self._log("INFO", "✓ SyncSamplingNetwork: Configuración OK")
                 else:
                     self._log("WARNING", "SyncSamplingNetwork: Hay problemas de configuración")
@@ -797,19 +857,40 @@ class MSCLDriver(ISistemaPesaje):
                     try:
                         issues = self._sync_network.getConfigurationIssues()
                         for issue in issues:
-                            self._log("WARNING", f"  - {issue.description()}")
-                    except:
-                        pass
+                            try:
+                                desc = issue.description()
+                            except Exception:
+                                desc = str(issue)
+                            self._log("WARNING", f"  - Issue: {desc}")
+                    except Exception as e:
+                        self._log("DEBUG", f"  -> getConfigurationIssues() falló: {e}")
             except Exception as e:
                 self._log("WARNING", f"No se pudo verificar estado de red: {e}")
-            
-            # Iniciar muestreo sincronizado - SIN CAPTURA DE EXCEPCIÓN
-            # Si falla, la excepción se propaga hacia arriba
+
             self._log("INFO", "Iniciando muestreo sincronizado...")
-            self._sync_network.startSampling()
-            
-            self._set_state(ConnectionState.SAMPLING)
-            self._log("INFO", f"✓ Muestreo sincronizado iniciado con {nodes_added} nodos")
+            try:
+                self._sync_network.startSampling()
+                self._set_state(ConnectionState.SAMPLING)
+                self._log("INFO", f"✓ Muestreo sincronizado iniciado con {nodes_added} nodos")
+            except Exception as e:
+                import traceback
+                tb = traceback.format_exc()
+                self._log("ERROR", f"No se pudo iniciar muestreo sincronizado: {e}")
+                self._log("DEBUG", f"Traceback startSampling:\n{tb}")
+                # Intentar listar issues adicionales si es posible
+                try:
+                    issues = self._sync_network.getConfigurationIssues()
+                    for issue in issues:
+                        try:
+                            desc = issue.description()
+                        except Exception:
+                            desc = str(issue)
+                        self._log("ERROR", f"  - Issue detalle: {desc}")
+                except Exception as ei:
+                    self._log("DEBUG", f"  -> getConfigurationIssues() adicional falló: {ei}")
+                # Mantener la conexión abierta pero en estado CONNECTED
+                self._set_state(ConnectionState.CONNECTED)
+                self._log("INFO", "Degradado a conexión CONNECTED (muestreo sincronizado no iniciado)")
             self._log("INFO", "=" * 50)
             try:
                 from . import logger
@@ -899,11 +980,18 @@ class MSCLDriver(ISistemaPesaje):
         
         try:
             sweeps = self._base_station.getData(self.DATA_TIMEOUT_MS)
-            
+
             for sweep in sweeps:
                 self._process_sweep_to_frame(sweep, current_time)
-            
+
             complete_frames = self._collect_complete_frames(current_time)
+
+            # Añadir frames generados inmediatamente (modo pasivo/CONNECTED)
+            try:
+                while self._completed_frames:
+                    complete_frames.append(self._completed_frames.popleft())
+            except Exception:
+                pass
             self._check_node_timeouts(current_time)
             try:
                 from . import logger
@@ -967,6 +1055,23 @@ class MSCLDriver(ISistemaPesaje):
                 
                 # Agregar valor CRUDO al frame (SIN aplicar tara)
                 self._add_to_frame(timestamp_ns, node_id, valor_crudo, rssi)
+
+                # Si no estamos en SAMPLING (muestreo sincronizado), emitir
+                # inmediatamente un frame parcial por nodo para permitir
+                # visualización en tiempo real.
+                try:
+                    if self.state != ConnectionState.SAMPLING:
+                        frame_dict = {
+                            'timestamp': timestamp_ns / 1e9,
+                            'timestamp_ns': timestamp_ns,
+                            'values': {node_id: valor_crudo},
+                            'rssi': {node_id: rssi},
+                            'total': valor_crudo,
+                            'complete': False
+                        }
+                        self._completed_frames.append(frame_dict)
+                except Exception:
+                    pass
                 
                 self._stats['valid_packets'] += 1
                 
@@ -1243,23 +1348,14 @@ class MSCLDriver(ISistemaPesaje):
                 time.sleep(0.05)
             
             # Fase 2: Intentar obtener información adicional del nodo via MSCL
+            # Si avoid_eeprom está activo, NO instanciamos WirelessNode ni hacemos
+            # llamadas adicionales que puedan provocar lecturas de EEPROM.
             for node_id, info in node_data.items():
+                if self.avoid_eeprom:
+                    # Saltar consultas MSCL adicionales por razones de privacidad/ruido
+                    continue
                 try:
                     node = mscl.WirelessNode(node_id, self._base_station)
-                    
-                    # Intentar obtener modelo
-                    try:
-                        model = "-" #node.model()
-                        info['model'] = str(model) if model else 'SG-Link-200'
-                    except:
-                        pass
-                    
-                    # Intentar obtener número de serie
-                    try:
-                        serial = node.serialNumber()
-                        info['serial'] = str(serial) if serial else str(node_id)
-                    except:
-                        pass
                     
                     # Intentar obtener canales activos
                     try:
@@ -1403,11 +1499,17 @@ RealPesaje = MSCLDriver
 # FUNCIÓN DE UTILIDAD
 # =============================================================================
 
-def create_driver(nodos_config: Optional[Dict] = None) -> MSCLDriver:
-    """Función factory para crear el driver."""
+def create_driver(nodos_config: Optional[Dict] = None, avoid_eeprom: bool = False) -> MSCLDriver:
+    """Función factory para crear el driver.
+
+    Args:
+        nodos_config: Configuración de nodos
+        avoid_eeprom: Si True, evita operaciones que puedan leer EEPROM/metadata
+                      (p.ej. instanciación de `WirelessNode`).
+    """
     if not MSCL_AVAILABLE:
         raise ImportError(
             "MSCL no está disponible. "
             "Instale la biblioteca MSCL o use el modo MOCK."
         )
-    return MSCLDriver(nodos_config)
+    return MSCLDriver(nodos_config, avoid_eeprom=avoid_eeprom)

@@ -330,7 +330,9 @@ def main():
         logger.step('init', f'Creando sistema de pesaje | modo={ACTIVE_MODE}')
     except Exception:
         pass
-    sistema_pesaje = criar_sistema_pesaje(ACTIVE_MODE, ACTIVE_NODOS, use_sensor_config=USE_SENSOR_CONFIG)
+    # Crear el driver en modo normal (permitir configuración de la red)
+    # para intentar iniciar muestreo sincronizado y ver datos en tiempo real.
+    sistema_pesaje = criar_sistema_pesaje(ACTIVE_MODE, ACTIVE_NODOS, use_sensor_config=USE_SENSOR_CONFIG, avoid_eeprom=False)
     try:
         from modules import logger
         # Log mapping lógico -> físico para diagnóstico rápido
