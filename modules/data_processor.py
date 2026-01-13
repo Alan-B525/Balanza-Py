@@ -55,6 +55,7 @@ class DataProcessor:
     MEDIAN_WINDOW_SIZE = 5
     EMA_ALPHA = 0.3
     SENSOR_TIMEOUT_S = 5.0  # 5 segundos para sensores de 0.5Hz (1 dato cada 2s)
+    USE_FILTERS = False  # Cambia a True si quieres activar filtros
     
     def __init__(self, nodos_config: Dict[str, Dict[str, Any]], 
                  median_window: int = 5,
@@ -95,12 +96,12 @@ class DataProcessor:
             self._log_to_file(f"Inicializado nodo {nombre_logico} (ID={node_id})")
     
     def _apply_median_filter(self, node_id: int, value: float) -> float:
+        if not self.USE_FILTERS:
+            return value
         if node_id not in self._median_buffers:
             self._median_buffers[node_id] = deque(maxlen=self.median_window)
-        
         buffer = self._median_buffers[node_id]
         buffer.append(value)
-        
         if len(buffer) == 0:
             return value
         elif len(buffer) == 1:
@@ -109,18 +110,20 @@ class DataProcessor:
             return statistics.median(buffer)
     
     def _apply_ema_filter(self, node_id: int, value: float) -> float:
+        if not self.USE_FILTERS:
+            return value
         if node_id not in self._ema_values:
             self._ema_values[node_id] = None
-        
         if self._ema_values[node_id] is None:
             self._ema_values[node_id] = value
             return value
-        
         ema = self.ema_alpha * value + (1 - self.ema_alpha) * self._ema_values[node_id]
         self._ema_values[node_id] = ema
         return ema
     
     def _filter_value(self, node_id: int, raw_value: float) -> float:
+        if not self.USE_FILTERS:
+            return raw_value
         median_value = self._apply_median_filter(node_id, raw_value)
         ema_value = self._apply_ema_filter(node_id, median_value)
         return ema_value
@@ -154,29 +157,19 @@ class DataProcessor:
         for nombre_logico, cfg in self.nodos_config.items():
             node_id = cfg["id"]
             is_connected = self._check_connection(node_id, current_time, resultado)
-            
             valor_crudo = 0.0
             if node_id in datos_por_nodo:
                 valor_crudo = datos_por_nodo[node_id]
-            else:
-                # Si no hay dato nuevo, usar ultimo conocido o 0?
-                # Usamos 0 si no esta conectado.
-                pass
-                
-            # Aplicar filtros al valor individual para visualizacin estable
+            # NO aplicar filtros si USE_FILTERS es False
             valor_filtrado = self._filter_value(node_id, valor_crudo)
-            
-            # Acumular para la Suma Total (usamos valor filtrado para estabilidad)
             if is_connected:
                 sum_raw_connected += valor_filtrado
                 active_sensors_count += 1
             else:
                 resultado["any_disconnected"] = True
-            
-            # Datos individuales (sin calibrar, solo raw bits)
             resultado["sensores"][nombre_logico] = {
-                "valor": 0.0, # Ya no calculamos peso individual
-                "raw": int(valor_filtrado), # Mostrar bits
+                "valor": 0.0,
+                "raw": int(valor_filtrado),
                 "crudo": int(valor_crudo),
                 "id": node_id,
                 "connected": is_connected
@@ -230,11 +223,15 @@ class DataProcessor:
         # Como procesar() es stateless respecto al peso bruto anterior,
         # Recalculamos rapido con los ultimos EMAs
         
+        # Tara sobre el valor crudo si no hay filtros
         sum_raw = 0.0
-        for node_id in self._ema_values:
-             if self._ema_values[node_id] is not None:
-                 sum_raw += self._ema_values[node_id]
-        
+        if not self.USE_FILTERS:
+            for node_id in self._node_to_name:
+                sum_raw += self._last_total_raw
+        else:
+            for node_id in self._ema_values:
+                if self._ema_values[node_id] is not None:
+                    sum_raw += self._ema_values[node_id]
         peso_bruto_actual = (sum_raw * self.system_slope) + self.system_offset
         self._tares["global"] = peso_bruto_actual
         return peso_bruto_actual

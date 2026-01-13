@@ -1,9 +1,4 @@
 """
-sensor_driver.py - Driver Unificado para Hardware MSCL MicroStrain
-
-Módulo consolidado y robusto para conexión con nodos SG-Link-200 usando
-la biblioteca MSCL. 
-
 Características principales:
 - Frame Aggregator: Sincronización de lecturas de 4 celdas por timestamp
 - SyncSamplingNetwork: Alineamiento de relojes (±50µs) entre nodos
@@ -16,9 +11,6 @@ Características principales:
 NOTA: Este driver entrega valores CRUDOS (calibrados por hardware).
       La tara de sesión se maneja en DataProcessor, NO aquí.
 
-Referencia: MSCL API Documentation - LORD MicroStrain
-Autor: Balanza-Py Team
-Fecha: Diciembre 2025
 """
 
 import sys
@@ -50,7 +42,15 @@ try:
 except ImportError:
     mscl = None
     MSCL_AVAILABLE = False
-    print("[DRIVER] AVISO: Biblioteca MSCL no encontrada.")
+    try:
+        # Intentar usar el método _log si está disponible
+        from datetime import datetime
+        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'balanza.log')
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(f"[{timestamp}] [WARNING] [MSCL-DRIVER] [DRIVER] AVISO: Biblioteca MSCL no encontrada.\n")
+    except Exception:
+        pass
 
 
 # =============================================================================
@@ -62,7 +62,7 @@ class ConnectionState(Enum):
     DISCONNECTED = "disconnected"
     CONNECTING = "connecting"
     CONNECTED = "connected"
-    SAMPLING = "sampling"  # Muestreo sincronizado activo
+    SAMPLING = "sampling"
     RECONNECTING = "reconnecting"
     ERROR = "error"
 
@@ -123,34 +123,8 @@ class NodeConfigurationError(Exception):
     pass
 
 
-# =============================================================================
-# CLASE PRINCIPAL: MSCLDriver
-# =============================================================================
-
 class MSCLDriver(ISistemaPesaje):
-    """
-    Driver unificado para hardware MSCL MicroStrain.
-    
-    Implementa la interfaz ISistemaPesaje con características avanzadas:
-    - Frame Aggregator para sincronización de 4 celdas
-    - SyncSamplingNetwork para alineamiento de relojes (±50µs)
-    - Configuración forzada de nodos (32Hz, sync mode)
-    - Beacon Monitor para vigilancia de conexión
-    - Auto-discovery de puertos
-    
-    IMPORTANTE: Este driver entrega valores CRUDOS. La tara se aplica
-    en DataProcessor para evitar duplicación de lógica.
-    
-    Uso típico:
-        driver = MSCLDriver(nodos_config)
-        driver.conectar("COM3")  # o "192.168.1.100:5000"
-        datos = driver.obtener_datos()  # Retorna solo frames completos con valores CRUDOS
-    """
-    
-    # =========================================================================
-    # CONSTANTES DE CONFIGURACIÓN
-    # =========================================================================
-    
+
     # Timeouts
     DATA_TIMEOUT_MS = 100           # Timeout para getData()
     FRAME_AGGREGATION_TIMEOUT_MS = 50  # Timeout para completar un frame
@@ -177,10 +151,7 @@ class MSCLDriver(ISistemaPesaje):
     # Configuración de muestreo forzada
     TARGET_SAMPLE_RATE_HZ = 32
     
-    # =========================================================================
-    # INICIALIZACIÓN
-    # =========================================================================
-    
+
     def __init__(self, nodos_config: Optional[Dict] = None, use_sensor_config: bool = False):
         """
         Inicializa el driver MSCL.
@@ -283,11 +254,7 @@ class MSCLDriver(ISistemaPesaje):
         # Re-inicializar con nueva configuración
         self._initialize_node_structures()
         self._log("INFO", "Configuración de nodos actualizada")
-    
-    # =========================================================================
-    # LOGGING
-    # =========================================================================
-    
+
     def _log(self, level: str, message: str) -> None:
         """Log interno con timestamp. Guarda en balanza.log en la ruta del ejecutable."""
         import datetime, os
@@ -303,11 +270,7 @@ class MSCLDriver(ISistemaPesaje):
                 f.write(f"[{timestamp}] [{level}] [MSCL-DRIVER] {safe_message}\n")
         except Exception:
             pass
-    
-    # =========================================================================
-    # GESTIÓN DE ESTADO
-    # =========================================================================
-    
+
     def _set_state(self, new_state: ConnectionState) -> None:
         """Actualiza el estado de forma thread-safe."""
         with self._state_lock:
@@ -325,11 +288,7 @@ class MSCLDriver(ISistemaPesaje):
     def esta_conectado(self) -> bool:
         """Retorna True si está conectado y operativo."""
         return self.state in (ConnectionState.CONNECTED, ConnectionState.SAMPLING)
-    
-    # =========================================================================
-    # CONEXIÓN
-    # =========================================================================
-    
+
     def conectar(self, puerto: str) -> bool:
         """
         Establece conexión con la BaseStation y configura la red sincronizada.
@@ -632,14 +591,7 @@ class MSCLDriver(ISistemaPesaje):
             except Exception as e:
                 self._log("WARNING", f"  -> No se pudo establecer RAW UInt24: {e}")
 
-            # TODO: Configurar filtros analógicos/digitales si es necesario
-            # Los SG-Link-200 tienen filtros configurables:
-            # - config.lowPassFilter(mscl.WirelessTypes.filter_33hz)
-            # - config.highPassFilter(mscl.WirelessTypes.highPass_off)
-            # Por ahora, confiamos en la configuración de hardware existente
-            
-            # Aplicar configuración al nodo
-            node.applyConfig(config)
+            #node.applyConfig(config)
             
             self._log("INFO", f"  Nodo {node_id}: Configurado (Sync, {self.TARGET_SAMPLE_RATE_HZ}Hz)")
             return True
@@ -661,23 +613,7 @@ class MSCLDriver(ISistemaPesaje):
     # =========================================================================
     
     def _initialize_sync_network(self) -> bool:
-        """
-        Inicializa la red de muestreo sincronizado (SyncSamplingNetwork).
-        
-        Esto garantiza:
-        - Alineamiento de relojes entre nodos (±50µs)
-        - Sincronización de timestamps
-        - Configuración uniforme de sampling rate (32Hz)
-        
-        IMPORTANTE: Si falla, NO continúa en modo legacy.
-        Una red desincronizada es inaceptable para esta balanza.
-        
-        Returns:
-            True si el muestreo sincronizado inició correctamente
-            
-        Raises:
-            SyncNetworkError: Si no se puede iniciar el muestreo
-        """
+
         if not self._base_station or not self._expected_node_ids:
             return False
         
@@ -830,26 +766,7 @@ class MSCLDriver(ISistemaPesaje):
     # =========================================================================
     
     def obtener_datos(self) -> List[Dict[str, Any]]:
-        """
-        Obtiene datos sincronizados de todos los nodos.
-        
-        IMPORTANTE: 
-        - Solo retorna frames COMPLETOS (con datos de las 4 celdas)
-        - Los valores son CRUDOS (calibrados por hardware, sin tara de sesión)
-        - La tara se aplica en DataProcessor
-        
-        Returns:
-            Lista de diccionarios con formato:
-            [
-                {
-                    'timestamp': float,
-                    'values': {node_id: valor_crudo, ...},
-                    'total': float,  # Suma de valores crudos
-                    'rssi': {node_id: rssi, ...}
-                },
-                ...
-            ]
-        """
+
         if not self.esta_conectado() or not self._base_station:
             return []
         
@@ -1119,33 +1036,7 @@ class MSCLDriver(ISistemaPesaje):
     # =========================================================================
     
     def descubrir_nodos(self, timeout_ms: int = 5000) -> List[Dict[str, Any]]:
-        """
-        Descubre nodos wireless en la red y obtiene información detallada.
-        
-        Para WSDA-USB-200 Gateway conectado via USB:
-        - Detecta todos los nodos SG-Link activos en la red
-        - Obtiene información de todos los canales disponibles por nodo
-        - Retorna lista con datos completos para asignación
-        
-        Returns:
-            Lista de diccionarios con información de cada nodo y sus canales:
-            [
-                {
-                    'id': 12345,
-                    'rssi': -45,
-                    'model': 'SG-Link-200',
-                    'serial': 'XXXXX',
-                    'channels': [
-                        {'channel': 'ch1', 'type': 'strain', 'value': 0.0},
-                        {'channel': 'ch2', 'type': 'strain', 'value': 0.0},
-                        ...
-                    ],
-                    'sample_rate': '32 Hz',
-                    'configured': False
-                },
-                ...
-            ]
-        """
+
         if not self.esta_conectado() or not self._base_station:
             self._log("WARNING", "Sin conexión activa para descubrir nodos")
             return []
