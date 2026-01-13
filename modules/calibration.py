@@ -84,9 +84,6 @@ class CalibrationManager:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            self._log_to_file(f"Datos crudos cargados: {data}")
-            self.points = [CalibrationPoint(**d) for d in data]
-            self._log_to_file(f"Puntos cargados: {self.points}")
         except Exception as e:
             self._log_to_file(f"Error al cargar puntos: {e}")
             self.points = []

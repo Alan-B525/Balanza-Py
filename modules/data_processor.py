@@ -59,10 +59,12 @@ class DataProcessor:
     
     def __init__(self, nodos_config: Dict[str, Dict[str, Any]], 
                  median_window: int = 5,
-                 ema_alpha: float = 0.3):
+                 ema_alpha: float = 0.3,
+                 input_unit: str = "kg"):
         self.nodos_config = nodos_config
         self.median_window = median_window
         self.ema_alpha = ema_alpha
+        self.input_unit = input_unit  # "kg" o "t"
         
         # Coeficientes de Calibración Global (Sistema Completo)
         # y = mx + b
@@ -160,6 +162,9 @@ class DataProcessor:
             valor_crudo = 0.0
             if node_id in datos_por_nodo:
                 valor_crudo = datos_por_nodo[node_id]
+                # Conversión de unidad si el dato viene en toneladas
+                if self.input_unit == "t":
+                    valor_crudo = valor_crudo * 1000.0
             # NO aplicar filtros si USE_FILTERS es False
             valor_filtrado = self._filter_value(node_id, valor_crudo)
             if is_connected:
