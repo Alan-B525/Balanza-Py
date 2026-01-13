@@ -84,18 +84,41 @@ class CalibrationManager:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            loaded = []
+            if isinstance(data, list):
+                for item in data:
+                    if not isinstance(item, dict):
+                        continue
+                    w = item.get('weight')
+                    r = item.get('reading')
+                    ts = item.get('timestamp', time.time())
+                    if w is None or r is None:
+                        continue
+                    try:
+                        cp = CalibrationPoint(float(w), float(r), float(ts))
+                        loaded.append(cp)
+                    except Exception:
+                        continue
+            else:
+                self._log_to_file(f"Formato inesperado en archivo de calibración: {type(data)}")
+            self.points = loaded
+            self._log_to_file(f"Cargados {len(self.points)} puntos de calibración desde: {path}")
         except Exception as e:
             self._log_to_file(f"Error al cargar puntos: {e}")
             self.points = []
     def _log_to_file(self, message):
-        import datetime, os
-        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'balanza.log')
-        timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         try:
-            with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(f"[{timestamp}] {message}\n")
+            from . import logger
+            logger.info(f"[CALIBRATION] {message}")
         except Exception:
-            pass
+            try:
+                import datetime, os
+                log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'balanza.log')
+                timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                with open(log_path, 'a', encoding='utf-8') as f:
+                    f.write(f"[{timestamp}] {message}\n")
+            except Exception:
+                pass
 
     def clear_points(self):
         self.points = []

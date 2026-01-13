@@ -23,14 +23,26 @@ def criar_sistema_pesaje(modo: str, nodos_config: Dict[str, Any], use_sensor_con
         ImportError: Se MSCL nao estiver disponivel
     """
     from .sensor_driver import MSCLDriver
+    from .sensor_mock import MockDriver
     import datetime, os
     log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'balanza.log')
     timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    # Log inicial indicando el modo solicitado
     try:
         with open(log_path, 'a', encoding='utf-8') as f:
-            f.write(f"[{timestamp}] [FACTORY] Iniciando MSCLDriver (modo producao)\n")
+            f.write(f"[{timestamp}] [FACTORY] Solicitud de driver - modo={modo}\n")
     except Exception:
         pass
+
+    # Seleccionar driver según el modo
+    if modo and modo.upper() == 'MOCK':
+        try:
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(f"[{timestamp}] [FACTORY] Iniciando MockDriver (modo MOCK)\n")
+        except Exception:
+            pass
+        return MockDriver(nodos_config, use_sensor_config=use_sensor_config)
+
     return MSCLDriver(nodos_config, use_sensor_config=use_sensor_config)
 
 

@@ -80,6 +80,11 @@ class BalanzaGUI(ttk.Window):
         
         # Almacenar nodos descubiertos
         self._discovered_nodes = []
+
+        # Último timestamp visto por widget para cada sensor (mantener display hasta nueva muestra)
+        self._widget_last_seen = {}
+        # Último timestamp visto para el total (mantener total hasta nueva muestra)
+        self._widget_last_total = 0.0
         
         # Control de visualización de decimales (por defecto: SIN decimales)
         self._show_decimals = False
@@ -577,8 +582,15 @@ class BalanzaGUI(ttk.Window):
             # AZUL - Todos os sensores conectados (normal)
             self.total_section.configure(style='TotalPanel.TFrame')
             self.lbl_total_title.configure(text="PESO TOTAL", style='TotalLabel.TLabel')
-            peso_ton = data['total']
-            self.lbl_total.configure(text=f"{self._format_weight(peso_ton)}", style='TotalValue.TLabel')
+            # Actualizar total solo si la muestra es nueva
+            incoming_total_last = data.get('total_last_seen', 0.0) or 0.0
+            total_raw = data.get('total_raw', 0.0)
+            # Actualizar el total solo si hay datos válidos (total_raw>0)
+            # y la muestra es nueva o igual (>=) al último timestamp registrado.
+            if total_raw > 0 and incoming_total_last >= self._widget_last_total:
+                peso_ton = data['total']
+                self.lbl_total.configure(text=f"{self._format_weight(peso_ton)}", style='TotalValue.TLabel')
+                self._widget_last_total = incoming_total_last
             self.lbl_total_unit.configure(text="t", style='TotalUnit.TLabel')
         
         # Actualizar Sensores Individuales
@@ -586,10 +598,14 @@ class BalanzaGUI(ttk.Window):
         for key, widgets in self.sensor_widgets.items():
             if key in sensores:
                 info = sensores[key]
-                
-                # Actualizar valor - Usar formato según configuración de decimales
-                valor_ton = info['valor']
-                widgets['value'].configure(text=f"{self._format_weight(valor_ton)}")
+                # Actualizar valor solo si la muestra es nueva (usar last_seen)
+                valor_ton = info.get('valor', 0.0)
+                incoming_last = info.get('last_seen', 0.0) or 0.0
+                prev_last = self._widget_last_seen.get(key, 0.0)
+                if incoming_last > prev_last:
+                    display_text = self._format_weight(valor_ton)
+                    widgets['value'].configure(text=display_text)
+                    self._widget_last_seen[key] = incoming_last
                 
                 # Atualizar estado visual segundo conexo
                 if info.get('connected', True):

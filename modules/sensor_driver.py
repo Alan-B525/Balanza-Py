@@ -256,20 +256,27 @@ class MSCLDriver(ISistemaPesaje):
         self._log("INFO", "Configuración de nodos actualizada")
 
     def _log(self, level: str, message: str) -> None:
-        """Log interno con timestamp. Guarda en balanza.log en la ruta del ejecutable."""
-        import datetime, os
-        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'balanza.log')
-        timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        # Sanitizar mensaje para evitar errores de codificación con surrogates
+        """Log interno con timestamp. Usa el logger central para mensajes concisos."""
         try:
-            safe_message = str(message).encode('utf-8', errors='replace').decode('utf-8')
+            from . import logger
+            msg = str(message)
+            if level.upper() == 'INFO':
+                logger.info(f"[MSCL-DRIVER] {msg}")
+            elif level.upper() == 'WARNING':
+                logger.warning(f"[MSCL-DRIVER] {msg}")
+            elif level.upper() == 'ERROR':
+                logger.error(f"[MSCL-DRIVER] {msg}")
+            else:
+                logger.debug(f"[MSCL-DRIVER] {msg}")
         except Exception:
-            safe_message = repr(message)
-        try:
-            with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(f"[{timestamp}] [{level}] [MSCL-DRIVER] {safe_message}\n")
-        except Exception:
-            pass
+            try:
+                import datetime, os
+                log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'balanza.log')
+                timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                with open(log_path, 'a', encoding='utf-8') as f:
+                    f.write(f"[{timestamp}] [{level}] [MSCL-DRIVER] {message}\n")
+            except Exception:
+                pass
 
     def _set_state(self, new_state: ConnectionState) -> None:
         """Actualiza el estado de forma thread-safe."""
@@ -307,6 +314,11 @@ class MSCLDriver(ISistemaPesaje):
             SyncNetworkError: Si no se puede iniciar el muestreo sincronizado
         """
         self._connection_string = puerto
+        try:
+            from . import logger
+            logger.step('connect', f'Trying to connect -> {puerto}')
+        except Exception:
+            pass
         self._set_state(ConnectionState.CONNECTING)
         
         try:
@@ -336,31 +348,77 @@ class MSCLDriver(ISistemaPesaje):
             
             self._stats['start_time'] = time.time()
             # Estado ya está en SAMPLING después de _initialize_sync_network exitoso
-            
-            self._log("INFO", "✓ Conexión completada exitosamente")
+
+            # Si no hay nodos/celdas configuradas, registrar advertencia clara
+            if not self._expected_node_ids:
+                self._log("WARNING", "Conectado pero NO hay celdas/nodos configurados. Verifique 'nodos_config'.")
+                # Marcar en estadísticas para que la UI pueda chequear
+                self._stats['last_error'] = 'No configured nodes'
+                # Mantener la conexión activa pero en estado CONNECTED (sin muestreo útil)
+                self._set_state(ConnectionState.CONNECTED)
+            else:
+                self._log("INFO", "✓ Conexión completada exitosamente")
+            try:
+                from . import logger
+                logger.step('connect', 'connection_complete')
+            except Exception:
+                pass
             return True
             
         except SyncNetworkError:
             # Re-lanzar excepciones de sincronización
             raise
         except mscl.Error_Connection as e:
+            # Asegurar desconexión del objeto de conexión si existe
+            try:
+                if hasattr(self, '_connection') and self._connection:
+                    try:
+                        self._connection.disconnect()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             error_msg = str(e).encode('utf-8', errors='replace').decode('utf-8')
             self._log("ERROR", f"Error de conexión MSCL: {error_msg}")
             self._stats['last_error'] = f"Connection: {error_msg}"
             self._set_state(ConnectionState.ERROR)
             return False
         except mscl.Error as e:
+            # Intentar liberar puerto antes de retornar
+            try:
+                if hasattr(self, '_connection') and self._connection:
+                    try:
+                        self._connection.disconnect()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             error_msg = str(e).encode('utf-8', errors='replace').decode('utf-8')
             self._log("ERROR", f"Error MSCL: {error_msg}")
             self._stats['last_error'] = f"MSCL: {error_msg}"
             self._set_state(ConnectionState.ERROR)
             return False
         except Exception as e:
+            # Desconexión de emergencia para devolver puerto al OS
+            try:
+                if hasattr(self, '_connection') and self._connection:
+                    try:
+                        self._connection.disconnect()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            # Log y re-lanzar la excepción para que el proceso no deje el puerto abierto
             error_msg = str(e).encode('utf-8', errors='replace').decode('utf-8')
             self._log("ERROR", f"Error inesperado: {error_msg}")
             self._stats['last_error'] = error_msg
             self._set_state(ConnectionState.ERROR)
-            return False
+            # Imprimir en stdout para visibilidad inmediata
+            try:
+                print(f"Error crítico en conectar(): {error_msg}")
+            except Exception:
+                pass
+            raise
     
     def _is_tcp_address(self, address: str) -> bool:
         """Determina si la dirección es TCP/IP."""
@@ -402,6 +460,11 @@ class MSCLDriver(ISistemaPesaje):
             self._log("ERROR", f"Formato de dirección TCP inválido '{address}': {e}")
             return False
         except mscl.Error_Connection as e:
+            # Asegurar limpieza de conexión en caso de fallo TCP
+            try:
+                self._clean_connection()
+            except Exception:
+                pass
             self._log("ERROR", f"Error conexión TCP: {e}")
             return False
     
@@ -412,6 +475,11 @@ class MSCLDriver(ISistemaPesaje):
         """
         self._connection_type = ConnectionType.SERIAL
         self._log("INFO", "Iniciando auto-detección de puertos...")
+        try:
+            from . import logger
+            logger.step('auto_discover', 'start')
+        except Exception:
+            pass
         
         ports_to_try = []
         
@@ -473,6 +541,11 @@ class MSCLDriver(ISistemaPesaje):
                     self._log("INFO", f"✓ BaseStation encontrada en {port}")
                     self._base_station = temp_base
                     self._connection_string = port
+                    try:
+                        from . import logger
+                        logger.step('auto_discover', f'found_base_{port}')
+                    except Exception:
+                        pass
                     return self._post_base_station_init()
                 else:
                     self._clean_connection()
@@ -485,6 +558,11 @@ class MSCLDriver(ISistemaPesaje):
                 self._clean_connection()
         
         self._log("ERROR", "No se encontró BaseStation en ningún puerto")
+        try:
+            from . import logger
+            logger.step('auto_discover', 'not_found')
+        except Exception:
+            pass
         return False
         
     def _clean_connection(self):
@@ -514,6 +592,11 @@ class MSCLDriver(ISistemaPesaje):
             return self._post_base_station_init()
             
         except mscl.Error as e:
+            # Liberar conexión si hubo error al inicializar la BaseStation
+            try:
+                self._clean_connection()
+            except Exception:
+                pass
             self._log("ERROR", f"Fallo al crear BaseStation: {e}")
             return False
     
@@ -538,6 +621,11 @@ class MSCLDriver(ISistemaPesaje):
             return True
             
         except mscl.Error as e:
+            # Si falla post-init, asegurar que la conexión se limpie para no dejar el puerto bloqueado
+            try:
+                self._clean_connection()
+            except Exception:
+                pass
             self._log("ERROR", f"Error en post-init: {e}")
             return False
     
@@ -579,8 +667,29 @@ class MSCLDriver(ISistemaPesaje):
             
             # Establecer sample rate a 32 Hz
             # Esto garantiza uniformidad en toda la red
-            sample_rate = mscl.SampleRate.Hertz(self.TARGET_SAMPLE_RATE_HZ)
-            config.sampleRate(sample_rate)
+            try:
+                # Intentar la API más común: mscl.SampleRate.Hertz(...)
+                if hasattr(mscl, 'SampleRate') and hasattr(mscl.SampleRate, 'Hertz'):
+                    sample_rate = mscl.SampleRate.Hertz(self.TARGET_SAMPLE_RATE_HZ)
+                    try:
+                        config.sampleRate(sample_rate)
+                        self._log("INFO", f"  -> Sample rate configurado a {self.TARGET_SAMPLE_RATE_HZ} Hz (SampleRate.Hertz)")
+                    except Exception as e:
+                        # Intentar fallback: pasar entero (algunas bindings aceptan int)
+                        try:
+                            config.sampleRate(int(self.TARGET_SAMPLE_RATE_HZ))
+                            self._log("INFO", f"  -> Sample rate configurado a {self.TARGET_SAMPLE_RATE_HZ} Hz (int fallback)")
+                        except Exception:
+                            self._log("WARNING", f"  -> No se pudo establecer sampleRate (Hertz) - {e}")
+                else:
+                    # Fallback directo: intentar pasar entero
+                    try:
+                        config.sampleRate(int(self.TARGET_SAMPLE_RATE_HZ))
+                        self._log("INFO", f"  -> Sample rate configurado a {self.TARGET_SAMPLE_RATE_HZ} Hz (int)")
+                    except Exception as e:
+                        self._log("WARNING", f"  -> No se pudo establecer sampleRate: {e}")
+            except Exception as e:
+                self._log("WARNING", f"  -> Error verificando SampleRate API: {e}")
             
             # --- MODIFICACION INDUSTRIAL: DATOS CRUDOS ---
             # Forzamos formato UInt24 para obtener los bits puros del ADC sin procesar
@@ -613,6 +722,12 @@ class MSCLDriver(ISistemaPesaje):
     # =========================================================================
     
     def _initialize_sync_network(self) -> bool:
+
+        try:
+            from . import logger
+            logger.step('sync_network', f'start | expected_nodes={len(self._expected_node_ids)}')
+        except Exception:
+            pass
 
         if not self._base_station or not self._expected_node_ids:
             return False
@@ -696,6 +811,11 @@ class MSCLDriver(ISistemaPesaje):
             self._set_state(ConnectionState.SAMPLING)
             self._log("INFO", f"✓ Muestreo sincronizado iniciado con {nodes_added} nodos")
             self._log("INFO", "=" * 50)
+            try:
+                from . import logger
+                logger.step('sync_network', f'started | nodes_added={nodes_added}')
+            except Exception:
+                pass
             return True
             
         except mscl.Error as e:
@@ -771,6 +891,11 @@ class MSCLDriver(ISistemaPesaje):
             return []
         
         current_time = time.time()
+        try:
+            from . import logger
+            logger.step('acquire', f'reading | timeout_ms={self.DATA_TIMEOUT_MS}')
+        except Exception:
+            pass
         
         try:
             sweeps = self._base_station.getData(self.DATA_TIMEOUT_MS)
@@ -780,6 +905,11 @@ class MSCLDriver(ISistemaPesaje):
             
             complete_frames = self._collect_complete_frames(current_time)
             self._check_node_timeouts(current_time)
+            try:
+                from . import logger
+                logger.step('acquire', f'got_frames={len(complete_frames)}')
+            except Exception:
+                pass
             
             return complete_frames
             
@@ -1037,10 +1167,19 @@ class MSCLDriver(ISistemaPesaje):
     
     def descubrir_nodos(self, timeout_ms: int = 5000) -> List[Dict[str, Any]]:
 
-        if not self.esta_conectado() or not self._base_station:
-            self._log("WARNING", "Sin conexión activa para descubrir nodos")
-            return []
+        # Permitir descubrimiento si existe BaseStation aunque la red sync no esté en SAMPLING.
+        if not self.esta_conectado():
+            if not self._base_station:
+                self._log("WARNING", "Sin conexión activa para descubrir nodos y sin BaseStation inicializada")
+                return []
+            else:
+                self._log("INFO", "No hay muestreo sincronizado activo, pero BaseStation está presente — procediendo con descubrimiento pasivo")
         
+        try:
+            from . import logger
+            logger.step('discover', f'start | timeout_ms={timeout_ms}')
+        except Exception:
+            pass
         self._log("INFO", f"Iniciando descubrimiento de nodos (timeout: {timeout_ms}ms)...")
         self._log("INFO", "Gateway WSDA-USB-200 - Buscando nodos SG-Link...")
         
@@ -1110,7 +1249,7 @@ class MSCLDriver(ISistemaPesaje):
                     
                     # Intentar obtener modelo
                     try:
-                        model = node.model()
+                        model = "-" #node.model()
                         info['model'] = str(model) if model else 'SG-Link-200'
                     except:
                         pass
@@ -1174,6 +1313,11 @@ class MSCLDriver(ISistemaPesaje):
             self._log("ERROR", f"Error inesperado en descubrimiento: {e}")
         
         self._log("INFO", f"Descubrimiento completo: {len(nodos_encontrados)} nodo(s)")
+        try:
+            from . import logger
+            logger.step('discover', f'complete | found={len(nodos_encontrados)}')
+        except Exception:
+            pass
         for node in nodos_encontrados:
             ch_count = len(node.get('channels', []))
             self._log("INFO", f"  → Nodo {node['id']}: {ch_count} canal(es), RSSI={node['rssi']}")

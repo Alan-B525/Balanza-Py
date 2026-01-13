@@ -65,30 +65,15 @@ def load_custom_settings():
 
 def show_startup_info():
     """Mostra informacoes de inicializacao."""
-    # Toda la información se guarda en el log, no se imprime en consola
-    mscl_info = check_mscl_installation()
-    import datetime
-    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'balanza.log')
-    timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    lines = [
-        "=" * 60,
-        "  BALANZA-PY - Sistema de Pesagem Industrial",
-        "=" * 60,
-        f"  Modo de Execucao: {ACTIVE_MODE}",
-        f"  Usar config de nodo (SensorConnect): {USE_SENSOR_CONFIG}",
-    ]
-    mscl_info = check_mscl_installation()
-    if mscl_info["installed"]:
-        lines.append(f"  MSCL: Instalado")
-        if mscl_info["version"]:
-            lines.append(f"  Versão: {mscl_info['version']}")
-    else:
-        lines.append(f"  MSCL: Nao encontrado")
-    lines.append("=" * 60)
+    # Usar logger central para mensajes de inicio (conciso)
     try:
-        with open(log_path, 'a', encoding='utf-8') as f:
-            for line in lines:
-                f.write(f"[{timestamp}] {line}\n")
+        from modules import logger
+        logger.step('startup', f"Modo={ACTIVE_MODE} | use_sensor_config={USE_SENSOR_CONFIG}")
+        mscl_info = check_mscl_installation()
+        if mscl_info.get('installed'):
+            logger.info(f"MSCL instalado | version={mscl_info.get('version')}")
+        else:
+            logger.warning("MSCL no encontrado")
     except Exception:
         pass
 
@@ -335,22 +320,26 @@ def main():
     procesador = DataProcessor(ACTIVE_NODOS)
     if procesador.load_tara_state():
         import datetime, os
-        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'balanza.log')
-        timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         try:
-            with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(f"[{timestamp}] [INFO] Estado de tara carregado de app_state.json\n")
+            from modules import logger
+            logger.info('Estado de tara cargado de app_state.json')
         except Exception:
             pass
-    import datetime, os
-    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'balanza.log')
-    timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     try:
-        with open(log_path, 'a', encoding='utf-8') as f:
-            f.write(f"[{timestamp}] [INFO] Criando sistema de pesagem no modo: {ACTIVE_MODE}\n")
+        from modules import logger
+        logger.step('init', f'Creando sistema de pesaje | modo={ACTIVE_MODE}')
     except Exception:
         pass
     sistema_pesaje = criar_sistema_pesaje(ACTIVE_MODE, ACTIVE_NODOS, use_sensor_config=USE_SENSOR_CONFIG)
+    try:
+        from modules import logger
+        # Log mapping lógico -> físico para diagnóstico rápido
+        mapping_lines = []
+        for name, cfg in ACTIVE_NODOS.items():
+            mapping_lines.append(f"{name} -> id={cfg.get('id')} ch={cfg.get('ch')} serial={cfg.get('serial')}")
+        logger.info('Mapping lógico→físico: ' + '; '.join(mapping_lines))
+    except Exception:
+        pass
     backend_thread = threading.Thread(
         target=hilo_adquisicion,
         args=(data_queue, command_queue, sistema_pesaje, procesador),

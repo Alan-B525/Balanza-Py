@@ -61,6 +61,28 @@ try:
 except Exception as e:
     print(f"[ERROR CRÍTICO] No se pudo crear directorio de calibraciones: {e}")
 
+# Copiar calibraciones por defecto embebidas (si existen en recursos) al directorio de datos
+try:
+    embedded_calib = resource_path('calibrations')
+    # Solo copiar si la carpeta destino está vacía
+    if os.path.exists(embedded_calib):
+        # Verificar si destino está vacío
+        if not any(os.scandir(CALIBRATIONS_DIR)):
+            import shutil
+            for fname in os.listdir(embedded_calib):
+                src = os.path.join(embedded_calib, fname)
+                dst = os.path.join(CALIBRATIONS_DIR, fname)
+                try:
+                    if os.path.isdir(src):
+                        shutil.copytree(src, dst)
+                    else:
+                        shutil.copy2(src, dst)
+                except Exception:
+                    # No crítico: seguir si falla copiar algún archivo
+                    pass
+except Exception:
+    pass
+
 print(f"[CONFIG] Directorio de Datos (Escritura): {DATA_DIR}")
 print(f"[CONFIG] Directorio Base (Recursos): {BASE_DIR}")
 print(f"[CONFIG] Directorio de Calibraciones: {CALIBRATIONS_DIR}")

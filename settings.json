@@ -1,5 +1,4 @@
 {
-    "use_sensor_config": true,
     "execution_mode": "REAL",
     "connection_type": "SERIAL",
     "serial_port": "COM3",
@@ -8,18 +7,18 @@
     "nodes": {
         "celda_1": {
             "id": 4248,
-            "ch": "ch2",
+            "ch": "ch1",
             "serial": "3013"
         },
         "celda_2": {
-            "id": 4249,
-            "ch": "ch2",
-            "serial": "3010"
-        },
-        "celda_3": {
             "id": 4248,
             "ch": "ch2",
             "serial": "3012"
+        },
+        "celda_3": {
+            "id": 4249,
+            "ch": "ch1",
+            "serial": "3010"
         },
         "celda_4": {
             "id": 4249,
