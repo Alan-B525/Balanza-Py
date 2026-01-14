@@ -214,7 +214,7 @@ class MSCLDriver(ISistemaPesaje):
                 first = frames[0]
                 keys = list(first.get('values', {}).keys())
                 sample = {k: first.get('values', {}).get(k) for k in keys[:6]}
-                self._log(f"obtener_datos -> frames={len(frames)} keys_sample={keys[:6]} sample={sample}")
+                #self._log(f"obtener_datos -> frames={len(frames)} keys_sample={keys[:6]} sample={sample}")
             except Exception:
                 pass
 
@@ -392,14 +392,6 @@ class MSCLDriver(ISistemaPesaje):
                         'complete': is_complete
                     })
                     expired.append(ts)
-
-            # Depuración: registrar si devolvemos frames
-            try:
-                if completed:
-                    self._log(f"_collect_frames: returning {len(completed)} frame(s); expired={len(expired)}")
-            except Exception:
-                pass
-
             for ts in expired:
                 del self._frame_buffer[ts]
 

@@ -582,14 +582,33 @@ class BalanzaGUI(ttk.Window):
             # AZUL - Todos os sensores conectados (normal)
             self.total_section.configure(style='TotalPanel.TFrame')
             self.lbl_total_title.configure(text="PESO TOTAL", style='TotalLabel.TLabel')
-            # Actualizar total solo si la muestra es nueva
+            # Actualizar total usando timestamp (permitiendo totals negativos).
             incoming_total_last = data.get('total_last_seen', 0.0) or 0.0
-            total_raw = data.get('total_raw', 0.0)
-            # Actualizar el total solo si hay datos válidos (total_raw>0)
-            # y la muestra es nueva o igual (>=) al último timestamp registrado.
-            if total_raw > 0 and incoming_total_last >= self._widget_last_total:
-                peso_ton = data['total']
-                self.lbl_total.configure(text=f"{self._format_weight(peso_ton)}", style='TotalValue.TLabel')
+            # Ignoramos la comprobación 'total_raw>0' para que valores negativos
+            # en las lecturas sean reflejados en la UI tal como llegan.
+            # Actualizar solo si la muestra es nueva (strict >) para evitar
+            # redibujos con el mismo timestamp que causaban parpadeos.
+            if incoming_total_last > self._widget_last_total:
+                peso_ton = data.get('total', 0.0)
+                total_text = f"{self._format_weight(peso_ton)}"
+                # Ajustar fuente del TOTAL según decimales y signo negativo
+                try:
+                    # Derivar tamaños base
+                    normal_total = self.scaled_font(120)
+                except Exception:
+                    normal_total = 120
+                total_small = max(40, int(normal_total * 0.9))
+                total_extra_small = max(30, int(normal_total * 0.7))
+                try:
+                    if self._show_decimals and str(total_text).strip().startswith("-"):
+                        self.lbl_total.configure(font=("Consolas", total_extra_small, 'bold'))
+                    elif self._show_decimals:
+                        self.lbl_total.configure(font=("Consolas", total_small, 'bold'))
+                    else:
+                        self.lbl_total.configure(font=("Consolas", normal_total, 'bold'))
+                except Exception:
+                    pass
+                self.lbl_total.configure(text=total_text, style='TotalValue.TLabel')
                 self._widget_last_total = incoming_total_last
             self.lbl_total_unit.configure(text="t", style='TotalUnit.TLabel')
         
@@ -605,6 +624,22 @@ class BalanzaGUI(ttk.Window):
                 if incoming_last > prev_last:
                     display_text = self._format_weight(valor_ton)
                     widgets['value'].configure(text=display_text)
+                    # Si mostramos decimales y el valor es negativo, reducir la fuente
+                    try:
+                        try:
+                            normal_cell = self.scaled_font(64)
+                        except Exception:
+                            normal_cell = 64
+                        cell_small = max(10, int(normal_cell * 0.75))
+                        cell_extra_small = max(8, int(normal_cell * 0.6))
+                        if self._show_decimals and str(display_text).strip().startswith("-"):
+                            widgets['value'].configure(font=("Consolas", cell_extra_small, 'bold'))
+                        elif self._show_decimals:
+                            widgets['value'].configure(font=("Consolas", cell_small, 'bold'))
+                        else:
+                            widgets['value'].configure(font=("Consolas", normal_cell, 'bold'))
+                    except Exception:
+                        pass
                     self._widget_last_seen[key] = incoming_last
                 
                 # Atualizar estado visual segundo conexo
@@ -845,6 +880,68 @@ class BalanzaGUI(ttk.Window):
                 width=8,
                 padding=(15, 12)
             )
+        # Ajustar tamaño de fuente de los valores de las celdas y del TOTAL
+        # - Cuando hay decimales activados, reducimos las celdas (como antes).
+        # - Si además hay signo negativo en alguna lectura, reducir TODO aun más
+        #   (celdas + peso total) para evitar overflow/recorte visual.
+        try:
+            normal_cell = self.scaled_font(64)
+        except Exception:
+            normal_cell = 64
+        try:
+            normal_total = self.scaled_font(120)
+        except Exception:
+            normal_total = 120
+
+        # Niveles de reducción
+        cell_small = max(10, int(normal_cell * 0.75))
+        cell_extra_small = max(8, int(normal_cell * 0.6))
+        total_small = max(40, int(normal_total * 0.9))
+        total_extra_small = max(30, int(normal_total * 0.7))
+
+        # Detectar si hay signo negativo en el último conjunto de lecturas
+        negative_present = False
+        try:
+            data = getattr(self, '_last_sensor_data', None)
+            if data:
+                # Chequear total
+                if float(data.get('total', 0.0)) < 0:
+                    negative_present = True
+                # Chequear sensores individuales
+                for s in data.get('sensores', {}).values():
+                    try:
+                        if float(s.get('valor', 0.0)) < 0:
+                            negative_present = True
+                            break
+                    except Exception:
+                        continue
+        except Exception:
+            negative_present = False
+
+        for key, widgets in getattr(self, 'sensor_widgets', {}).items():
+            try:
+                if self._show_decimals:
+                    # Decimales activos -> usar small o extra small si hay negativo
+                    size = cell_extra_small if negative_present else cell_small
+                    widgets['value'].configure(font=("Consolas", size, 'bold'))
+                else:
+                    widgets['value'].configure(font=("Consolas", normal_cell, 'bold'))
+            except Exception:
+                pass
+
+        # Ajustar TOTAL también cuando corresponde
+        try:
+            if hasattr(self, 'lbl_total') and self.lbl_total:
+                if self._show_decimals and negative_present:
+                    self.lbl_total.configure(font=("Consolas", total_extra_small, 'bold'))
+                elif self._show_decimals:
+                    # Mantener total grande aún con decimales, pero ligeramente más pequeño
+                    self.lbl_total.configure(font=("Consolas", total_small, 'bold'))
+                else:
+                    self.lbl_total.configure(font=("Consolas", normal_total, 'bold'))
+        except Exception:
+            pass
+
         # Forzar actualización visual inmediata de todos los valores
         self.after(10, self._refresh_all_displays)
     
@@ -2360,39 +2457,101 @@ class BalanzaGUI(ttk.Window):
         def get_reading_by_unit():
             """Obtiene la lectura según la unidad seleccionada."""
             unit = self._cal_unit_var.get()
-            
+            # Obtener sensor seleccionado (nombre interno, ej. 'celda_1')
+            selected = None
+            if hasattr(self, '_cal_sensor_selected'):
+                selected = self._cal_sensor_selected.get()
+
+            # Priorizar lectura RAW por sensor seleccionado
+            try:
+                raw = 0.0
+                if selected:
+                    raw = float(self.data_processor.get_last_raw_for(selected))
+                else:
+                    raw = float(self.data_processor.get_last_total_raw())
+            except Exception:
+                raw = float(self.data_processor.get_last_total_raw())
+
             if unit == "Bits (Raw)":
-                # Valor raw sin procesar
-                return self.data_processor.get_last_total_raw()
-            elif unit == "t":
-                # Peso calibrado en toneladas (usa calibración actual)
-                # Si hay calibración, devuelve el peso; si no, devuelve raw
+                return raw
+
+            # Si la unidad es peso (t o kg), intentar leer el valor procesado del sensor
+            if unit == "t":
                 try:
-                    # Obtener el último peso procesado
-                    result = getattr(self, '_last_process_result', None)
-                    if result and 'total' in result:
-                        return result['total']
-                except:
+                    proc = getattr(self, '_last_sensor_data', None)
+                    if proc and 'sensores' in proc and selected in proc['sensores']:
+                        val = proc['sensores'][selected].get('valor')
+                        if val is not None:
+                            return val
+                except Exception:
                     pass
-                return self.data_processor.get_last_total_raw()
-            elif unit == "kg":
-                # Peso en kg (toneladas * 1000)
+                # Fallback: intentar convertir la lectura CRUDA a toneladas
                 try:
-                    result = getattr(self, '_last_process_result', None)
-                    if result and 'total' in result:
-                        return result['total'] * 1000
-                except:
+                    raw_f = float(self.data_processor.get_last_raw_for(selected))
+                except Exception:
+                    try:
+                        raw_f = float(raw)
+                    except Exception:
+                        raw_f = 0.0
+
+                # Aplicar multiplicador/inversión por sensor (mismo comportamiento que DataProcessor)
+                mult = 1.0
+                try:
+                    cfg = None
+                    if hasattr(self.data_processor, 'nodos_config'):
+                        cfg = self.data_processor.nodos_config.get(selected)
+                        # Si selected no es clave directa, buscar por coincidencia
+                        if cfg is None:
+                            for k, v in self.data_processor.nodos_config.items():
+                                if k == selected:
+                                    cfg = v
+                                    break
+                    if cfg:
+                        if 'sign' in cfg:
+                            mult = float(cfg.get('sign', 1.0))
+                        elif cfg.get('invert', False):
+                            mult = -1.0
+                except Exception:
+                    mult = 1.0
+
+                raw_applied = raw_f * mult
+
+                # Aplicar coeficientes del sistema y convertir a toneladas
+                try:
+                    slope = float(getattr(self.data_processor, 'system_slope', 1.0))
+                    offset = float(getattr(self.data_processor, 'system_offset', 0.0))
+                    peso = (raw_applied * slope) + offset
+                except Exception:
+                    peso = raw_applied
+
+                # El sistema ahora asume que las lecturas crudas y los coeficientes
+                # están en toneladas; por tanto `peso` ya está en toneladas.
+                try:
+                    return float(peso)
+                except Exception:
+                    return 0.0
+
+            if unit == "kg":
+                try:
+                    proc = getattr(self, '_last_sensor_data', None)
+                    if proc and 'sensores' in proc and selected in proc['sensores']:
+                        val = proc['sensores'][selected].get('valor')
+                        if val is not None:
+                            return val * 1000
+                except Exception:
                     pass
-                return self.data_processor.get_last_total_raw()
-            elif unit == "mV/V":
-                # Conversión aproximada de bits a mV/V
-                # Asumiendo ADC de 24 bits y rango típico
-                raw = self.data_processor.get_last_total_raw()
-                # Conversión aproximada (ajustar según especificaciones del sensor)
-                mv_per_v = (raw / 16777216) * 2.5  # Ejemplo: 24-bit ADC, 2.5mV/V full scale
-                return mv_per_v
-            else:
-                return self.data_processor.get_last_total_raw()
+                return raw
+
+            if unit == "mV/V":
+                # Conversión aproximada desde RAW bits a mV/V
+                try:
+                    mv_per_v = (raw / 16777216.0) * 2.5
+                    return mv_per_v
+                except Exception:
+                    return 0.0
+
+            # Default: raw
+            return raw
             
         def cmd_capture():
             if not check_connection():

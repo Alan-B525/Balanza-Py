@@ -65,7 +65,7 @@ class DataProcessor:
     def __init__(self, nodos_config: Dict[str, Dict[str, Any]], 
                  median_window: int = 5,
                  ema_alpha: float = 0.3,
-                 input_unit: str = "kg"):
+                 input_unit: str = "t"):
         self.nodos_config = nodos_config
         self.median_window = median_window
         self.ema_alpha = ema_alpha
@@ -84,6 +84,7 @@ class DataProcessor:
         self._median_buffers: Dict[str, deque] = {}
         self._ema_values: Dict[str, Optional[float]] = {}
         self._tares: Dict[str, float] = {}
+        self._last_raw_readings: Dict[str, float] = {}
         self._last_seen: Dict[str, float] = {}
         self._node_connected_state: Dict[str, bool] = {}
         self._last_total_seen: float = 0.0
@@ -175,18 +176,41 @@ class DataProcessor:
             is_connected = self._check_connection(composite, current_time, resultado)
             valor_crudo = 0.0
             if composite in datos_por_nodo:
-                valor_crudo = datos_por_nodo[composite]
-                # Algunos sensores/reportes MSCL vienen con signo negativo
-                # (depende de la configuración de la celda). Para evitar
-                # que una suma total negativa bloquee la visualización,
-                # normalizamos usando el valor absoluto aquí.
+                original_val = datos_por_nodo[composite]
                 try:
-                    valor_crudo = abs(float(valor_crudo))
+                    self._last_raw_readings[composite] = float(original_val)
                 except Exception:
-                    valor_crudo = float(valor_crudo)
-                # Conversión de unidad si el dato viene en toneladas
-                if self.input_unit == "t":
-                    valor_crudo = valor_crudo * 1000.0
+                    try:
+                        self._last_raw_readings[composite] = float(str(original_val))
+                    except Exception:
+                        self._last_raw_readings[composite] = 0.0
+                # Mantener la lectura cruda original para auditoría/calibración
+                valor_crudo = original_val
+                # Convertir a float y aplicar multiplicador por sensor (signo/config)
+                try:
+                    raw_f = float(original_val)
+                except Exception:
+                    try:
+                        raw_f = float(str(original_val))
+                    except Exception:
+                        raw_f = 0.0
+
+                mult = 1.0
+                try:
+                    nombre_logico = self._node_to_name.get(composite)
+                    cfg_local = self.nodos_config.get(nombre_logico, {}) if nombre_logico else {}
+                    if 'sign' in cfg_local:
+                        mult = float(cfg_local.get('sign', 1.0))
+                    elif cfg_local.get('invert', False):
+                        mult = -1.0
+                except Exception:
+                    mult = 1.0
+
+                # El valor crudo es tomado directamente del sensor y se interpreta
+                # según `input_unit`. En configuración actual se usa 't' (toneladas),
+                # por lo que no realizamos conversión a kg aquí — todo el procesamiento
+                # usa la misma unidad de entrada para mantener consistencia.
+                valor_crudo = raw_f * mult
             # NO aplicar filtros si USE_FILTERS es False
             # Usamos la clave compuesta para buffers/EMA/memoria
             valor_filtrado = self._filter_value(composite, valor_crudo)
@@ -208,7 +232,9 @@ class DataProcessor:
 
         # Guardar la última suma raw válida; NO sobrescribir con 0 para
         # evitar que muestras intermedias borren el último valor crudo real.
-        if sum_raw_connected > 0:
+        # Ahora aceptamos sums negativas (signo) ya que las lecturas pueden ser
+        # negativas por configuración o por orientación de la celda.
+        if sum_raw_connected != 0:
             self._last_total_raw = sum_raw_connected
 
         # 3. Aplicar Formula Lineal al Total: y = mx + b
@@ -227,11 +253,16 @@ class DataProcessor:
         tara_global = self._tares.get("global", 0.0)
         peso_neto = peso_bruto - tara_global
         
-        resultado["total"] = round(peso_neto, 3)
+        # Si no hay sensores aportando raw (suma == 0), devolvemos el último
+        # peso calculado para evitar saltos a 0 en la UI entre frames.
+        if sum_raw_connected == 0:
+            resultado["total"] = round(self._last_total_weight, 3)
+        else:
+            resultado["total"] = round(peso_neto, 3)
         resultado["total_raw"] = sum_raw_connected
         resultado["total_tare"] = round(tara_global, 3)
         # Actualizar timestamp del total solo si hay datos conectados (evita zeros intermedios)
-        if sum_raw_connected > 0:
+        if sum_raw_connected != 0:
             self._last_total_seen = current_time
             # Guardar el último peso neto visible para operaciones como tara
             self._last_total_weight = peso_neto
@@ -247,7 +278,9 @@ class DataProcessor:
 
         # 4. Asignar valor individual por sensor proporcional al total calculado
         try:
-            if sum_raw_connected > 0:
+            # Distribuir el peso neto proporcionalmente al aporte raw.
+            # Soportamos sums negativas: la proporción preservará el signo.
+            if sum_raw_connected != 0:
                 for nombre_logico, cfg in self.nodos_config.items():
                     node_id = cfg["id"]
                     channel = cfg.get("ch", "ch1")
@@ -423,6 +456,39 @@ class DataProcessor:
                 return self._tares.get(matches[0], 0.0)
             return 0.0
         return self._tares.get(node_key, 0.0)
+
+    def get_last_raw_for(self, node_key) -> float:
+        """Retorna la última lectura CRUDA registrada para una clave compuesta ('id:ch'),
+        un id numérico, o un nombre interno de sensor (ej. 'celda_1').
+        """
+        # Si es int, buscar la primera clave compuesta que empiece por id:
+        try:
+            if isinstance(node_key, int):
+                matches = [k for k in self._last_raw_readings.keys() if k.startswith(f"{node_key}:")]
+                if matches:
+                    return self._last_raw_readings.get(matches[0], 0.0)
+                return 0.0
+        except Exception:
+            pass
+
+        # Si es string y contiene ':', usar directo
+        try:
+            if isinstance(node_key, str):
+                if ':' in node_key:
+                    return self._last_raw_readings.get(node_key, 0.0)
+                # Si corresponde a un nombre interno en nodos_config
+                if node_key in self.nodos_config:
+                    cfg = self.nodos_config[node_key]
+                    composite = f"{cfg.get('id')}:{cfg.get('ch','ch1')}"
+                    return self._last_raw_readings.get(composite, 0.0)
+                # Buscar cualquier clave que empiece por node_key + ':'
+                matches = [k for k in self._last_raw_readings.keys() if k.startswith(f"{node_key}:")]
+                if matches:
+                    return self._last_raw_readings.get(matches[0], 0.0)
+        except Exception:
+            pass
+
+        return 0.0
     
     def get_all_taras(self) -> Dict[str, float]:
         return dict(self._tares)
