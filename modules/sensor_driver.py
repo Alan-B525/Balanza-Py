@@ -1,16 +1,11 @@
 """
-sensor_driver.py - Driver Industrial Estabilizado (v5.0)
+sensor_driver.py - Driver Industrial "Smart Join" (v6.0)
 
-CORRECCIÓN CRÍTICA DE SECUENCIA:
-El error 'Failed to read Model Number' se soluciona asegurando que el Beacon
-esté APAGADO mientras se añaden los nodos a la red de software.
-
-Secuencia Correcta v5.0:
-1. Conectar BaseStation.
-2. DESACTIVAR Beacon (Silencio para configuración).
-3. Resetear nodos a Idle y añadirlos a SyncNetwork.
-4. ACTIVAR Beacon.
-5. Iniciar Muestreo.
+ESTRATEGIA CORRECTA:
+1. No forzar conexión con nodos dormidos (evita error EEPROM).
+2. Activar Beacon inmediatamente.
+3. "Auto-Enrolamiento": Cuando un nodo despierta y manda un dato, 
+   el driver lo detecta y lo registra en memoria automáticamente.
 """
 
 import sys
@@ -44,10 +39,7 @@ class ConnectionState(Enum):
     CONNECTING = "connecting"
     CONNECTED = "connected"
     SAMPLING = "sampling"
-    RECONNECTING = "reconnecting"
     ERROR = "error"
-
-class SyncNetworkError(Exception): pass
 
 @dataclass
 class AggregatedFrame:
@@ -58,6 +50,7 @@ class AggregatedFrame:
     creation_time: float = field(default_factory=time.time)
     
     def is_complete(self, expected_keys: Set[str]) -> bool:
+        # Nota: en modo descubrimiento, expected_keys puede crecer dinámicamente
         return expected_keys.issubset(set(self.readings.keys()))
 
 try:
@@ -72,7 +65,7 @@ except ImportError:
 class MSCLDriver(ISistemaPesaje):
 
     BAUD_RATE = 3000000
-    DATA_TIMEOUT_MS = 100
+    DATA_TIMEOUT_MS = 500  # Muy rápido para no bloquear
     FRAME_TIMEOUT_S = 0.05
     TIMESTAMP_TOLERANCE_NS = 10_000_000 # 10ms
 
@@ -81,13 +74,15 @@ class MSCLDriver(ISistemaPesaje):
         
         self.nodos_config = nodos_config or {}
         
-        self._expected_node_ids: Set[int] = set()
-        self._expected_data_keys: Set[str] = set()
+        # Configuración Esperada (Base de datos de qué buscar)
+        self._config_node_ids: Set[int] = set()
+        self._config_data_keys: Set[str] = set()
+        
+        # Estado de Red Dinámico
+        self._active_node_ids: Set[int] = set() # Nodos que ya despertaron y están enviando
         
         self._connection = None
         self._base_station = None
-        self._sync_network = None
-        self._wireless_nodes = {}
         
         self._state = ConnectionState.DISCONNECTED
         self._lock = threading.RLock()
@@ -95,21 +90,20 @@ class MSCLDriver(ISistemaPesaje):
         self._frame_buffer: Dict[int, AggregatedFrame] = {}
         self._value_cache: Dict[str, deque] = {}
         
-        self._beacon_monitor_thread = None
-        
         self._stats = {'total_packets': 0, 'start_time': None}
         
         self._parse_config()
 
     def _parse_config(self):
+        """Carga la lista de nodos permitidos."""
         for name, cfg in self.nodos_config.items():
             nid = cfg.get('id', 0)
             if nid <= 0: continue
             
             ch_raw = cfg.get('ch', 'ch1').lower().replace("channel", "ch").replace(" ", "")
-            self._expected_node_ids.add(nid)
+            self._config_node_ids.add(nid)
             key = f"{nid}:{ch_raw}"
-            self._expected_data_keys.add(key)
+            self._config_data_keys.add(key)
             self._value_cache[key] = deque(maxlen=10)
 
     def _log(self, msg):
@@ -125,180 +119,226 @@ class MSCLDriver(ISistemaPesaje):
 
     def conectar(self, puerto: str) -> bool:
         with self._lock:
+            if self._state in (ConnectionState.CONNECTED, ConnectionState.SAMPLING):
+                return True
+
             self._state = ConnectionState.CONNECTING
-            self._log(f"Iniciando secuencia de conexión en {puerto}...")
-            
+            self._log(f"Abriendo puerto serie: {puerto}")
+
             try:
                 self._connection = mscl.Connection.Serial(puerto, self.BAUD_RATE)
                 self._base_station = mscl.BaseStation(self._connection)
-                
-                # --- PASO CRÍTICO 1: SILENCIO DE RADIO ---
-                # Desactivamos el Beacon para que los nodos puedan responder a addNode()
-                # sin interferencias.
-                try:
-                    self._base_station.disableBeacon()
-                    time.sleep(0.5) # Esperar a que se limpie el aire
-                except:
-                    pass
 
-                # --- PASO 2: CONFIGURAR RED Y NODOS ---
-                # Ahora addNode() debería funcionar porque la base no está ocupada
-                if not self._setup_sync_network_safe():
-                    raise SyncNetworkError("No se pudo configurar la red de nodos")
-
-                # --- PASO 3: ACTIVAR BEACON ---
-                # Una vez configurada la red, encendemos el Beacon para sincronizar
-                self._log("Activando Beacon...")
                 try:
                     self._base_station.enableBeacon()
-                    time.sleep(1.0) # Dar tiempo a que los nodos encuentren el beacon
+                    self._log("Beacon solicitado (modo escucha pasiva).")
                 except Exception as e:
-                    self._log(f"Advertencia activando Beacon: {e}")
+                    self._log(f"Beacon no confirmado: {e}")
 
-                # --- PASO 4: INICIAR MUESTREO ---
-                self._log("Enviando comando Start Sampling...")
-                try:
-                    self._sync_network.startSampling()
-                except Exception as e:
-                    self._log(f"Error en startSampling: {e}")
-                    # Continuamos igual por si acaso ya estaban andando
-
-                self._state = ConnectionState.SAMPLING
                 self._stats['start_time'] = time.time()
-                self._log("✓ Sistema operativo. Escuchando datos.")
+                self._state = ConnectionState.SAMPLING
+                self._log("✓ Sistema escuchando datos MSCL.")
+
                 return True
 
             except Exception as e:
-                self._log(f"ERROR CRÍTICO: {e}")
-                self.desconectar()
-                self._state = ConnectionState.ERROR
+                self._log(f"ERROR DE CONEXIÓN: {e}")
+                self._force_reset_connection()
                 return False
 
-    def _setup_sync_network_safe(self) -> bool:
-        """Añade nodos a la red asegurando su estado."""
-        if not self._expected_node_ids: return False
 
-        self._sync_network = mscl.SyncSamplingNetwork(self._base_station)
-        nodes_added = 0
-        
-        for nid in self._expected_node_ids:
-            try:
-                # Instanciamos el nodo
-                node = mscl.WirelessNode(nid, self._base_station)
-                
-                # 1. Forzamos Idle (Importante si estaba en sampling previo)
+    def _force_reset_connection(self):
+        try:
+            if self._base_station:
                 try:
-                    node.setToIdle()
-                except: 
-                    pass # Puede fallar si está dormido, no es bloqueante
-                
-                # 2. Añadimos a la red (Aquí fallaba antes por el Beacon activo)
-                self._sync_network.addNode(node)
-                self._wireless_nodes[nid] = node
-                nodes_added += 1
-                self._log(f"Nodo {nid} agregado correctamente.")
-                
-            except Exception as e:
-                self._log(f"Error gestionando nodo {nid}: {e}")
-                # Intentamos agregarlo 'ciegamente' si la librería lo permite en fallo parcial
-                try:
-                    self._sync_network.addNode(node)
-                    nodes_added += 1
+                    self._base_station.disableBeacon()
                 except:
                     pass
+        finally:
+            self._base_station = None
+            self._connection = None
+            self._active_node_ids.clear()
+            self._frame_buffer.clear()
+            self._state = ConnectionState.DISCONNECTED
 
-        if nodes_added == 0:
-            self._log("No se pudieron agregar nodos a la red.")
-            return False
-
-        # Aplicar la configuración de red (valida la topología)
-        try:
-            self._sync_network.applyConfiguration()
-        except Exception as e:
-            self._log(f"Nota sobre applyConfiguration: {e}")
-            
-        return True
 
     def desconectar(self):
-        self._log("Cerrando sistema...")
         with self._lock:
-            # Orden: Parar red -> Parar nodos -> Apagar Beacon -> Cerrar Puerto
-            if self._sync_network:
-                try: self._sync_network.stopSampling()
-                except: pass
-            
-            # Refuerzo: mandar a dormir uno por uno
-            for nid, node in self._wireless_nodes.items():
-                try: node.setToIdle()
-                except: pass
-            
-            if self._base_station:
-                try: self._base_station.disableBeacon()
-                except: pass
-            
-            if self._connection:
-                try: self._connection.disconnect()
-                except: pass
-            
+            self._log("Cerrando conexión MSCL...")
+
+            try:
+                if self._base_station:
+                    try:
+                        if self._base_station.beaconEnabled():
+                            self._base_station.disableBeacon()
+                            self._log("Beacon desactivado.")
+                    except:
+                        pass
+            finally:
+                self._base_station = None
+
+            # MSCL no siempre expone disconnect(), dejar que Python libere el recurso
             self._connection = None
-            self._base_station = None
-            self._sync_network = None
+
+            self._active_node_ids.clear()
+            self._frame_buffer.clear()
+
             self._state = ConnectionState.DISCONNECTED
-            self._log("Desconectado.")
+            self._log("✓ Conexión cerrada correctamente.")
+
 
     # =========================================================================
-    # LECTURA
+    # LECTURA INTELIGENTE (AUTO-ENROLAMIENTO)
     # =========================================================================
 
     def obtener_datos(self) -> List[Dict[str, Any]]:
-        if not self._base_station: return []
-        
-        current_time = time.time()
-        
+        if not self._base_station or self._state != ConnectionState.SAMPLING:
+            return []
+
+        now = time.time()
+
         try:
             sweeps = self._base_station.getData(self.DATA_TIMEOUT_MS)
+            if sweeps:
+                self._log(f"Sweeps recibidos: {len(sweeps)}")
+
+            if not sweeps:
+                return []
+
             for sweep in sweeps:
-                self._parse_sweep(sweep)
-        except:
-            pass
+                self._log(f"Sweep nodo={sweep.nodeAddress()} datapoints={len(sweep.data())}")
+                self._process_sweep_atomic(sweep)
 
-        return self._collect_frames(current_time)
+        except Exception as e:
+            self._log(f"Error en adquisición de datos: {e}")
+            self._state = ConnectionState.ERROR
+            return []
 
-    def _parse_sweep(self, sweep):
+        return self._collect_frames(now)
+
+    def _process_sweep_atomic(self, sweep):
         try:
             nid = sweep.nodeAddress()
-            if nid not in self._expected_node_ids: return
 
+            # Filtro de red
+            if nid not in self._config_node_ids:
+                return
+
+            # Auto-enrolamiento
+            if nid not in self._active_node_ids:
+                self._active_node_ids.add(nid)
+                self._log(f"Nodo {nid} activo.")
+
+            ts_ns = sweep.timestamp().nanoseconds()
+            rssi = sweep.nodeRssi()
+
+            # Extraer TODOS los datapoints primero
+            values = {}
+
+            for dp in sweep.data():
+                try:
+                    ch_name = str(dp.channelName()).lower()
+                except:
+                    continue
+
+                ch_key = self._map_channel_name(ch_name)
+                if not ch_key:
+                    continue
+
+                full_key = f"{nid}:{ch_key}"
+
+                if full_key not in self._config_data_keys:
+                    continue
+
+                try:
+                    val = dp.as_float()
+                    values[full_key] = val
+                    self._value_cache[full_key].append(val)
+                except:
+                    continue
+
+            if values:
+                self._insert_sweep_frame(ts_ns, values, nid, rssi)
+
+        except Exception:
+            pass
+
+    def _map_channel_name(self, ch_name: str) -> Optional[str]:
+        # Normalizar
+        name = ch_name.lower().strip()
+        
+        # Lógica prioritaria para MSCL estándar
+        if name in ('ch1', 'val1', 'strain1', 'load1'): return 'ch1'
+        if name in ('ch2', 'val2', 'strain2', 'load2'): return 'ch2'
+        if name in ('ch3', 'val3', 'strain3', 'load3'): return 'ch3'
+        if name in ('ch4', 'val4', 'strain4', 'load4'): return 'ch4'
+        
+        # Lógica fallback (contiene el número pero no es un número random del timestamp)
+        if '1' in name and ('ch' in name or 'val' in name): return 'ch1'
+        if '2' in name and ('ch' in name or 'val' in name): return 'ch2'
+        
+        return None
+
+    def _insert_sweep_frame(self, ts_ns, values, nid, rssi):
+        with self._lock:
+            # Buscar frame cercano (ventana temporal)
+            target_ts = None
+            for t in self._frame_buffer:
+                if abs(t - ts_ns) <= self.TIMESTAMP_TOLERANCE_NS:
+                    target_ts = t
+                    break
+
+            if target_ts is None:
+                frame = AggregatedFrame(timestamp_ns=ts_ns)
+                self._frame_buffer[ts_ns] = frame
+            else:
+                frame = self._frame_buffer[target_ts]
+
+            frame.readings.update(values)
+            frame.rssi_map[nid] = rssi
+
+
+    def _process_active_sweep(self, sweep):
+        """Procesa datos y detecta nodos activos."""
+        try:
+            nid = sweep.nodeAddress()
+            
+            # FILTRO: ¿Es un nodo de los nuestros?
+            if nid not in self._config_node_ids: 
+                return # Ignorar nodos vecinos
+
+            # AUTO-ENROLAMIENTO
+            if nid not in self._active_node_ids:
+                self._active_node_ids.add(nid)
+                self._log(f"¡Nodo {nid} detectado y activo! Recibiendo datos.")
+
+            # Procesamiento Normal
             ts_ns = sweep.timestamp().nanoseconds()
             rssi = sweep.nodeRssi()
             
             for dp in sweep.data():
-                # Eliminado chequeo .valid() para compatibilidad
+                # Sin chequeo .valid() por compatibilidad
                 try:
-                    raw_name = str(dp.channelName()).lower()
+                    ch_name = str(dp.channelName()).lower()
                 except:
-                    raw_name = "unknown"
+                    ch_name = "unknown"
                 
                 ch_key = None
-                # Lógica flexible para nombres de canal
-                if "1" in raw_name and ("ch" in raw_name or "strain" in raw_name or "val" in raw_name):
+                if "1" in ch_name and ("ch" in ch_name or "strain" in ch_name or "val" in ch_name):
                     ch_key = "ch1"
-                elif "2" in raw_name and ("ch" in raw_name or "strain" in raw_name or "val" in raw_name):
+                elif "2" in ch_name and ("ch" in ch_name or "strain" in ch_name or "val" in ch_name):
                     ch_key = "ch2"
-                elif "3" in raw_name:
-                    ch_key = "ch3"
+                elif "3" in ch_name: ch_key = "ch3"
+                elif "4" in ch_name: ch_key = "ch4"
                 
                 if ch_key:
                     try:
                         val = dp.as_float()
                         full_key = f"{nid}:{ch_key}"
                         
-                        # Debug ocasional si quieres ver que entran datos
-                        # self._log(f"Rx: {full_key} = {val}")
-                        
-                        self._add_to_frame_buffer(ts_ns, full_key, val, rssi)
-                        
-                        if full_key in self._value_cache:
+                        # Solo procesamos canales que esperamos en config
+                        if full_key in self._config_data_keys:
+                            self._add_to_frame_buffer(ts_ns, full_key, val, rssi)
                             self._value_cache[full_key].append(val)
                     except:
                         pass
@@ -326,46 +366,46 @@ class MSCLDriver(ISistemaPesaje):
     def _collect_frames(self, now):
         completed = []
         expired = []
-        
+
         with self._lock:
-            for ts, frame in self._frame_buffer.items():
-                if frame.is_complete(self._expected_data_keys):
-                    frame.complete = True
-                    completed.append(self._to_dict(frame))
+            frames = list(self._frame_buffer.items())
+
+            for ts, frame in frames:
+                # Claves esperadas SOLO de nodos activos
+                expected = {
+                    k for k in self._config_data_keys
+                    if int(k.split(":")[0]) in self._active_node_ids
+                }
+
+                is_complete = expected.issubset(frame.readings.keys())
+                is_expired = (now - frame.creation_time) > self.FRAME_TIMEOUT_S
+
+                if is_complete or is_expired:
+                    completed.append({
+                        'timestamp': frame.timestamp_ns / 1e9,
+                        'values': frame.readings.copy(),
+                        'rssi': frame.rssi_map.copy(),
+                        'complete': is_complete
+                    })
                     expired.append(ts)
-                elif (now - frame.creation_time) > self.FRAME_TIMEOUT_S:
-                    frame.complete = False
-                    completed.append(self._to_dict(frame))
-                    expired.append(ts)
-            
-            for k in expired:
-                del self._frame_buffer[k]
-        
+
+            for ts in expired:
+                del self._frame_buffer[ts]
+
         return completed
 
-    def _to_dict(self, frame):
-        return {
-            'timestamp': frame.timestamp_ns / 1e9,
-            'values': frame.readings.copy(),
-            'rssi': frame.rssi_map.copy(),
-            'complete': frame.complete
-        }
-
     # =========================================================================
-    # DESCUBRIMIENTO
+    # DESCUBRIMIENTO (Para el botón de la UI)
     # =========================================================================
 
     def descubrir_nodos(self, timeout_ms: int = 5000) -> List[Dict[str, Any]]:
-        """Descubrimiento pasivo escuchando el aire."""
         if not self._base_station: 
-            self._log("Error: No hay conexión para descubrir")
             return []
 
-        self._log(f"Escuchando nodos ({timeout_ms}ms)...")
+        self._log(f"Escaneando ({timeout_ms}ms)...")
         found = {}
         start = time.time()
         
-        # Asegurar beacon encendido para despertar nodos
         try: self._base_station.enableBeacon()
         except: pass
 
@@ -390,18 +430,25 @@ class MSCLDriver(ISistemaPesaje):
             if not chs: chs = [{'channel': 'ch1', 'type': 'strain', 'value': 0.0}, {'channel': 'ch2', 'type': 'strain', 'value': 0.0}]
             data['channels'] = chs
             res.append(data)
-            self._log(f"Encontrado: {nid}")
             
         return res
 
-    # =========================================================================
-    # GUI INTERFACE
-    # =========================================================================
+    # COMPATIBILIDAD
     @property
     def state(self) -> ConnectionState: return self._state
     def esta_conectado(self) -> bool: return self._state in (ConnectionState.CONNECTED, ConnectionState.SAMPLING)
     def get_statistics(self) -> Dict: return {'connection_state': self._state.value}
-    def get_node_status(self, nid: int) -> Optional[Dict]: return {'node_id': nid, 'is_online': True}
+
+    def get_node_status(self, nid: int) -> Optional[Dict]: 
+        is_online = False
+        if nid in self._active_node_ids:
+            last_seen = self._last_seen_map.get(nid, 0)
+            # Si se vio en los últimos 5 segundos, está online
+            if (time.time() - last_seen) < 5.0:
+                is_online = True
+        return {'node_id': nid, 'is_online': is_online}
+
+
     def tarar(self, nid=None): pass
     def reset_tarar(self): pass
 

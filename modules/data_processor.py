@@ -80,12 +80,12 @@ class DataProcessor:
         self._last_total_raw: float = 0.0 # Almacenar ultimo raw sum para calibracion
         self._last_total_weight: float = 0.0 # Almacenar ultimo peso neto (visible) para tara
         
-        self._node_to_name: Dict[int, str] = {}
-        self._median_buffers: Dict[int, deque] = {}
-        self._ema_values: Dict[int, Optional[float]] = {}
-        self._tares: Dict[int, float] = {}
-        self._last_seen: Dict[int, float] = {}
-        self._node_connected_state: Dict[int, bool] = {}
+        self._node_to_name: Dict[str, str] = {}
+        self._median_buffers: Dict[str, deque] = {}
+        self._ema_values: Dict[str, Optional[float]] = {}
+        self._tares: Dict[str, float] = {}
+        self._last_seen: Dict[str, float] = {}
+        self._node_connected_state: Dict[str, bool] = {}
         self._last_total_seen: float = 0.0
         
         # Cola de eventos de desconexión pendientes
@@ -106,12 +106,12 @@ class DataProcessor:
             self._node_connected_state[composite] = False
             self._log_to_file(f"Inicializado nodo {nombre_logico} (ID={node_id})")
     
-    def _apply_median_filter(self, node_id: int, value: float) -> float:
+    def _apply_median_filter(self, node_key, value: float) -> float:
         if not self.USE_FILTERS:
             return value
-        if node_id not in self._median_buffers:
-            self._median_buffers[node_id] = deque(maxlen=self.median_window)
-        buffer = self._median_buffers[node_id]
+        if node_key not in self._median_buffers:
+            self._median_buffers[node_key] = deque(maxlen=self.median_window)
+        buffer = self._median_buffers[node_key]
         buffer.append(value)
         if len(buffer) == 0:
             return value
@@ -120,23 +120,23 @@ class DataProcessor:
         else:
             return statistics.median(buffer)
     
-    def _apply_ema_filter(self, node_id: int, value: float) -> float:
+    def _apply_ema_filter(self, node_key, value: float) -> float:
         if not self.USE_FILTERS:
             return value
-        if node_id not in self._ema_values:
-            self._ema_values[node_id] = None
-        if self._ema_values[node_id] is None:
-            self._ema_values[node_id] = value
+        if node_key not in self._ema_values:
+            self._ema_values[node_key] = None
+        if self._ema_values[node_key] is None:
+            self._ema_values[node_key] = value
             return value
-        ema = self.ema_alpha * value + (1 - self.ema_alpha) * self._ema_values[node_id]
-        self._ema_values[node_id] = ema
+        ema = self.ema_alpha * value + (1 - self.ema_alpha) * self._ema_values[node_key]
+        self._ema_values[node_key] = ema
         return ema
     
-    def _filter_value(self, node_id: int, raw_value: float) -> float:
+    def _filter_value(self, node_key, raw_value: float) -> float:
         if not self.USE_FILTERS:
             return raw_value
-        median_value = self._apply_median_filter(node_id, raw_value)
-        ema_value = self._apply_ema_filter(node_id, median_value)
+        median_value = self._apply_median_filter(node_key, raw_value)
+        ema_value = self._apply_ema_filter(node_key, median_value)
         return ema_value
     
     def procesar(self, raw_data: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -165,8 +165,8 @@ class DataProcessor:
         # 2. Estrategia "Suma de Fuerzas": Sumar Raw PRIMERO
         sum_raw_connected = 0.0
         active_sensors_count = 0
-        # Guarda valores filtrados por nodo para distribución posterior
-        _valor_filtrado_por_nodo: Dict[int, float] = {}
+        # Guarda valores filtrados por nodo (clave compuesta) para distribución posterior
+        _valor_filtrado_por_nodo: Dict[str, float] = {}
 
         for nombre_logico, cfg in self.nodos_config.items():
             node_id = cfg["id"]
@@ -180,8 +180,9 @@ class DataProcessor:
                 if self.input_unit == "t":
                     valor_crudo = valor_crudo * 1000.0
             # NO aplicar filtros si USE_FILTERS es False
-            valor_filtrado = self._filter_value(node_id, valor_crudo)
-            _valor_filtrado_por_nodo[node_id] = valor_filtrado
+            # Usamos la clave compuesta para buffers/EMA/memoria
+            valor_filtrado = self._filter_value(composite, valor_crudo)
+            _valor_filtrado_por_nodo[composite] = valor_filtrado
             if is_connected:
                 sum_raw_connected += valor_filtrado
                 active_sensors_count += 1
