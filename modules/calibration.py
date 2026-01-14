@@ -103,6 +103,35 @@ class CalibrationManager:
                 self._log_to_file(f"Formato inesperado en archivo de calibración: {type(data)}")
             self.points = loaded
             self._log_to_file(f"Cargados {len(self.points)} puntos de calibración desde: {path}")
+            # Si cargamos puntos desde disco, aplicarlos automáticamente
+            try:
+                if self.points and hasattr(self.dp, 'set_calibration_segments'):
+                    pts = self.get_points()  # lista de (weight, reading)
+                    # Intentar asociar composite como en apply_calibration
+                    composite = None
+                    try:
+                        if self.celda_id is not None:
+                            internal = self.celda_id
+                            if isinstance(internal, (int, float)):
+                                internal = f"celda_{int(internal)}"
+                            elif isinstance(internal, str) and not internal.startswith("celda_"):
+                                internal = f"celda_{internal}"
+                            if hasattr(self.dp, 'nodos_config') and internal in self.dp.nodos_config:
+                                cfg = self.dp.nodos_config.get(internal, {})
+                                nid = cfg.get('id')
+                                ch = cfg.get('ch', 'ch1')
+                                if nid:
+                                    composite = f"{nid}:{ch}"
+                    except Exception:
+                        composite = None
+
+                    try:
+                        self.dp.set_calibration_segments(pts, serial=self.serial, composite=composite)
+                        self._log_to_file(f"Auto-aplicada calibración desde {path} a serial={self.serial} composite={composite}")
+                    except Exception as e:
+                        self._log_to_file(f"Fallo auto-aplicando calibración: {e}")
+            except Exception:
+                pass
         except Exception as e:
             self._log_to_file(f"Error al cargar puntos: {e}")
             self.points = []
@@ -214,11 +243,36 @@ class CalibrationManager:
             # Interpolación por segmentos - guardar puntos
             points = model.get("points", [])
             if points and hasattr(self.dp, 'set_calibration_segments'):
-                # Pasar el serial (si está disponible) para asociar la calibración al sensor correcto
+                # Intentar asociar la calibración por serial o por celda (composite id:ch)
+                composite = None
                 try:
-                    self.dp.set_calibration_segments(points, serial=self.serial, composite=None)
+                    if self.celda_id is not None:
+                        # Normalizar nombre interno
+                        internal = self.celda_id
+                        if isinstance(internal, (int, float)):
+                            internal = f"celda_{int(internal)}"
+                        elif isinstance(internal, str) and not internal.startswith("celda_"):
+                            internal = f"celda_{internal}"
+                        # Buscar en dp.nodos_config
+                        if hasattr(self.dp, 'nodos_config') and internal in self.dp.nodos_config:
+                            cfg = self.dp.nodos_config.get(internal, {})
+                            nid = cfg.get('id')
+                            ch = cfg.get('ch', 'ch1')
+                            if nid:
+                                composite = f"{nid}:{ch}"
                 except Exception:
-                    self.dp.set_calibration_segments(points)
+                    composite = None
+
+                try:
+                    self.dp.set_calibration_segments(points, serial=self.serial, composite=composite)
+                    self._log_to_file(f"Aplicada calibración segments a serial={self.serial} composite={composite}")
+                except Exception:
+                    # Ultimo recurso: pasar solo points
+                    try:
+                        self.dp.set_calibration_segments(points)
+                        self._log_to_file(f"Aplicada calibración segments (fallback) sin target explícito")
+                    except Exception as e:
+                        self._log_to_file(f"Error aplicando calibración: {e}")
             elif points:
                 # Fallback: guardar en atributo
                 self.dp.calibration_segments = points
