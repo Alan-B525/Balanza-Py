@@ -208,13 +208,17 @@ class CalibrationManager:
         # Guardar puntos al aplicar calibración
         self.save_points()
 
-        method = model.get("method", "")
+        method = "segments"
 
         if method == "segments":
             # Interpolación por segmentos - guardar puntos
             points = model.get("points", [])
             if points and hasattr(self.dp, 'set_calibration_segments'):
-                self.dp.set_calibration_segments(points)
+                # Pasar el serial (si está disponible) para asociar la calibración al sensor correcto
+                try:
+                    self.dp.set_calibration_segments(points, serial=self.serial, composite=None)
+                except Exception:
+                    self.dp.set_calibration_segments(points)
             elif points:
                 # Fallback: guardar en atributo
                 self.dp.calibration_segments = points

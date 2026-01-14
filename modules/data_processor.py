@@ -88,6 +88,9 @@ class DataProcessor:
         self._last_seen: Dict[str, float] = {}
         self._node_connected_state: Dict[str, bool] = {}
         self._last_total_seen: float = 0.0
+        # Mapas para calibración por sensor
+        self.sensor_calibrations: Dict[str, Dict[str, Any]] = {}  # key -> {'method':..., 'points':[(raw,weight),...]}
+        self._composite_to_serial: Dict[str, Optional[str]] = {}
         
         # Cola de eventos de desconexión pendientes
         self._disconnect_events: List[SensorDisconnectEvent] = []
@@ -105,6 +108,9 @@ class DataProcessor:
             self._tares[composite] = 0.0
             self._last_seen[composite] = 0.0
             self._node_connected_state[composite] = False
+            # Guardar serial si existe en la configuración para mapping de calibración
+            serial = cfg.get('serial') if isinstance(cfg, dict) else None
+            self._composite_to_serial[composite] = serial
             self._log_to_file(f"Inicializado nodo {nombre_logico} (ID={node_id})")
     
     def _apply_median_filter(self, node_key, value: float) -> float:
@@ -166,6 +172,8 @@ class DataProcessor:
         # 2. Estrategia "Suma de Fuerzas": Sumar Raw PRIMERO
         sum_raw_connected = 0.0
         active_sensors_count = 0
+        sum_contrib_connected = 0.0
+        any_calibrated = False
         # Guarda valores filtrados por nodo (clave compuesta) para distribución posterior
         _valor_filtrado_por_nodo: Dict[str, float] = {}
 
@@ -214,9 +222,25 @@ class DataProcessor:
             # NO aplicar filtros si USE_FILTERS es False
             # Usamos la clave compuesta para buffers/EMA/memoria
             valor_filtrado = self._filter_value(composite, valor_crudo)
+            # Aplicar calibración por sensor (segments) si existe
+            calibrated_value = None
+            try:
+                calibrated_value = self._map_raw_to_weight(composite, valor_filtrado)
+            except Exception:
+                calibrated_value = None
+
+            # Si hay calibración por sensor, su contribución usa el valor calibrado (peso)
+            if calibrated_value is not None:
+                contrib = float(calibrated_value)
+                any_calibrated = True
+            else:
+                contrib = valor_filtrado
+
             _valor_filtrado_por_nodo[composite] = valor_filtrado
             if is_connected:
                 sum_raw_connected += valor_filtrado
+                # sum_contrib acumula la suma ya calibrada cuando corresponda
+                sum_contrib_connected += contrib
                 active_sensors_count += 1
             else:
                 resultado["any_disconnected"] = True
@@ -243,7 +267,14 @@ class DataProcessor:
         # IMPORTANTE: Si falta algun sensor, la suma es invalida para pesaje preciso
         # pero mostramos lo que hay.
         
-        peso_bruto = (sum_raw_connected * self.system_slope) + self.system_offset
+        # Si existen contribuciones calibradas (por sensor), preferimos usar
+        # la suma calibrada directa como peso bruto. Esto permite que curvas
+        # por-sensor (interpolación por segmentos) se reflejen directamente.
+        # Si existen contribuciones calibradas por sensor, usar esa suma directa
+        if any_calibrated:
+            peso_bruto = float(sum_contrib_connected)
+        else:
+            peso_bruto = (sum_raw_connected * self.system_slope) + self.system_offset
         
         # Aplicar Tara Global
         # La tara ahora se aplica sobre el peso calculado (no sobre raw)
@@ -290,9 +321,18 @@ class DataProcessor:
                         continue
                     if sensor_entry.get("connected"):
                         vf = _valor_filtrado_por_nodo.get(composite, 0.0)
-                        # Distribuir el peso neto proporcionalmente al aporte raw
-                        sensor_val = (vf / sum_raw_connected) * peso_neto
-                        sensor_entry["valor"] = round(sensor_val, 3)
+                        # Si existe calibracion por sensor, utilizar el valor calibrado directo
+                        calib_v = None
+                        try:
+                            calib_v = self._map_raw_to_weight(composite, vf)
+                        except Exception:
+                            calib_v = None
+                        if calib_v is not None:
+                            sensor_entry["valor"] = round(float(calib_v), 3)
+                        else:
+                            # Distribuir el peso neto proporcionalmente al aporte raw
+                            sensor_val = (vf / sum_raw_connected) * peso_neto
+                            sensor_entry["valor"] = round(sensor_val, 3)
                     else:
                         sensor_entry["valor"] = 0.0
             else:
@@ -523,6 +563,98 @@ class DataProcessor:
     def get_last_total_raw(self) -> float:
         """Retorna la ultima suma total de valores raw (filtrados)."""
         return self._last_total_raw
+
+    # --------------------------------------------------
+    # Calibración por sensor (segments / interpolación)
+    # --------------------------------------------------
+    def set_calibration_segments(self, points: List[tuple], serial: Optional[str] = None, composite: Optional[str] = None):
+        """Registra una curva de calibración por segmentos.
+
+        `points` se espera como lista de tuplas (peso, lectura) tal como
+        las genera el wizard; se convierte internamente a (reading, weight).
+        Se puede asociar por `serial` o por `composite` (id:ch). Si no se
+        encuentra objetivo, se guarda bajo la clave del `serial` si se
+        pasó o se ignora.
+        """
+        try:
+            # Convertir (weight, reading) -> (reading, weight)
+            conv = []
+            for item in points:
+                try:
+                    w = float(item[0])
+                    r = float(item[1])
+                    conv.append((r, w))
+                except Exception:
+                    continue
+            if not conv:
+                return
+            conv.sort(key=lambda x: x[0])
+
+            targets = []
+            if composite:
+                targets.append(composite)
+            elif serial:
+                # Asociar a todas las claves composites que tengan ese serial
+                for comp, s in self._composite_to_serial.items():
+                    if s == serial:
+                        targets.append(comp)
+            # Si no hay targets, almacenar bajo el serial si fue provisto
+            if not targets and serial:
+                targets.append(serial)
+
+            for t in targets:
+                self.sensor_calibrations[t] = {'method': 'segments', 'points': conv}
+                self._log_to_file(f"Calibración por segmentos aplicada a {t} con {len(conv)} puntos")
+        except Exception as e:
+            self._log_to_file(f"Error registrando calibración por segmentos: {e}")
+
+    def _map_raw_to_weight(self, composite: str, raw_value: float) -> Optional[float]:
+        """Mapea una lectura cruda a peso usando la calibración por segmentos si existe.
+
+        Busca primero una calibración asociada a la clave `composite`, luego
+        por `serial` asociado a esa composite.
+        """
+        try:
+            calib = None
+            if composite in self.sensor_calibrations:
+                calib = self.sensor_calibrations[composite]
+            else:
+                serial = self._composite_to_serial.get(composite)
+                if serial and serial in self.sensor_calibrations:
+                    calib = self.sensor_calibrations[serial]
+            if not calib:
+                return None
+            if calib.get('method') != 'segments':
+                return None
+            pts = calib.get('points', [])
+            if not pts:
+                return None
+            # pts: list of (reading, weight) sorted by reading
+            pts = sorted(pts, key=lambda x: x[0])
+            r = float(raw_value)
+            # If only one point, return its weight
+            if len(pts) == 1:
+                return float(pts[0][1])
+            # Below minimum -> extrapolate using first segment
+            if r <= pts[0][0]:
+                # Fuera de rango por debajo: devolver el peso del primer punto (clamp)
+                x0, y0 = pts[0]
+                self._log_to_file(f"Calibracion clamp abajo: {composite} raw={r} -> {y0} (primer punto)")
+                return float(y0)
+            # Between points -> interpolate
+            for i in range(len(pts) - 1):
+                x0, y0 = pts[i]
+                x1, y1 = pts[i + 1]
+                if x0 <= r <= x1:
+                    if x1 == x0:
+                        return float(y0)
+                    return float(y0 + (r - x0) * (y1 - y0) / (x1 - x0))
+            # Por encima del rango: devolver el peso del último punto (clamp)
+            x_last, y_last = pts[-1]
+            self._log_to_file(f"Calibracion clamp arriba: {composite} raw={r} -> {y_last} (ultimo punto)")
+            return float(y_last)
+        except Exception:
+            return None
 
 
 def create_processor(nodos_config: Dict[str, Dict[str, Any]], 
