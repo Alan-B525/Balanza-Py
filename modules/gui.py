@@ -2328,13 +2328,13 @@ class BalanzaGUI(ttk.Window):
                     except: pass
                 for sub in content_frame.winfo_children():
                     if isinstance(sub, ttk.Label):
-                        # Aplica estilos normales
+                        # Aplica estilos normales (evitar configurar 'background' en ttk.Label)
                         if hasattr(sub, 'tag') and sub.tag == "name":
-                            sub.configure(background=BG_CARD, foreground=TEXT_MAIN, font=("Segoe UI", 26, "bold"))
+                            sub.configure(foreground=TEXT_MAIN, font=("Segoe UI", 26, "bold"))
                         elif hasattr(sub, 'tag') and sub.tag == "serial":
-                            sub.configure(background=BG_CARD, foreground=TEXT_MUTED, font=("Segoe UI", 14))
+                            sub.configure(foreground=TEXT_MUTED, font=("Segoe UI", 14))
                         elif hasattr(sub, 'tag') and sub.tag == "status":
-                            sub.configure(background=BG_CARD, foreground=TEXT_MUTED, font=("Segoe UI", 12))
+                            sub.configure(foreground=TEXT_MUTED, font=("Segoe UI", 12))
                 if lbl_status:
                     lbl_status.configure(text="Clicar para selecionar")
     
