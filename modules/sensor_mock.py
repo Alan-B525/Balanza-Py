@@ -17,16 +17,31 @@ class MockDriver(ISistemaPesaje):
         self.nodos_config = nodos_config or {}
         self.use_sensor_config = use_sensor_config
         self._expected_node_ids = set()
+        # map: node_id -> set(channels)
+        self._node_channels = {}
+        self._logical_to_id = {}
         for k, v in self.nodos_config.items():
             nid = v.get('id', 0)
+            ch = v.get('ch', 'ch1')
             if nid > 0:
                 self._expected_node_ids.add(nid)
+                self._node_channels.setdefault(nid, set()).add(ch)
+                self._logical_to_id[k] = nid
 
         self._running = False
         self._thread = None
         self._frames = deque()
         self._state = 'disconnected'
         self._stats = {'total_packets': 0, 'valid_packets': 0, 'start_time': None}
+
+        # Si no hay IDs configuradas (todos 0), generar IDs simulados secuenciales
+        if not self._expected_node_ids and self.nodos_config:
+            base = 3010
+            for idx, (logical, cfg) in enumerate(self.nodos_config.items()):
+                fake_id = base + idx
+                self._expected_node_ids.add(fake_id)
+                self._node_channels.setdefault(fake_id, set()).add(cfg.get('ch', 'ch1'))
+                self._logical_to_id[logical] = fake_id
 
     def conectar(self, puerto: str) -> bool:
         self._running = True
@@ -44,11 +59,14 @@ class MockDriver(ISistemaPesaje):
             ts_ns = int(time.time() * 1e9)
             readings = {}
             rssi = {}
-            for nid in self._expected_node_ids:
-                # Valores simulados en rango típico
-                val = random.uniform(1000.0, 2000.0)
-                readings[nid] = val
-                rssi[nid] = random.randint(-80, -30)
+            for nid in sorted(self._expected_node_ids):
+                channels = sorted(list(self._node_channels.get(nid, {'ch1'})))
+                for channel in channels:
+                    # Valores simulados en rango típico
+                    val = random.uniform(1000.0, 2000.0)
+                    key = f"{nid}:{channel}"
+                    readings[key] = val
+                    rssi[key] = random.randint(-80, -30)
 
             frame = {
                 'timestamp': ts_ns / 1e9,
@@ -82,19 +100,38 @@ class MockDriver(ISistemaPesaje):
 
     def descubrir_nodos(self, timeout_ms: int = 5000) -> List[Dict[str, Any]]:
         nodos = []
-        for nid in sorted(self._expected_node_ids):
-            nodos.append({
-                'id': nid,
-                'rssi': -40,
-                'status': 'mock',
-                'model': 'Mock-SG-Link',
-                'serial': str(nid),
-                'channels': [
-                    {'channel': 'ch1', 'type': 'strain', 'value': 0.0, 'last_value': 0.0},
-                    {'channel': 'ch2', 'type': 'strain', 'value': 0.0, 'last_value': 0.0}
-                ],
-                'sample_rate': '32'
-            })
+        # Construir lista de nodos basada en la configuración lógica cuando sea posible
+        if self.nodos_config:
+            # Agrupar por node id para listar todos los canales configurados por nodo
+            nid_map = {}
+            for logical, cfg in self.nodos_config.items():
+                nid = cfg.get('id', 0) or self._logical_to_id.get(logical)
+                ch = cfg.get('ch', 'ch1')
+                nid_map.setdefault(nid, set()).add(ch)
+            for nid, channels in nid_map.items():
+                channels_list = [{'channel': ch, 'type': 'strain', 'value': 0.0, 'last_value': 0.0} for ch in sorted(channels)]
+                nodos.append({
+                    'id': nid,
+                    'rssi': -40,
+                    'status': 'mock',
+                    'model': 'Mock-SG-Link',
+                    'serial': str(nid),
+                    'channels': channels_list,
+                    'sample_rate': '32'
+                })
+        else:
+            for nid in sorted(self._expected_node_ids):
+                nodos.append({
+                    'id': nid,
+                    'rssi': -40,
+                    'status': 'mock',
+                    'model': 'Mock-SG-Link',
+                    'serial': str(nid),
+                    'channels': [
+                        {'channel': 'ch1', 'type': 'strain', 'value': 0.0, 'last_value': 0.0},
+                    ],
+                    'sample_rate': '32'
+                })
         return nodos
 
     def tarar(self, node_id: int = None) -> None:

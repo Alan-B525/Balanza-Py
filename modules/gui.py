@@ -2267,6 +2267,22 @@ class BalanzaGUI(ttk.Window):
         COLOR_NORMAL_FG = "#1e293b"   # Dark Slate
         COLOR_NORMAL_SUB = "#94a3b8"  # Gray
         
+        # APLICAR CONSTANTES DE COLOR (usar antes de configurar estilos)
+        PRIMARY = "#2563eb"
+        BG_CARD = "#ffffff"
+        TEXT_MAIN = "#1e293b"
+        TEXT_MUTED = "#64748b"
+
+        # Preparar estilos (fallback silencioso si style no existe)
+        try:
+            # Marcos: el estilo intenta definir borde/relief, pero muchos temas lo ignoran,
+            # por eso también aplicamos un fallback directo a los widgets más abajo.
+            self.style.configure('Card.TFrame', background=BG_CARD, relief='solid', borderwidth=1)
+            self.style.configure('SelectedCard.TFrame', background=COLOR_SELECTED_BG, relief='solid', borderwidth=2)
+            # Labels: preferimos configurar foreground directamente en los widgets
+        except Exception:
+            pass
+
         for widget in container.winfo_children(): # widget = btn_frame
             s_name = getattr(widget, 'sensor_name', None)
             if not s_name:
@@ -2297,44 +2313,66 @@ class BalanzaGUI(ttk.Window):
                     break
             
             # APLICAR ESTILOS
-            PRIMARY = "#2563eb"
-            BG_CARD = "#ffffff"
-            TEXT_MAIN = "#1e293b"
-            TEXT_MUTED = "#64748b"
             if s_name == selected:
                 # == SELECCIONADO ==
-                try: widget.configure(bootstyle="primary") 
+                try: widget.configure(style='SelectedCard.TFrame')
                 except: pass
                 if content_frame:
-                    try: content_frame.configure(bootstyle="primary")
+                    try: content_frame.configure(style='SelectedCard.TFrame')
                     except: pass
+                # Forzar color de fondo y borde visible (fallback si el tema no pinta el frame)
+                try:
+                    widget.configure(background=COLOR_SELECTED_BG, relief='solid', borderwidth=3,
+                                     highlightthickness=2, highlightbackground=COLOR_SELECTED_BG)
+                except Exception:
+                    pass
+                try:
+                    content_frame.configure(background=COLOR_SELECTED_BG)
+                except Exception:
+                    pass
                 for sub in content_frame.winfo_children():
                     if isinstance(sub, ttk.Label):
                         # Aplica estilos personalizados según el tipo de label
-                        if hasattr(sub, 'tag') and sub.tag == "name":
-                            sub.configure(style='SelectedSensor.TLabel')
-                        elif hasattr(sub, 'tag') and sub.tag == "serial":
-                            sub.configure(style='SelectedSensorSerial.TLabel')
-                        elif hasattr(sub, 'tag') and sub.tag == "status":
-                            sub.configure(style='SelectedSensorStatus.TLabel')
+                        try:
+                            if hasattr(sub, 'tag') and sub.tag == "name":
+                                sub.configure(foreground=COLOR_SELECTED_FG, font=("Segoe UI", self.scaled_font(26), 'bold'), background=COLOR_SELECTED_BG)
+                            elif hasattr(sub, 'tag') and sub.tag == "serial":
+                                sub.configure(foreground=COLOR_SELECTED_FG, font=("Segoe UI", self.scaled_font(14)), background=COLOR_SELECTED_BG)
+                            elif hasattr(sub, 'tag') and sub.tag == "status":
+                                sub.configure(foreground=COLOR_SELECTED_FG, font=("Segoe UI", self.scaled_font(12), 'bold'), background=COLOR_SELECTED_BG)
+                        except Exception:
+                            pass
                 if lbl_status:
                     lbl_status.configure(text="SELECIONADO")
             else:
                 # == NORMAL / NO SELECCIONADO ==
-                try: widget.configure(bootstyle="secondary") 
+                try: widget.configure(style='Card.TFrame')
                 except: pass
                 if content_frame:
-                    try: content_frame.configure(bootstyle="default")
+                    try: content_frame.configure(style='Card.TFrame')
                     except: pass
+                # Restaurar fondo y aplicar borde leve para delimitar la tarjeta
+                try:
+                    widget.configure(background=BG_CARD, relief='solid', borderwidth=1,
+                                     highlightthickness=1, highlightbackground="#e2e8f0")
+                except Exception:
+                    pass
+                try:
+                    content_frame.configure(background=BG_CARD)
+                except Exception:
+                    pass
                 for sub in content_frame.winfo_children():
                     if isinstance(sub, ttk.Label):
                         # Aplica estilos normales (evitar configurar 'background' en ttk.Label)
-                        if hasattr(sub, 'tag') and sub.tag == "name":
-                            sub.configure(foreground=TEXT_MAIN, font=("Segoe UI", 26, "bold"))
-                        elif hasattr(sub, 'tag') and sub.tag == "serial":
-                            sub.configure(foreground=TEXT_MUTED, font=("Segoe UI", 14))
-                        elif hasattr(sub, 'tag') and sub.tag == "status":
-                            sub.configure(foreground=TEXT_MUTED, font=("Segoe UI", 12))
+                        try:
+                            if hasattr(sub, 'tag') and sub.tag == "name":
+                                sub.configure(foreground=TEXT_MAIN, font=("Segoe UI", self.scaled_font(26), "bold"), background=BG_CARD)
+                            elif hasattr(sub, 'tag') and sub.tag == "serial":
+                                sub.configure(foreground=TEXT_MUTED, font=("Segoe UI", self.scaled_font(14)), background=BG_CARD)
+                            elif hasattr(sub, 'tag') and sub.tag == "status":
+                                sub.configure(foreground=TEXT_MUTED, font=("Segoe UI", self.scaled_font(12)), background=BG_CARD)
+                        except Exception:
+                            pass
                 if lbl_status:
                     lbl_status.configure(text="Clicar para selecionar")
     
@@ -2565,6 +2603,12 @@ class BalanzaGUI(ttk.Window):
                 self._cal_input_reading.set(f"{val:.4f}")
             elif unit in ["t", "kg"]:
                 self._cal_input_reading.set(f"{val:.2f}")
+            elif unit == "Bits (Raw)":
+                # Preservar decimales en RAW para calibración (3 decimales)
+                try:
+                    self._cal_input_reading.set(f"{val:.3f}")
+                except Exception:
+                    self._cal_input_reading.set(f"{val:.0f}")
             else:
                 self._cal_input_reading.set(f"{val:.0f}")
             
