@@ -192,7 +192,7 @@ class MSCLDriver(ISistemaPesaje):
     # =========================================================================
 
     def obtener_datos(self) -> List[Dict[str, Any]]:
-        if not self._base_station or self._state != ConnectionState.SAMPLING:
+        if not self._base_station or self._state not in (ConnectionState.CONNECTED, ConnectionState.SAMPLING):
             return []
 
         now = time.time()
@@ -200,21 +200,25 @@ class MSCLDriver(ISistemaPesaje):
         try:
             sweeps = self._base_station.getData(self.DATA_TIMEOUT_MS)
             if sweeps:
-                self._log(f"Sweeps recibidos: {len(sweeps)}")
-
-            if not sweeps:
-                return []
-
-            for sweep in sweeps:
-                self._log(f"Sweep nodo={sweep.nodeAddress()} datapoints={len(sweep.data())}")
-                self._process_sweep_atomic(sweep)
-
+                for sweep in sweeps:
+                    self._process_sweep_atomic(sweep)
         except Exception as e:
             self._log(f"Error en adquisición de datos: {e}")
             self._state = ConnectionState.ERROR
             return []
 
-        return self._collect_frames(now)
+        frames = self._collect_frames(now)
+        if frames:
+            try:
+                # Log síntesis de lo que se va a devolver al procesador
+                first = frames[0]
+                keys = list(first.get('values', {}).keys())
+                sample = {k: first.get('values', {}).get(k) for k in keys[:6]}
+                self._log(f"obtener_datos -> frames={len(frames)} keys_sample={keys[:6]} sample={sample}")
+            except Exception:
+                pass
+
+        return frames
 
     def _process_sweep_atomic(self, sweep):
         try:
@@ -389,6 +393,13 @@ class MSCLDriver(ISistemaPesaje):
                     })
                     expired.append(ts)
 
+            # Depuración: registrar si devolvemos frames
+            try:
+                if completed:
+                    self._log(f"_collect_frames: returning {len(completed)} frame(s); expired={len(expired)}")
+            except Exception:
+                pass
+
             for ts in expired:
                 del self._frame_buffer[ts]
 
@@ -440,13 +451,17 @@ class MSCLDriver(ISistemaPesaje):
     def get_statistics(self) -> Dict: return {'connection_state': self._state.value}
 
     def get_node_status(self, nid: int) -> Optional[Dict]: 
-        is_online = False
-        if nid in self._active_node_ids:
-            last_seen = self._last_seen_map.get(nid, 0)
-            # Si se vio en los últimos 5 segundos, está online
-            if (time.time() - last_seen) < 5.0:
-                is_online = True
-        return {'node_id': nid, 'is_online': is_online}
+        # Determinar último `last_seen` agregando los timestamps de claves compuestas
+        last = 0.0
+        for k, t in getattr(self, '_last_seen', {}).items():
+            try:
+                num = int(str(k).split(":")[0])
+                if num == nid and t > last:
+                    last = t
+            except Exception:
+                continue
+        is_online = (time.time() - last) < 5.0 if last > 0 else False
+        return {'node_id': nid, 'is_online': is_online, 'last_seen': last}
 
 
     def tarar(self, nid=None): pass

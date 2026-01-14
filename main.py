@@ -206,6 +206,13 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
                 
                 # Sempre processamos para verificar timeouts
                 datos_procesados = procesador.procesar(raw_data)
+
+                # Debug: registrar resumen rápido de lo que devolvió el procesador
+                try:
+                    sensor_keys = list(datos_procesados.get('sensores', {}).keys())
+                    data_queue.put({'type': 'LOG', 'payload': f"Procesador: sensores={sensor_keys} total={datos_procesados.get('total')} any_disconnected={datos_procesados.get('any_disconnected', False)}"})
+                except Exception:
+                    pass
                 
                 # Extrair logs do processador e enviar
                 if 'logs' in datos_procesados:

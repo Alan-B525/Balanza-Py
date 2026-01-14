@@ -176,6 +176,14 @@ class DataProcessor:
             valor_crudo = 0.0
             if composite in datos_por_nodo:
                 valor_crudo = datos_por_nodo[composite]
+                # Algunos sensores/reportes MSCL vienen con signo negativo
+                # (depende de la configuración de la celda). Para evitar
+                # que una suma total negativa bloquee la visualización,
+                # normalizamos usando el valor absoluto aquí.
+                try:
+                    valor_crudo = abs(float(valor_crudo))
+                except Exception:
+                    valor_crudo = float(valor_crudo)
                 # Conversión de unidad si el dato viene en toneladas
                 if self.input_unit == "t":
                     valor_crudo = valor_crudo * 1000.0
@@ -190,8 +198,8 @@ class DataProcessor:
                 resultado["any_disconnected"] = True
             resultado["sensores"][nombre_logico] = {
                 "valor": 0.0,  # se calculará después para garantizar consistencia con el total
-                "raw": int(valor_filtrado),
-                "crudo": int(valor_crudo),
+                "raw": round(valor_filtrado, 3),
+                "crudo": round(valor_crudo, 3),
                 "id": node_id,
                 "key": composite,
                 "connected": is_connected,
@@ -263,62 +271,29 @@ class DataProcessor:
         return resultado
 
     def _extract_node_data(self, raw_data: List[Dict[str, Any]]) -> Dict[str, float]:
-        """Extrae un diccionario node_id -> valor_crudo desde raw_data.
-
-        Soporta dos formatos comunes:
-        - Lista de frames ya formateados por el driver/mock: cada frame es dict con 'values': {node_id: value}
-        - Lista vacía o formato desconocido -> retorna dict vacío
-        En caso de múltiples frames, se toma el último valor observado por nodo.
-        """
         result: Dict[str, float] = {}
-        try:
-            if not raw_data:
-                return result
 
-            # Si raw_data es una lista de diccionarios con clave 'values'
-            for item in raw_data:
-                if isinstance(item, dict) and 'values' in item and isinstance(item['values'], dict):
-                    for nid, val in item['values'].items():
-                        # Si la clave ya es compuesta 'id:ch', usar tal cual
-                        try:
-                            nid_str = str(nid)
-                            if ':' in nid_str:
-                                key = nid_str
-                            else:
-                                # Nid numérico: intentar mapear al primer canal conocido
-                                num = int(nid)
-                                # Buscar cualquier composite registrado para este id
-                                matches = [k for k in self._node_to_name.keys() if k.startswith(f"{num}:")]
-                                if matches:
-                                    key = matches[0]
-                                else:
-                                    key = str(num)
-                        except Exception:
-                            key = str(nid)
-                        result[key] = float(val)
-                else:
-                    # Intentar interpretar item como un frame simple con 'timestamp' y 'values'
-                    try:
-                        if hasattr(item, 'values') and isinstance(item.values, dict):
-                            for nid, val in item.values.items():
-                                nid_str = str(nid)
-                                if ':' in nid_str:
-                                    key = nid_str
-                                else:
-                                    try:
-                                        num = int(nid)
-                                        matches = [k for k in self._node_to_name.keys() if k.startswith(f"{num}:")]
-                                        key = matches[0] if matches else str(num)
-                                    except Exception:
-                                        key = nid_str
-                                result[key] = float(val)
-                    except Exception:
-                        # Ignorar formatos no reconocidos
-                        continue
-        except Exception as e:
-            self._log_to_file(f"Error extrayendo datos crudos: {e}")
+        if not raw_data:
+            return result
+
+        # Tomamos SOLO el último frame válido
+        last_frame = raw_data[-1]
+
+        if not isinstance(last_frame, dict):
+            return result
+
+        values = last_frame.get("values", {})
+        if not isinstance(values, dict):
+            return result
+
+        for key, val in values.items():
+            try:
+                result[str(key)] = float(val)
+            except Exception:
+                continue
 
         return result
+
 
     def _check_connection(self, node_key: str, current_time: float, resultado: Dict[str, Any]) -> bool:
         """Verifica si un nodo está conectado según último timestamp observado.
