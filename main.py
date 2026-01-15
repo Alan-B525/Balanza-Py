@@ -350,6 +350,36 @@ def main():
     backend_thread.start()
     # Solo modo tablet: sin barra superior
     app = BalanzaGUI(data_queue, command_queue, procesador)
+    # Establecer icono de la ventana usando assets/icon.ico (fallback a icon.png)
+    try:
+        base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+        assets_dir = os.path.join(base_path, 'assets')
+        ico_path = os.path.join(assets_dir, 'icon.ico')
+        png_path = os.path.join(assets_dir, 'icon.png')
+        if os.path.exists(ico_path):
+            try:
+                app.iconbitmap(ico_path)
+            except Exception:
+                # En algunas plataformas/tk versiones puede fallar; intentar iconphoto
+                try:
+                    img = None
+                    from PIL import Image, ImageTk
+                    img = ImageTk.PhotoImage(Image.open(ico_path))
+                    app.iconphoto(False, img)
+                    # Mantener referencia para evitar GC
+                    app._icon_img = img
+                except Exception:
+                    pass
+        elif os.path.exists(png_path):
+            try:
+                from PIL import Image, ImageTk
+                img = ImageTk.PhotoImage(Image.open(png_path))
+                app.iconphoto(False, img)
+                app._icon_img = img
+            except Exception:
+                pass
+    except Exception:
+        pass
     app.mainloop()
 
 

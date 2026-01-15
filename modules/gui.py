@@ -157,30 +157,34 @@ class BalanzaGUI(ttk.Window):
         
         # Configure Label styles - Escalados
         self.style.configure('CardTitle.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, sf(16), "bold"))
-        self.style.configure('CardValue.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_MONO, sf(48), "bold"))
+        self.style.configure('CardValue.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_MONO, sf(40), "bold"))
         self.style.configure('Unit.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, sf(18)))
         self.style.configure('SensorStatus.TLabel', background=BG_CARD, foreground=SUCCESS, font=(FONT_MAIN, sf(13), "bold"))
         
         # Total Panel - MUY PROMINENTE para nfasis mximo
         self.style.configure('TotalPanel.TFrame', background=PRIMARY)
         self.style.configure('TotalLabel.TLabel', background=PRIMARY, foreground="white", font=(FONT_MAIN, sf(28), "bold"))
-        self.style.configure('TotalValue.TLabel', background=PRIMARY, foreground="white", font=(FONT_MONO, sf(120), "bold"))
+        self.style.configure('TotalValue.TLabel', background=PRIMARY, foreground="white", font=(FONT_MONO, sf(72), "bold"))
         self.style.configure('TotalUnit.TLabel', background=PRIMARY, foreground="white", font=(FONT_MAIN, sf(36)))
         
         # Total Panel DANGER - Cuando hay sensor desconectado (ROJO)
         self.style.configure('TotalPanelDanger.TFrame', background=DANGER)
-        self.style.configure('TotalLabelDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MAIN, sf(28), "bold"))
-        self.style.configure('TotalValueDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MONO, sf(120), "bold"))
-        self.style.configure('TotalUnitDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MAIN, sf(36)))
+        self.style.configure('TotalLabelDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MAIN, sf(24), "bold"))
+        self.style.configure('TotalValueDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MONO, sf(72), "bold"))
+        self.style.configure('TotalUnitDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MAIN, sf(20)))
         
-        # Tara Info - Ms visible
-        self.style.configure('TareInfo.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, sf(18), "bold"))
+        # Tara Info - Más visible
+        self.style.configure('TareInfo.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, sf(14), "bold"))
+        # Estilo centrado y no negrita para el indicador de TARA (título)
+        self.style.configure('TareCenter.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, sf(14)))
+        # Estilo de valor de Tara (monoespaciado, no negrita)
+        self.style.configure('TareValue.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_MONO, sf(40)))
         
         # Buttons - Escalados
-        self.style.configure('TButton', font=(FONT_MAIN, sf(14), 'bold'))  # Default global BOLD
-        self.style.configure('Tare.TButton', font=(FONT_MAIN, sf(22), 'bold'))
-        self.style.configure('Reset.TButton', font=(FONT_MAIN, sf(18), 'bold'))
-        self.style.configure('Header.TButton', font=(FONT_MAIN, sf(16), 'bold'))
+        self.style.configure('TButton', font=(FONT_MAIN, sf(12), 'bold'))  # Default global BOLD
+        self.style.configure('Tare.TButton', font=(FONT_MAIN, sf(16), 'bold'))
+        self.style.configure('Reset.TButton', font=(FONT_MAIN, sf(14), 'bold'))
+        self.style.configure('Header.TButton', font=(FONT_MAIN, sf(14), 'bold'))
         
         # Large Dialog Buttons
         self.style.configure('Large.success.TButton', font=(FONT_MAIN, sf(18), 'bold'))
@@ -203,7 +207,8 @@ class BalanzaGUI(ttk.Window):
 
         # Header
         self.style.configure('Header.TFrame', background=BG_CARD)
-        self.style.configure('HeaderTitle.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_MAIN, sf(22), "bold"))
+        # Reducir tamaño del título para que no ocupe tanto espacio en el footer
+        self.style.configure('HeaderTitle.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_MAIN, sf(16), "bold"))
         self.style.configure('HeaderSub.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, sf(12)))
         # Logo label style to ensure visibility
         self.style.configure('Logo.TLabel', background=BG_CARD)
@@ -362,33 +367,75 @@ class BalanzaGUI(ttk.Window):
             padding=(15, 12)
         ).pack(side=LEFT, padx=(20, 5))
 
-        # Pequeña sección centrada debajo del header con título y estado (no muy ancha)
-        header_info_frame = ttk.Frame(main_container, style='Header.TFrame')
-        header_info_frame.pack(fill=X)
-        info_box = ttk.Frame(header_info_frame, style='CardNoBorder.TFrame')
-        info_box.pack(anchor='center', pady=(6, 6))
-        try:
-            info_box.configure(width=self.scaled(360))
-        except Exception:
-            pass
-        ttk.Label(info_box, text="Sistema de Pesagem", style='HeaderTitle.TLabel').pack()
-        # Reusar self.lbl_status para compatibilidad con _update_status
-        self.lbl_status = ttk.Label(info_box, text="Desconectado", style='HeaderSub.TLabel')
-        self.lbl_status.pack()
+        # Nota: el título y el estado se muestran en el pie (footer)
+        # para evitar que compriman las secciones de acciones (TARA).
 
         # --- Separador visual ---
         ttk.Separator(main_container, orient=HORIZONTAL).pack(fill=X, pady=(0, 10))
 
+        # Footer frame fijo (creado antes del grid central para garantizar visibilidad en pantallas pequeñas)
+        try:
+            footer_frame = ttk.Frame(main_container, style='Header.TFrame')
+            footer_frame.pack(side=BOTTOM, fill=X, pady=(4, 4))
+
+            # Caja para título + estado (alineados a la izquierda)
+            footer_left = ttk.Frame(footer_frame, style='CardNoBorder.TFrame')
+            footer_left.pack(side=LEFT, anchor='w', padx=(12, 6), pady=(6, 4))
+
+            # Título del sistema (ahora en el pie)
+            ttk.Label(footer_left, text="Sistema de Pesagem", style='HeaderTitle.TLabel').pack(side=LEFT)
+
+            # Estado del sistema junto al título (reusar nombre self.lbl_status para compatibilidad)
+            # Si existe un lbl_status previo, reusar, sino crear.
+            try:
+                if hasattr(self, 'lbl_status') and isinstance(self.lbl_status, ttk.Label):
+                    # Reposicionar label al footer
+                    try:
+                        self.lbl_status.master = footer_left
+                    except Exception:
+                        pass
+                    self.lbl_status.configure(text="Desconectado", style='HeaderSub.TLabel')
+                    self.lbl_status.pack(side=LEFT, padx=(12, 0), pady=(8, 0))
+                else:
+                    self.lbl_status = ttk.Label(footer_left, text="Desconectado", style='HeaderSub.TLabel')
+                    self.lbl_status.pack(side=LEFT, padx=(12, 0), pady=(8, 0))
+            except Exception:
+                try:
+                    self.lbl_status = ttk.Label(footer_left, text="Desconectado", style='HeaderSub.TLabel')
+                    self.lbl_status.pack(side=LEFT, padx=(12, 0), pady=(8, 0))
+                except Exception:
+                    pass
+
+            # Intentar cargar logo2 (escala reducida) y colocarlo a la derecha
+            try:
+                logo2_path = os.path.join(assets_path, "logo2.png")
+                try:
+                    max_h = self.scaled(48)
+                except Exception:
+                    max_h = 48
+                logo2_height = min(int(logo_height * 0.5), max_h)
+                self.logo2_img = load_logo(logo2_path, logo2_height)
+                if self.logo2_img:
+                    logo2_lbl = ttk.Label(footer_frame, image=self.logo2_img, style='Logo.TLabel')
+                    logo2_lbl.pack(side=RIGHT, padx=(0, 12), pady=(6, 6))
+            except Exception:
+                pass
+        except Exception:
+            footer_frame = None
+
         # --- Main Grid (Layout Original: Sensores | Total | Sensores) ---
         grid_area = ttk.Frame(main_container, style='Body.TFrame')
+        # Empaquetar el grid central normalmente (sin reservar padding fijo)
         grid_area.pack(fill=BOTH, expand=YES)
         
         # Columnas con tamao escalado según resolución
         grid_area.columnconfigure(0, weight=1, minsize=self.scaled(250))
         grid_area.columnconfigure(1, weight=2, minsize=self.scaled(350))  # Centro ms ancho para el TOTAL
         grid_area.columnconfigure(2, weight=1, minsize=self.scaled(250))
-        grid_area.rowconfigure(0, weight=1, minsize=self.scaled(160))
-        grid_area.rowconfigure(1, weight=1, minsize=self.scaled(160))
+        # Reducir más el minsize de filas de sensores para dejar espacio al footer
+        # Ajustar más conservadoramente para pantallas pequeñas
+        grid_area.rowconfigure(0, weight=1, minsize=self.scaled(100))
+        grid_area.rowconfigure(1, weight=1, minsize=self.scaled(100))
 
         self.sensor_widgets = {} 
 
@@ -433,11 +480,11 @@ class BalanzaGUI(ttk.Window):
             # Valor principal - Centrado con ancho fijo - MS GRANDE
             value_container = ttk.Frame(card, style='CardNoBorder.TFrame')
             value_container.pack(fill=BOTH, expand=YES)
-            
+
             value_lbl = ttk.Label(
                 value_container, 
                 text="0.00", 
-                font=('Consolas', 64, 'bold'),  # Ms grande: 56 -> 64
+                font=('Consolas', self.scaled_font(40), 'bold'),
                 foreground="#1e293b", 
                 background="#ffffff",
                 anchor="center",
@@ -475,11 +522,16 @@ class BalanzaGUI(ttk.Window):
         # --- PANEL CENTRAL: TOTAL (MS GRANDE) ---
         control_panel = ttk.Frame(grid_area, style='Card.TFrame', padding=self.scaled(10))
         control_panel.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=self.scaled(6), pady=self.scaled(6))
-        control_panel.grid_propagate(False)  # Tamao fijo
+        # Permitir que el panel central adapte su altura al contenido en pantallas pequenas
+        try:
+            control_panel.grid_propagate(True)
+        except Exception:
+            pass
         
         # Seccin TOTAL con fondo azul - MUY GRANDE Y PROMINENTE
         # Guardar referencia para poder cambiar color en caso de desconexin
-        self.total_section = ttk.Frame(control_panel, style='TotalPanel.TFrame', padding=self.scaled(25))
+        # Reducir padding del panel total para ahorrar espacio vertical
+        self.total_section = ttk.Frame(control_panel, style='TotalPanel.TFrame', padding=self.scaled(18))
         self.total_section.pack(fill=BOTH, expand=YES)
         
         self.lbl_total_title = ttk.Label(self.total_section, text="PESO TOTAL", style='TotalLabel.TLabel', anchor="center")
@@ -491,7 +543,7 @@ class BalanzaGUI(ttk.Window):
             anchor="center",
             width=10  # Largura fixa para evitar mudanças
         )
-        self.lbl_total.pack(fill=X, pady=20)
+        self.lbl_total.pack(fill=X, pady=12)
         self.lbl_total_unit = ttk.Label(self.total_section, text="t", style='TotalUnit.TLabel', anchor="center")
         self.lbl_total_unit.pack()
         
@@ -502,45 +554,63 @@ class BalanzaGUI(ttk.Window):
         actions_section = ttk.Frame(control_panel, style='CardNoBorder.TFrame', padding=self.scaled(5))
         actions_section.pack(fill=X)
         
-        # Info de Tara - MS GRANDE Y VISIBLE
-        self.lbl_tare_info = ttk.Label(
-            actions_section, 
-            text="Tara Acumulada: 0 t", 
-            style='TareInfo.TLabel',
-            anchor="center"
-        )
-        self.lbl_tare_info.pack(pady=(0, self.scaled(15)))
-        
-        # Frame para botones lado a lado
-        btn_row = ttk.Frame(actions_section, style='CardNoBorder.TFrame')
-        btn_row.pack(fill=X)
-        
-        # Botão TARA - Grande e proeminente
-        btn_tare = ttk.Button(
-            btn_row, 
-            text="TARA", 
-            command=self.do_tare, 
-            bootstyle="warning", 
-            style='Tare.TButton', 
-            width=10, 
-            padding=(self.scaled(20), self.scaled(12))
-        )
-        btn_tare.pack(side=LEFT, expand=YES, padx=3)
-        
-        # Botão Limpar Tara - MESMO TAMANHO que TARA
-        btn_reset = ttk.Button(
-            btn_row, 
-            text="RESET TARA", 
-            command=self.reset_tare, 
-            bootstyle="secondary", 
-            style='Tare.TButton',  # Mesmo estilo que TARA
-            width=10, 
-            padding=(self.scaled(20), self.scaled(12))  # Mesmo padding que TARA
-        )
-        btn_reset.pack(side=LEFT, expand=YES, padx=3)
-        
+        # Info de Tara: un botón a la izquierda, texto en dos líneas en el centro, y un botón a la derecha
+        taracont = ttk.Frame(actions_section, style='CardNoBorder.TFrame')
+        taracont.pack(fill=X)
 
+        # Configurar grid para 3 columnas: boton izquierdo, texto (expandible), boton derecho
+        taracont.columnconfigure(0, weight=0)
+        taracont.columnconfigure(1, weight=1)
+        taracont.columnconfigure(2, weight=0)
 
+        # Botón izquierdo (TARA)
+        btn_tare_left = ttk.Button(
+            taracont,
+            text="TARA",
+            command=self.do_tare,
+            bootstyle="warning",
+            style='Tare.TButton',
+            width=10,
+            padding=(self.scaled(12), self.scaled(8))
+        )
+        btn_tare_left.grid(row=0, column=0, sticky='w', padx=(0, 8))
+
+        # Centro: título y valor apilados
+        tare_text_col = ttk.Frame(taracont)
+        tare_text_col.grid(row=0, column=1, sticky='nsew')
+        tare_text_col.columnconfigure(0, weight=1)
+
+        self.lbl_tare_title = ttk.Label(
+            tare_text_col,
+            text="Tara acumulada",
+            style='TareCenter.TLabel',
+            anchor="center",
+            justify='center'
+        )
+        self.lbl_tare_title.pack(fill=X)
+
+        self.lbl_tare_value = ttk.Label(
+            tare_text_col,
+            text="0 t",
+            style='TareValue.TLabel',
+            anchor="center",
+            justify='center'
+        )
+        self.lbl_tare_value.pack(fill=X, pady=(4, 0))
+
+        # Botón derecho (RESET)
+        btn_reset_right = ttk.Button(
+            taracont,
+            text="RESET",
+            command=self.reset_tare,
+            bootstyle="secondary",
+            style='Tare.TButton',
+            width=10,
+            padding=(self.scaled(12), self.scaled(8))
+        )
+        btn_reset_right.grid(row=0, column=2, sticky='e', padx=(8, 0))
+        
+        
     def _start_drag(self, event):
         """Inicio del arrastre de la ventana."""
         self._drag_data["x"] = event.x
@@ -719,7 +789,7 @@ class BalanzaGUI(ttk.Window):
     def _update_status(self, connected):
         self.connected = connected
         if connected:
-            self.lbl_status.configure(text=" Conectado  Sistema Online", foreground="#22c55e")
+            self.lbl_status.configure(text="Conectado", foreground="#22c55e")
             # Manter dimenses ao mudar estilo
             self.btn_connect.configure(
                 text="DESCONECTAR", 
