@@ -1,17 +1,18 @@
-
+from config import APP_TITLE, APP_SIZE, THEME_NAME, NODOS_CONFIG
 import os
-import queue
-import threading
-import time
+import json
 import tkinter as tk
-from tkinter import filedialog, messagebox, BOTH, YES, NO, X, Y, LEFT, RIGHT, END, HORIZONTAL, BOTTOM, TOP
-from PIL import Image, ImageTk
-
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
-from ttkbootstrap.scrolled import ScrolledText
-
-from config import APP_TITLE, APP_SIZE, THEME_NAME, NODOS_CONFIG
+from tkinter import messagebox, filedialog
+try:
+    from PIL import Image, ImageTk
+except Exception:
+    Image = None
+    ImageTk = None
+import queue
+import time
+import shutil
 
 # Configurar matplotlib ANTES de cualquier import de backends
 # Esto evita bloqueos cuando se abre el wizard de calibración
@@ -288,6 +289,8 @@ class BalanzaGUI(ttk.Window):
             padding=(15, 12)
         )
         self.btn_decimals.pack(side=LEFT, padx=5)
+
+        # (Export/Import moved to Config -> CALIBRACAO tab)
         
         # Botn de Configuracin - Color info (azul)
         self.btn_config = ttk.Button(
@@ -666,6 +669,11 @@ class BalanzaGUI(ttk.Window):
                 width=14,
                 padding=(15, 12)
             )
+            # Al conectarse, intentar cargar y aplicar calibraciones disponibles
+            try:
+                self._apply_saved_calibrations_on_connect()
+            except Exception:
+                pass
         else:
             self.lbl_status.configure(text=" Desconectado", foreground="#64748b")
             # Manter dimenses ao mudar estilo
@@ -842,10 +850,12 @@ class BalanzaGUI(ttk.Window):
         ttk.Button(all_btns, text="-", command=lambda: press_digit("-"), bootstyle="secondary", padding=pad_act).grid(row=4, column=0, sticky="nsew", padx=4, pady=4)
         ttk.Button(all_btns, text="OK", command=confirm_and_close, bootstyle="success", padding=pad_act).grid(row=4, column=1, columnspan=2, sticky="nsew", padx=4, pady=4)
 
-        # El teclado captura los eventos (importante para que funcione sobre diálogos con grab)
-        keypad.grab_set()
-        keypad.focus_set()
-        keypad.lift()
+        # Evitar grab_set() para no bloquear la app en tablets; usar focus/lift
+        try:
+            keypad.focus_set()
+            keypad.lift()
+        except Exception:
+            pass
 
     def _bind_numeric_keypad(self, entry_widget, title="Inserir Valor"):
         """Vincula un Entry para mostrar teclado numérico al hacer click."""
@@ -862,28 +872,13 @@ class BalanzaGUI(ttk.Window):
     def toggle_decimals(self):
         """Alterna entre mostrar valores con o sin decimales."""
         self._show_decimals = not self._show_decimals
+        # Actualizar texto y estilo del botón
         if self._show_decimals:
-            # Decimales activos - botón oscuro/gris
-            self.btn_decimals.configure(
-                text="0.00", 
-                bootstyle="dark",
-                style='Header.TButton',
-                width=8,
-                padding=(15, 12)
-            )
+            self.btn_decimals.configure(text="OCULTAR DECIMAIS", bootstyle="info", width=26, padding=(15,10))
         else:
-            # Decimales inactivos - botón azul brillante
-            self.btn_decimals.configure(
-                text="0.00", 
-                bootstyle="primary",
-                style='Header.TButton',
-                width=8,
-                padding=(15, 12)
-            )
-        # Ajustar tamaño de fuente de los valores de las celdas y del TOTAL
-        # - Cuando hay decimales activados, reducimos las celdas (como antes).
-        # - Si además hay signo negativo en alguna lectura, reducir TODO aun más
-        #   (celdas + peso total) para evitar overflow/recorte visual.
+            self.btn_decimals.configure(text="MOSTRAR DECIMAIS", bootstyle="info-outline", width=26, padding=(15,10))
+
+        # Ajustar tamaños de fuente según presencia de decimales y valores negativos
         try:
             normal_cell = self.scaled_font(64)
         except Exception:
@@ -893,20 +888,21 @@ class BalanzaGUI(ttk.Window):
         except Exception:
             normal_total = 120
 
-        # Niveles de reducción
         cell_small = max(10, int(normal_cell * 0.75))
         cell_extra_small = max(8, int(normal_cell * 0.6))
         total_small = max(40, int(normal_total * 0.9))
         total_extra_small = max(30, int(normal_total * 0.7))
 
-        # Detectar si hay signo negativo en el último conjunto de lecturas
         negative_present = False
         try:
             data = getattr(self, '_last_sensor_data', None)
             if data:
                 # Chequear total
-                if float(data.get('total', 0.0)) < 0:
-                    negative_present = True
+                try:
+                    if float(data.get('total', 0.0)) < 0:
+                        negative_present = True
+                except Exception:
+                    pass
                 # Chequear sensores individuales
                 for s in data.get('sensores', {}).values():
                     try:
@@ -918,10 +914,10 @@ class BalanzaGUI(ttk.Window):
         except Exception:
             negative_present = False
 
+        # Aplicar tamaño de fuente a widgets individuales
         for key, widgets in getattr(self, 'sensor_widgets', {}).items():
             try:
                 if self._show_decimals:
-                    # Decimales activos -> usar small o extra small si hay negativo
                     size = cell_extra_small if negative_present else cell_small
                     widgets['value'].configure(font=("Consolas", size, 'bold'))
                 else:
@@ -929,13 +925,12 @@ class BalanzaGUI(ttk.Window):
             except Exception:
                 pass
 
-        # Ajustar TOTAL también cuando corresponde
+        # Ajustar TOTAL
         try:
             if hasattr(self, 'lbl_total') and self.lbl_total:
                 if self._show_decimals and negative_present:
                     self.lbl_total.configure(font=("Consolas", total_extra_small, 'bold'))
                 elif self._show_decimals:
-                    # Mantener total grande aún con decimales, pero ligeramente más pequeño
                     self.lbl_total.configure(font=("Consolas", total_small, 'bold'))
                 else:
                     self.lbl_total.configure(font=("Consolas", normal_total, 'bold'))
@@ -944,6 +939,120 @@ class BalanzaGUI(ttk.Window):
 
         # Forzar actualización visual inmediata de todos los valores
         self.after(10, self._refresh_all_displays)
+    
+    def _apply_saved_calibrations_on_connect(self):
+        """Busca y aplica calibraciones desde el directorio de calibraciones cuando se conecta el sistema.
+        Para cada composite -> serial en el DataProcessor intenta cargar:
+          - {CALIBRATIONS_DIR}/{serial}.json
+          - {CALIBRATIONS_DIR}/{nodeid_ch}.json (fallback)
+        y llama a `data_processor.set_calibration_segments(points, serial=serial, composite=composite)` si existe.
+        """
+        try:
+            from config import CALIBRATIONS_DIR
+        except Exception:
+            return
+
+        if not hasattr(self, 'data_processor') or not self.data_processor:
+            return
+
+        # First: support a single CSV file containing all calibrations (backwards-compatible)
+        csv_path = os.path.join(CALIBRATIONS_DIR, 'calibrations.csv')
+        try:
+            if os.path.exists(csv_path):
+                import csv as _csv
+                applied = set()
+                with open(csv_path, 'r', encoding='utf-8') as f:
+                    reader = _csv.DictReader(f)
+                    rows_by_target = {}
+                    for row in reader:
+                        serial_r = (row.get('serial') or '').strip() or None
+                        composite_r = (row.get('composite') or '').strip() or None
+                        try:
+                            w = float(row.get('weight', '0'))
+                            r = float(row.get('reading', '0'))
+                        except Exception:
+                            continue
+                        key = (serial_r, composite_r)
+                        rows_by_target.setdefault(key, []).append((w, r))
+
+                # Apply each group
+                for (serial_k, composite_k), pts in rows_by_target.items():
+                    try:
+                        if hasattr(self.data_processor, 'set_calibration_segments'):
+                            self.data_processor.set_calibration_segments(pts, serial=serial_k, composite=composite_k)
+                            self.log_message(f"Calibración aplicada desde {os.path.basename(csv_path)} a serial={serial_k} composite={composite_k}")
+                        else:
+                            # fallback
+                            self.data_processor.calibration_segments = pts
+                            self.data_processor.calibration_method = 'segments'
+                            self.log_message(f"Calibración (fallback) cargada desde CSV para serial={serial_k} composite={composite_k}")
+                        applied.add((serial_k, composite_k))
+                    except Exception as e:
+                        self.log_message(f"Fallo aplicando calibración CSV para serial={serial_k} composite={composite_k}: {e}")
+
+                if applied:
+                    # If we applied from CSV, skip per-serial JSON fallback
+                    return
+        except Exception:
+            # If CSV parsing fails, continue to JSON fallback below
+            pass
+
+        mapping = getattr(self.data_processor, '_composite_to_serial', {}) or {}
+        if not mapping and hasattr(self.data_processor, 'nodos_config'):
+            try:
+                for nombre, cfg in self.data_processor.nodos_config.items():
+                    nid = cfg.get('id')
+                    ch = cfg.get('ch', 'ch1')
+                    composite = f"{nid}:{ch}"
+                    mapping[composite] = cfg.get('serial')
+            except Exception:
+                pass
+
+        for composite, serial in list(mapping.items()):
+            candidates = []
+            if serial and str(serial).strip():
+                candidates.append(os.path.join(CALIBRATIONS_DIR, f"{serial}.json"))
+            safe_comp = composite.replace(':', '_')
+            candidates.append(os.path.join(CALIBRATIONS_DIR, f"{safe_comp}.json"))
+
+            for path in candidates:
+                try:
+                    if not path or not os.path.exists(path):
+                        continue
+                    with open(path, 'r', encoding='utf-8') as f:
+                        import json as _json
+                        data = _json.load(f)
+                    pts = []
+                    if isinstance(data, list):
+                        for item in data:
+                            if not isinstance(item, dict):
+                                continue
+                            w = item.get('weight')
+                            r = item.get('reading')
+                            if w is None or r is None:
+                                continue
+                            pts.append((float(w), float(r)))
+                    if pts:
+                        if hasattr(self.data_processor, 'set_calibration_segments'):
+                            try:
+                                self.data_processor.set_calibration_segments(pts, serial=serial, composite=composite)
+                                self.log_message(f"Calibración aplicada desde {os.path.basename(path)} a {composite}")
+                            except Exception as e:
+                                self.log_message(f"Fallo aplicando calibración {path}: {e}")
+                        else:
+                            try:
+                                self.data_processor.calibration_segments = pts
+                                self.data_processor.calibration_method = 'segments'
+                                self.log_message(f"Calibración (fallback) cargada para {composite}")
+                            except Exception as e:
+                                self.log_message(f"Fallo al establecer calibración fallback: {e}")
+                        break
+                except Exception as e:
+                    try:
+                        self.log_message(f"Error cargando calibración {path}: {e}")
+                    except:
+                        pass
+                
     
     def _refresh_all_displays(self):
         """Actualiza todos los displays con el formato actual."""
@@ -960,6 +1069,110 @@ class BalanzaGUI(ttk.Window):
         else:
             # Sin decimales: redondeo al entero más cercano (norma ISO 80000-1)
             return f"{round(value)}"
+
+    def export_calibrations_gui(self):
+        """Exporta todas las calibraciones JSON a un único CSV en el directorio de calibraciones."""
+        try:
+            from config import CALIBRATIONS_DIR
+        except Exception:
+            self.log_message("No se encontró CALIBRATIONS_DIR en config.")
+            return
+
+        # Reuse the logic from scripts/export_calibrations_to_csv.py but inline
+        try:
+            import csv as _csv
+            rows = []
+            for fn in os.listdir(CALIBRATIONS_DIR):
+                if not fn.lower().endswith('.json'):
+                    continue
+                path = os.path.join(CALIBRATIONS_DIR, fn)
+                serial = None
+                composite = None
+                name = os.path.splitext(fn)[0]
+                if ':' in name:
+                    composite = name
+                elif '_' in name:
+                    parts = name.split('_')
+                    if len(parts) >= 2:
+                        composite = f"{parts[0]}:{parts[1]}"
+                else:
+                    serial = name
+
+                try:
+                    with open(path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                except Exception:
+                    continue
+
+                if isinstance(data, list):
+                    for it in data:
+                        if not isinstance(it, dict):
+                            continue
+                        try:
+                            w = float(it.get('weight', 0))
+                            r = float(it.get('reading', 0))
+                            ts = it.get('timestamp', '')
+                        except Exception:
+                            continue
+                        rows.append({'serial': serial or '', 'composite': composite or '', 'weight': w, 'reading': r, 'timestamp': ts})
+
+            out_path = os.path.join(CALIBRATIONS_DIR, 'calibrations.csv')
+            with open(out_path, 'w', encoding='utf-8', newline='') as f:
+                writer = _csv.DictWriter(f, fieldnames=['serial', 'composite', 'weight', 'reading', 'timestamp'])
+                writer.writeheader()
+                for r in rows:
+                    writer.writerow(r)
+
+            self.log_message(f"Exportadas {len(rows)} filas a {out_path}")
+            messagebox.showinfo("Exportación completa", f"Exportadas {len(rows)} filas a:\n{out_path}")
+        except Exception as e:
+            self.log_message(f"Error exportando calibraciones: {e}")
+            messagebox.showerror("Error", f"Error exportando calibraciones: {e}")
+
+    def import_calibrations_gui(self, parent=None):
+        """Permite al usuario seleccionar un CSV de calibraciones e importarlo al CALIBRATIONS_DIR."""
+        try:
+            from config import CALIBRATIONS_DIR
+        except Exception:
+            self.log_message("No se encontró CALIBRATIONS_DIR en config.")
+            return
+
+        # Abrir filedialog con parent si fue proporcionado para mantener la ventana de config encima
+        try:
+            if parent:
+                path = filedialog.askopenfilename(parent=parent, title="Seleccionar CSV de calibraciones", filetypes=[("CSV files", "*.csv")])
+            else:
+                path = filedialog.askopenfilename(title="Seleccionar CSV de calibraciones", filetypes=[("CSV files", "*.csv")])
+        finally:
+            # Restaurar foco en la ventana padre si se proporcionó
+            if parent:
+                try:
+                    parent.lift()
+                    parent.focus_force()
+                except Exception:
+                    pass
+
+        if not path:
+            return
+
+        try:
+            # Copiar el archivo seleccionado al directorio de calibraciones
+            import shutil
+            dest = os.path.join(CALIBRATIONS_DIR, 'calibrations.csv')
+            shutil.copy2(path, dest)
+            self.log_message(f"CSV de calibraciones importado a {dest}")
+            messagebox.showinfo("Importación", f"CSV importado a:\n{dest}")
+
+            # Aplicar inmediatamente
+            try:
+                self._apply_saved_calibrations_on_connect()
+                self.log_message("Calibraciones aplicadas desde CSV importado.")
+            except Exception as e:
+                self.log_message(f"Error aplicando calibraciones desde CSV importado: {e}")
+                messagebox.showwarning("Advertencia", f"CSV importado pero no se pudieron aplicar las calibraciones: {e}")
+        except Exception as e:
+            self.log_message(f"Fallo importando CSV: {e}")
+            messagebox.showerror("Error", f"Fallo importando CSV: {e}")
 
     def show_large_confirmation(self, title, message):
         """Mostra um dilogo modal personalizado SEM barra de ttulo, com fontes e botes grandes."""
@@ -2025,37 +2238,42 @@ class BalanzaGUI(ttk.Window):
         save_config_ref[0] = save_config
 
         # ==================== BOTONES ABAJO ====================
-        btn_bottom_frame = ttk.Frame(main_frame, padding=(0, 10))
-        btn_bottom_frame.pack(fill=X, side=BOTTOM)
-        
-        ttk.Separator(btn_bottom_frame, orient="horizontal").pack(fill=X, pady=(0, 10))
-        
+        btn_bottom_frame = ttk.Frame(main_frame, padding=(0, 14))
+        btn_bottom_frame.pack(fill=X, side=BOTTOM, pady=(8, 18))
+
+        ttk.Separator(btn_bottom_frame, orient="horizontal").pack(fill=X, pady=(0, 12))
+
         btn_container = ttk.Frame(btn_bottom_frame)
-        btn_container.pack()
-        
+        # Centrar el contenedor para que los botones no se peguen a la izquierda
+        btn_container.pack(anchor='center')
+
+        # Botones más grandes y consistentes con estilos 'Large.*'
         btn_salvar = ttk.Button(btn_container, text="SALVAR", 
-                               bootstyle="success", 
-                               command=do_save,
-                               width=12,
-                               padding=(20, 12))
-        btn_salvar.pack(side=LEFT, padx=10)
-        
+                       bootstyle="success", 
+                       command=do_save,
+                       width=16,
+                       padding=(28, 14))
+        btn_salvar.configure(style='Large.success.TButton')
+        btn_salvar.pack(side=LEFT, padx=14)
+
         btn_cancelar = ttk.Button(btn_container, text="CANCELAR", 
-                               bootstyle="secondary", 
-                               command=safe_close_dialog,
-                               width=12,
-                               padding=(20, 12))
-        btn_cancelar.pack(side=LEFT, padx=10)
-        
+                       bootstyle="secondary", 
+                       command=safe_close_dialog,
+                       width=16,
+                       padding=(28, 14))
+        btn_cancelar.configure(style='Large.warning.TButton')
+        btn_cancelar.pack(side=LEFT, padx=14)
+
         # Separador visual
-        ttk.Frame(btn_container, width=30).pack(side=LEFT)
-        
+        ttk.Frame(btn_container, width=self.scaled(30)).pack(side=LEFT)
+
         btn_fechar = ttk.Button(btn_container, text="FECHAR", 
-                               bootstyle="danger-outline", 
-                               command=safe_close_dialog,
-                               width=12,
-                               padding=(20, 12))
-        btn_fechar.pack(side=LEFT, padx=10)
+                       bootstyle="danger-outline", 
+                       command=safe_close_dialog,
+                       width=16,
+                       padding=(28, 14))
+        btn_fechar.configure(style='Large.danger.TButton')
+        btn_fechar.pack(side=LEFT, padx=14)
 
         # Configurar protocolo de cierre
         dialog.protocol("WM_DELETE_WINDOW", safe_close_dialog)
@@ -2170,10 +2388,11 @@ class BalanzaGUI(ttk.Window):
             # Metodo para resaltar seleccionado
             self._update_sensor_buttons_visuals(inner_container)
 
-            # === BOTONES DE ACCION (ENORMES) ===
+            # === BOTONES DE ACCION ===
             action_frame = ttk.Frame(parent)
-            action_frame.pack(fill=X, pady=self.scaled(10))
-            
+            # Reduce vertical padding to keep bottom dialog action buttons visible on smaller screens
+            action_frame.pack(fill=X, pady=self.scaled(6))
+
             # Funcion para abrir wizard SIN cerrar el dialogo de configuracion
             def start_calibration_action():
                 sensor_name = self._cal_sensor_selected.get()
@@ -2185,18 +2404,31 @@ class BalanzaGUI(ttk.Window):
                         pass
                 # Abrir wizard
                 self._open_calibration_wizard(current_config, sensor_name, config_dialog)
-            
-            # Botao INICIAR - Texto en bold explicitamente si el estilo no lo toma
-            # Se ha configurado style='Large.warning.TButton' en _configure_styles con font bold
-            btn_start = ttk.Button(
-                action_frame, 
-                text=" INICIAR CALIBRAÇÃO ",
-                bootstyle="warning", 
-                command=start_calibration_action
-            )
-            btn_start.configure(style='Large.warning.TButton') 
-            btn_start.pack(side=LEFT, fill=X, expand=YES, padx=(0, self.scaled(6)), ipady=self.scaled(8))
-            
+
+            # Nota: crearemos el botón INICIAR después de medir los botones secundarios
+            # Se definió la función start_calibration_action arriba; la usaremos al crear INICIAR.
+
+            # Frame para los botones de Exportar/Importar que deben estar debajo de INICIAR
+            below_frame = ttk.Frame(action_frame)
+            # Colocar el contenedor con ancho completo y luego centrar internamente los botones
+            # Mantener separación vertical moderada para evitar empujar los botones de acción abajo
+            below_frame.pack(fill=X, pady=(0, self.scaled(20)))
+
+            # Subframe centrado que contiene los botones para evitar que se corten
+            # No lo empaquetamos todavía: primero crearemos los botones, mediremos y luego empaquetaremos
+            center_buttons = ttk.Frame(below_frame)
+
+            # Determinar ancho en 'caracteres' escalado para los botones secundarios
+            try:
+                width_chars = max(12, int(24 * self.scale))
+            except Exception:
+                width_chars = 24
+
+            # Mantener dimensiones consistentes para los botones secundarios
+            secondary_ipady = self.scaled(8)
+            secondary_padx = 0
+            secondary_pady = (0, 0)
+
             # Botón EXPORTAR CURVAS (CSV)
             def export_curves_csv():
                 import os, json, csv
@@ -2215,15 +2447,35 @@ class BalanzaGUI(ttk.Window):
                 pesos = sorted(pesos)
                 serials = sorted(data.keys())
                 # Diálogo para elegir ubicación y nombre del archivo
-                out_path = filedialog.asksaveasfilename(
-                    title="Exportar curvas de calibración",
-                    defaultextension=".csv",
-                    filetypes=[("Archivos CSV", "*.csv")],
-                    initialdir=calib_dir,
-                    initialfile="curvas_celdas.csv"
-                )
+                out_path = None
+                try:
+                    # Usar dialogo con parent si existe para evitar que la ventana de config se vaya al fondo
+                    if config_dialog:
+                        out_path = filedialog.asksaveasfilename(
+                            parent=config_dialog,
+                            title="Exportar curvas de calibración",
+                            defaultextension=".csv",
+                            filetypes=[("Archivos CSV", "*.csv")],
+                            initialdir=calib_dir,
+                            initialfile="curvas_celdas.csv"
+                        )
+                    else:
+                        out_path = filedialog.asksaveasfilename(
+                            title="Exportar curvas de calibración",
+                            defaultextension=".csv",
+                            filetypes=[("Archivos CSV", "*.csv")],
+                            initialdir=calib_dir,
+                            initialfile="curvas_celdas.csv"
+                        )
+                finally:
+                    # Siempre intentar restaurar la ventana de configuración
+                    if config_dialog:
+                        try:
+                            config_dialog.lift()
+                            config_dialog.focus_force()
+                        except Exception:
+                            pass
                 if not out_path:
-
                     return
                 with open(out_path, 'w', newline='', encoding='utf-8') as f:
                     writer = csv.writer(f)
@@ -2239,16 +2491,75 @@ class BalanzaGUI(ttk.Window):
                         config_dialog.focus_force()
                     except Exception:
                         pass
+            # Preparar fuente y estilos para los botones de calibración (más grandes)
+            try:
+                # Slightly smaller font for calibration buttons to save vertical space
+                btn_font = ("Segoe UI", self.scaled_font(20), 'bold')
+            except Exception:
+                btn_font = ("Segoe UI", 20, 'bold')
 
+            # Crear estilos específicos para los botones de calibración que incluyan la fuente y padding
+            try:
+                # Reduce padding to avoid pushing bottom dialog buttons off-screen
+                self.style.configure('Calib.Info.TButton', font=btn_font, padding=(self.scaled(10), self.scaled(8)))
+                self.style.configure('Calib.Secondary.TButton', font=btn_font, padding=(self.scaled(10), self.scaled(8)))
+                self.style.configure('Calib.Start.TButton', font=("Segoe UI", self.scaled_font(24), 'bold'), padding=(self.scaled(12), self.scaled(10)))
+            except Exception:
+                pass
+
+            # Crear los botones y colocarlos en una rejilla para garantizar alineación exacta
             btn_export = ttk.Button(
-                action_frame,
+                center_buttons,
                 text=" EXPORTAR CURVAS (CSV) ",
                 bootstyle="info",
                 command=export_curves_csv
             )
-            btn_export.configure(style='Large.info.TButton')
-            btn_export.pack(side=LEFT, fill=X, expand=YES, padx=(self.scaled(6), 0), ipady=self.scaled(8))
-        
+            btn_export.configure(style='Calib.Info.TButton')
+
+            def import_curves_csv():
+                # Reusar el importador principal que solicita un CSV y lo aplica
+                try:
+                    self.import_calibrations_gui(parent=config_dialog)
+                finally:
+                    if config_dialog:
+                        try:
+                            config_dialog.lift()
+                            config_dialog.focus_force()
+                        except Exception:
+                            pass
+
+            btn_import = ttk.Button(
+                center_buttons,
+                text=" IMPORTAR CURVAS (CSV) ",
+                bootstyle="secondary",
+                command=import_curves_csv
+            )
+            btn_import.configure(style='Calib.Secondary.TButton')
+
+            # Configurar grid: INICIAR en la fila 0 (colspan=2), export/import en fila 1
+            center_buttons.grid_columnconfigure(0, weight=1)
+            center_buttons.grid_columnconfigure(1, weight=1)
+
+            btn_start = ttk.Button(
+                center_buttons,
+                text=" INICIAR CALIBRAÇÃO ",
+                bootstyle="warning",
+                command=start_calibration_action
+            )
+            # Ensure the warning bootstyle is applied and keep our custom Calib.Start style
+            btn_start.configure(style='Calib.Start.TButton', bootstyle='warning')
+
+            # Colocar START en la fila superior ocupando 2 columnas con separación moderada
+            # Usar un pady más pequeño para ahorrar espacio vertical
+            btn_start.grid(row=0, column=0, columnspan=2, pady=(0, self.scaled(8)), sticky='ew')
+
+            # Export/Import en la fila inferior, garantizando igual anchura
+            btn_export.grid(row=1, column=0, padx=(0, self.scaled(6)), sticky='ew')
+            btn_import.grid(row=1, column=1, padx=(self.scaled(6), 0), sticky='ew')
+
+            # Empacar el contenedor centrado con separación superior reducida
+            center_buttons.pack(anchor='center', pady=(self.scaled(4), 0))
+
         # === TEXTO DE AYUDA LIMPIO (Removido a pedido) ===
         # help_text = (...)
         # info_frame = ttk.Frame(parent, padding=15)
