@@ -76,28 +76,51 @@ def main():
         return
 
     out_path = os.path.join(CALIBRATIONS_DIR, 'calibrations.csv')
-    rows = []
+
+    # Build a mapping: target_name -> {weight: reading}
+    data = {}
+    weights = set()
 
     for pj in find_json_files(CALIBRATIONS_DIR):
         serial, composite = infer_target_from_filename(pj)
+        target = serial or composite or os.path.splitext(os.path.basename(pj))[0]
         points = load_json_points(pj)
+        if target not in data:
+            data[target] = {}
         for p in points:
-            rows.append({
-                'serial': serial or '',
-                'composite': composite or '',
-                'weight': p['weight'],
-                'reading': p['reading'],
-                'timestamp': p.get('timestamp', '')
-            })
+            w = float(p['weight'])
+            r = float(p['reading'])
+            data[target][w] = r
+            weights.add(w)
 
-    # Escribir CSV
+    # Sort headers (put serial-like keys first if numeric)
+    def sort_key(k):
+        try:
+            return (0, int(k))
+        except Exception:
+            return (1, k)
+
+    headers = sorted(list(data.keys()), key=sort_key)
+    sorted_weights = sorted(weights)
+
+    # Write wide CSV: first column 'Carga' then one column per target
     with open(out_path, 'w', encoding='utf-8', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=['serial', 'composite', 'weight', 'reading', 'timestamp'])
-        writer.writeheader()
-        for r in rows:
-            writer.writerow(r)
+        writer = csv.writer(f)
+        writer.writerow(['Carga'] + headers)
+        for w in sorted_weights:
+            row = [w]
+            for h in headers:
+                val = data.get(h, {}).get(w, '')
+                # format floats nicely
+                if val != '':
+                    row.append(f"{val:.6f}".rstrip('0').rstrip('.') if isinstance(val, float) else val)
+                else:
+                    row.append('')
+            writer.writerow(row)
 
-    print(f"Exportadas {len(rows)} filas a {out_path}")
+    total_cells = len(headers)
+    total_rows = len(sorted_weights)
+    print(f"Exportadas {total_rows} pesos para {total_cells} columnas a {out_path}")
 
 
 if __name__ == '__main__':

@@ -205,6 +205,8 @@ class BalanzaGUI(ttk.Window):
         self.style.configure('Header.TFrame', background=BG_CARD)
         self.style.configure('HeaderTitle.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_MAIN, sf(22), "bold"))
         self.style.configure('HeaderSub.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, sf(12)))
+        # Logo label style to ensure visibility
+        self.style.configure('Logo.TLabel', background=BG_CARD)
 
     def _setup_ui(self):
         # Main Container - padding escalado
@@ -225,51 +227,81 @@ class BalanzaGUI(ttk.Window):
         brand_frame.bind("<Button-1>", self._start_drag)
         brand_frame.bind("<B1-Motion>", self._on_drag)
         
-        # Intentar cargar logos de la empresa (2 logos diferentes)
+        # Intentar cargar un solo logo principal junto al título
         import os
         assets_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets")
-        
-        # Rutas de logos (logo_left.png, logo_right.png, o logo.png como fallback)
-        logo_left_path = os.path.join(assets_path, "logo_left.png")
-        logo_right_path = os.path.join(assets_path, "logo_right.png")
-        logo_fallback_path = os.path.join(assets_path, "logo.png")
-        
-        self.logo_left_img = None
-        self.logo_right_img = None
-        
-        # Tamao de logos (escalado)
-        logo_height = self.scaled(100)
-        resample_method = getattr(Image, 'Resampling', Image).LANCZOS
-        
+        logo_path = os.path.join(assets_path, "logo.png")
+
+        self.logo_img = None
+        # Tamaño de logo (escalado)
+        logo_height = self.scaled(80)
+        # Guardar resample_method solo si PIL está disponible
+        if Image is not None:
+            try:
+                resample_method = getattr(Image, 'Resampling', Image).LANCZOS
+            except Exception:
+                # Fallback si la colección de enum o atributo no existe
+                try:
+                    resample_method = Image.LANCZOS
+                except Exception:
+                    resample_method = None
+        else:
+            resample_method = None
+
         def load_logo(path, height):
             """Cargar y redimensionar un logo."""
+            # Log de diagnóstico
+            try:
+                self.log_message(f"Intentando cargar logo: {path} (PIL={'si' if Image is not None else 'no'})")
+            except Exception:
+                pass
+
+            if Image is None or ImageTk is None:
+                try:
+                    self.log_message("Pillow (PIL) no disponible: el logo no puede cargarse.")
+                except Exception:
+                    pass
+                return None
+
             if os.path.exists(path):
                 try:
                     pil_img = Image.open(path)
                     w_percent = (height / float(pil_img.size[1]))
                     w_size = int((float(pil_img.size[0]) * float(w_percent)))
-                    pil_img_resized = pil_img.resize((w_size, height), resample_method)
-                    return ImageTk.PhotoImage(pil_img_resized)
+                    if resample_method is not None:
+                        pil_img_resized = pil_img.resize((w_size, height), resample_method)
+                    else:
+                        pil_img_resized = pil_img.resize((w_size, height))
+                    imgobj = ImageTk.PhotoImage(pil_img_resized)
+                    try:
+                        self.log_message(f"Logo cargado correctamente desde: {path}")
+                    except Exception:
+                        pass
+                    return imgobj
                 except Exception as e:
-                    self.log_message(f"Erro carregando logo {path}: {e}")
+                    try:
+                        self.log_message(f"Erro carregando logo {path}: {e}")
+                    except Exception:
+                        pass
+            else:
+                try:
+                    self.log_message(f"Logo no encontrado en ruta: {path}")
+                except Exception:
+                    pass
             return None
+
+        # Cargar logo principal (logo.png)
+        self.logo_img = load_logo(logo_path, logo_height)
         
-        # Cargar logo izquierdo
-        self.logo_left_img = load_logo(logo_left_path, logo_height)
-        if not self.logo_left_img:
-            self.logo_left_img = load_logo(logo_fallback_path, logo_height)
-        
-        # Cargar logo derecho
-        self.logo_right_img = load_logo(logo_right_path, logo_height)
-        if not self.logo_right_img:
-            self.logo_right_img = load_logo(logo_fallback_path, logo_height)
-        
-        # Ttulo sin logo
-        title_box = ttk.Frame(brand_frame, style='Header.TFrame')
-        title_box.pack(side=LEFT)
-        ttk.Label(title_box, text="Sistema de Pesagem", style='HeaderTitle.TLabel').pack(anchor="w")
-        self.lbl_status = ttk.Label(title_box, text="Desconectado", style='HeaderSub.TLabel')
-        self.lbl_status.pack(anchor="w")
+        # Logo junto al título (si existe) - mantener solo el logo en la barra superior
+        if self.logo_img:
+            # Do not use a Frame style for a Label (some themes may override image rendering).
+            logo_lbl = ttk.Label(brand_frame, image=self.logo_img)
+            logo_lbl.pack(side=LEFT, padx=(0, 12))
+            try:
+                self.log_message("Logo widget creado y empaquetado en header.")
+            except Exception:
+                pass
         
         # Header Actions - Botones uniformes y grandes para tablet
         actions_frame = ttk.Frame(header_frame, style='Header.TFrame')
@@ -330,6 +362,20 @@ class BalanzaGUI(ttk.Window):
             padding=(15, 12)
         ).pack(side=LEFT, padx=(20, 5))
 
+        # Pequeña sección centrada debajo del header con título y estado (no muy ancha)
+        header_info_frame = ttk.Frame(main_container, style='Header.TFrame')
+        header_info_frame.pack(fill=X)
+        info_box = ttk.Frame(header_info_frame, style='CardNoBorder.TFrame')
+        info_box.pack(anchor='center', pady=(6, 6))
+        try:
+            info_box.configure(width=self.scaled(360))
+        except Exception:
+            pass
+        ttk.Label(info_box, text="Sistema de Pesagem", style='HeaderTitle.TLabel').pack()
+        # Reusar self.lbl_status para compatibilidad con _update_status
+        self.lbl_status = ttk.Label(info_box, text="Desconectado", style='HeaderSub.TLabel')
+        self.lbl_status.pack()
+
         # --- Separador visual ---
         ttk.Separator(main_container, orient=HORIZONTAL).pack(fill=X, pady=(0, 10))
 
@@ -358,6 +404,19 @@ class BalanzaGUI(ttk.Window):
             header.pack(fill=X, pady=(0, 8))
             
             ttk.Label(header, text=title, style='CardTitle.TLabel').pack(side=LEFT)
+            # Mostrar un subtítulo general por columna: solo en la fila superior (row == 0)
+            try:
+                if row == 0:
+                    if col == 0:
+                        side_text = "Viga Esquerda"
+                    elif col == 2:
+                        side_text = "Viga Direita"
+                    else:
+                        side_text = None
+                    if side_text:
+                        ttk.Label(header, text=side_text, font=("Segoe UI", 10), foreground="#64748b").pack(side=LEFT, padx=(10, 0))
+            except Exception:
+                pass
             
             # Indicador de estado (ms visible)
             status_frame = ttk.Frame(header, style='CardNoBorder.TFrame')
@@ -871,12 +930,8 @@ class BalanzaGUI(ttk.Window):
 
     def toggle_decimals(self):
         """Alterna entre mostrar valores con o sin decimales."""
+        # Toggle flag only; keep the button label as '0.00'
         self._show_decimals = not self._show_decimals
-        # Actualizar texto y estilo del botón
-        if self._show_decimals:
-            self.btn_decimals.configure(text="OCULTAR DECIMAIS", bootstyle="info", width=26, padding=(15,10))
-        else:
-            self.btn_decimals.configure(text="MOSTRAR DECIMAIS", bootstyle="info-outline", width=26, padding=(15,10))
 
         # Ajustar tamaños de fuente según presencia de decimales y valores negativos
         try:
@@ -962,18 +1017,65 @@ class BalanzaGUI(ttk.Window):
                 import csv as _csv
                 applied = set()
                 with open(csv_path, 'r', encoding='utf-8') as f:
-                    reader = _csv.DictReader(f)
+                    # Try to detect wide format (Carga,serial1,serial2,...) vs legacy long format
+                    sample = f.read(2048)
+                    f.seek(0)
+                    # If the header line contains 'Carga' or 'Carga Real' treat as wide format
+                    first_line = f.readline()
+                    f.seek(0)
+                    hdr_lower = first_line.strip().lower()
                     rows_by_target = {}
-                    for row in reader:
-                        serial_r = (row.get('serial') or '').strip() or None
-                        composite_r = (row.get('composite') or '').strip() or None
+                    if hdr_lower.startswith('carga') or 'carga' in hdr_lower or 'carga real' in hdr_lower:
+                        # Wide format: first column is weight, remaining columns are targets (serials or composite names)
+                        reader = _csv.reader(f)
                         try:
-                            w = float(row.get('weight', '0'))
-                            r = float(row.get('reading', '0'))
-                        except Exception:
-                            continue
-                        key = (serial_r, composite_r)
-                        rows_by_target.setdefault(key, []).append((w, r))
+                            headers = next(reader)
+                        except StopIteration:
+                            headers = []
+                        targets = [h.strip() for h in headers[1:]]
+                        for row in reader:
+                            if not row:
+                                continue
+                            try:
+                                w = float(row[0])
+                            except Exception:
+                                continue
+                            for idx, target in enumerate(targets):
+                                if idx + 1 >= len(row):
+                                    continue
+                                val = row[idx + 1].strip()
+                                if val == '':
+                                    continue
+                                try:
+                                    r = float(val)
+                                except Exception:
+                                    # skip non-numeric
+                                    continue
+                                # Infer serial/composite
+                                serial_r = None
+                                composite_r = None
+                                if ':' in target:
+                                    composite_r = target
+                                elif '_' in target:
+                                    composite_r = target.replace('_', ':')
+                                else:
+                                    serial_r = target
+                                key = (serial_r, composite_r)
+                                rows_by_target.setdefault(key, []).append((w, r))
+                    else:
+                        # Legacy long format (serial,composite,weight,reading,...)
+                        f.seek(0)
+                        reader = _csv.DictReader(f)
+                        for row in reader:
+                            serial_r = (row.get('serial') or '').strip() or None
+                            composite_r = (row.get('composite') or '').strip() or None
+                            try:
+                                w = float(row.get('weight', '0'))
+                                r = float(row.get('reading', '0'))
+                            except Exception:
+                                continue
+                            key = (serial_r, composite_r)
+                            rows_by_target.setdefault(key, []).append((w, r))
 
                 # Apply each group
                 for (serial_k, composite_k), pts in rows_by_target.items():
@@ -2238,8 +2340,13 @@ class BalanzaGUI(ttk.Window):
         save_config_ref[0] = save_config
 
         # ==================== BOTONES ABAJO ====================
-        btn_bottom_frame = ttk.Frame(main_frame, padding=(0, 14))
-        btn_bottom_frame.pack(fill=X, side=BOTTOM, pady=(8, 18))
+        # On small screens (1280x800) place the button bar in the outer border_frame
+        small_screen = (screen_w == 1280 and screen_h == 800)
+        parent_for_buttons = border_frame if small_screen else main_frame
+        # Reduce paddings on small screens to keep buttons visible
+        bottom_padding = (0, 10) if not small_screen else (0, 8)
+        btn_bottom_frame = ttk.Frame(parent_for_buttons, padding=bottom_padding)
+        btn_bottom_frame.pack(fill=X, side=BOTTOM, pady=(6, 12))
 
         ttk.Separator(btn_bottom_frame, orient="horizontal").pack(fill=X, pady=(0, 12))
 
@@ -2247,37 +2354,44 @@ class BalanzaGUI(ttk.Window):
         # Centrar el contenedor para que los botones no se peguen a la izquierda
         btn_container.pack(anchor='center')
 
-        # Botones más grandes y consistentes con estilos 'Large.*'
-        btn_salvar = ttk.Button(btn_container, text="SALVAR", 
-                       bootstyle="success", 
+        # Buttons size adjustments for small screens
+        if small_screen:
+            btn_width = 12
+            btn_padding = (16, 10)
+        else:
+            btn_width = 16
+            btn_padding = (28, 14)
+
+        btn_salvar = ttk.Button(btn_container, text="SALVAR",
+                       bootstyle="success",
                        command=do_save,
-                       width=16,
-                       padding=(28, 14))
+                       width=btn_width,
+                       padding=btn_padding)
         btn_salvar.configure(style='Large.success.TButton')
         btn_salvar.pack(side=LEFT, padx=14)
 
-        btn_cancelar = ttk.Button(btn_container, text="CANCELAR", 
-                       bootstyle="secondary", 
+        btn_cancelar = ttk.Button(btn_container, text="CANCELAR",
+                       bootstyle="secondary",
                        command=safe_close_dialog,
-                       width=16,
-                       padding=(28, 14))
+                       width=btn_width,
+                       padding=btn_padding)
         btn_cancelar.configure(style='Large.warning.TButton')
         btn_cancelar.pack(side=LEFT, padx=14)
 
         # Separador visual
-        ttk.Frame(btn_container, width=self.scaled(30)).pack(side=LEFT)
+        ttk.Frame(btn_container, width=self.scaled(24)).pack(side=LEFT)
 
-        btn_fechar = ttk.Button(btn_container, text="FECHAR", 
-                       bootstyle="danger-outline", 
+        btn_fechar = ttk.Button(btn_container, text="FECHAR",
+                       bootstyle="danger-outline",
                        command=safe_close_dialog,
-                       width=16,
-                       padding=(28, 14))
+                       width=btn_width,
+                       padding=btn_padding)
         btn_fechar.configure(style='Large.danger.TButton')
         btn_fechar.pack(side=LEFT, padx=14)
 
         # Configurar protocolo de cierre
         dialog.protocol("WM_DELETE_WINDOW", safe_close_dialog)
-        
+
         # Modal behavior
         dialog.transient(self)
         try:
