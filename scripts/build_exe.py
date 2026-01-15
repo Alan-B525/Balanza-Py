@@ -17,6 +17,7 @@ add_data = [
     ('settings.json', 'settings.json'),
     ('requirements.txt', 'requirements.txt'),
     ('config.py', 'config.py'),
+    ('assets', 'assets'),
 ]
 
 # Construir el argumento --add-data
@@ -33,7 +34,7 @@ args = [
     '--windowed',       # No mostrar consola (GUI app)
     '--clean',          # Limpiar caché antes de construir
     '--noconfirm',      # No preguntar para sobrescribir
-    # '--icon=logo.ico', # Si tuvieras un icono
+    '--icon=assets/icon.ico', # Icono del ejecutable
 ] + add_data_args
 
 # Imports ocultos que a veces PyInstaller no detecta

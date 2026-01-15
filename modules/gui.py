@@ -131,6 +131,48 @@ class BalanzaGUI(ttk.Window):
         """Escala el tamaño de fuente según la resolución."""
         return int(size * self.font_scale)
 
+    def _fit_label_font(self, label, text, family, max_size, min_size=8, weight='bold', explicit_width=None):
+        """Ajusta el tamaño de fuente de `label` para que `text` quepa en su ancho disponible.
+
+        - `explicit_width`: si se proporciona (en píxeles), se usa en lugar de medir el widget.
+        """
+        try:
+            import tkinter.font as tkfont
+            # Forzar layout para obtener medidas reales
+            try:
+                self.update_idletasks()
+            except Exception:
+                pass
+
+            # Determinar ancho disponible: preferir explicit_width si hay
+            if explicit_width and isinstance(explicit_width, int) and explicit_width > 0:
+                avail_w = explicit_width
+            else:
+                avail_w = label.winfo_width()
+                if not avail_w or avail_w <= 1:
+                    parent = label.master
+                    avail_w = parent.winfo_width() or parent.winfo_reqwidth() or label.winfo_reqwidth()
+
+            padding = 8  # margen de seguridad en píxeles
+            avail_w = max(1, int(avail_w) - padding)
+
+            chosen_size = min(max_size, max(min_size, int(max_size)))
+            for size in range(chosen_size, min_size - 1, -1):
+                f = tkfont.Font(family=family, size=size, weight=weight)
+                w = f.measure(text)
+                if w <= avail_w:
+                    label.configure(font=(family, size, weight))
+                    return
+
+            # Si ninguno encaja, forzar el mínimo
+            label.configure(font=(family, min_size, weight))
+        except Exception:
+            # Fallback silencioso
+            try:
+                label.configure(font=(family, min_size, weight))
+            except Exception:
+                pass
+
     def _configure_styles(self):
         # Colors
         BG_BODY = "#e2e8f0"  # Gris ms claro para mejor contraste
@@ -427,6 +469,12 @@ class BalanzaGUI(ttk.Window):
         grid_area = ttk.Frame(main_container, style='Body.TFrame')
         # Empaquetar el grid central normalmente (sin reservar padding fijo)
         grid_area.pack(fill=BOTH, expand=YES)
+        try:
+            # Forzar tamaño objetivo del área central para mantener layout estable
+            grid_area.configure(width=self.scaled(1000), height=self.scaled(600))
+            grid_area.pack_propagate(False)
+        except Exception:
+            pass
         
         # Columnas con tamao escalado según resolución
         grid_area.columnconfigure(0, weight=1, minsize=self.scaled(250))
@@ -441,15 +489,29 @@ class BalanzaGUI(ttk.Window):
 
         # Helper to create cards mapped to config keys
         def create_sensor_card(key, title, row, col):
-            # Card con borde visible y tamao uniforme
+            # Card con borde visible y tamaño uniforme
+            card_w = self.scaled(300)
+            card_h = self.scaled(200)
             card = ttk.Frame(grid_area, style='Card.TFrame', padding=20)
             card.grid(row=row, column=col, sticky="nsew", padx=8, pady=8)
-            card.grid_propagate(False)  # NO permitir que el contenido cambie el tamao
-            
-            # Header con ttulo y estado
+            # Forzar tamaño fijo del contenedor para que no cambie al modificar fuentes
+            try:
+                card.configure(width=card_w, height=card_h)
+            except Exception:
+                pass
+            try:
+                card.grid_propagate(False)
+            except Exception:
+                pass
+            try:
+                card.pack_propagate(False)
+            except Exception:
+                pass
+
+            # Header con título y estado
             header = ttk.Frame(card, style='CardNoBorder.TFrame')
             header.pack(fill=X, pady=(0, 8))
-            
+
             ttk.Label(header, text=title, style='CardTitle.TLabel').pack(side=LEFT)
             # Mostrar un subtítulo general por columna: solo en la fila superior (row == 0)
             try:
@@ -464,43 +526,51 @@ class BalanzaGUI(ttk.Window):
                         ttk.Label(header, text=side_text, font=("Segoe UI", 10), foreground="#64748b").pack(side=LEFT, padx=(10, 0))
             except Exception:
                 pass
-            
-            # Indicador de estado (ms visible)
+
+            # Indicador de estado (más visible)
             status_frame = ttk.Frame(header, style='CardNoBorder.TFrame')
             status_frame.pack(side=RIGHT)
-            
+
             rssi_lbl = ttk.Label(status_frame, text="", font=("Segoe UI", 16), foreground="#94a3b8")
             rssi_lbl.pack(side=LEFT)
             status_lbl = ttk.Label(status_frame, text="Sem Sinal", font=("Segoe UI", 12, "bold"), foreground="#94a3b8")
             status_lbl.pack(side=LEFT, padx=(5, 0))
-            
+
             # Separador
             ttk.Separator(card, orient=HORIZONTAL).pack(fill=X, pady=8)
-            
-            # Valor principal - Centrado con ancho fijo - MS GRANDE
+
+            # Valor principal - Centrado - grande, la fuente se ajustará para caber
             value_container = ttk.Frame(card, style='CardNoBorder.TFrame')
             value_container.pack(fill=BOTH, expand=YES)
+            try:
+                value_container.pack_propagate(False)
+            except Exception:
+                pass
 
             value_lbl = ttk.Label(
-                value_container, 
-                text="0.00", 
+                value_container,
+                text="0.00",
                 font=('Consolas', self.scaled_font(40), 'bold'),
-                foreground="#1e293b", 
+                foreground="#1e293b",
                 background="#ffffff",
                 anchor="center",
-                width=8  # Ancho fijo para evitar cambios
             )
             value_lbl.pack(expand=YES)
-            
-            # Unidade
+            try:
+                # target_width: ancho útil disponible para el texto dentro de la tarjeta
+                value_lbl.target_width = max(1, card_w - self.scaled(40))
+            except Exception:
+                value_lbl.target_width = None
+
+            # Unidad
             ttk.Label(
-                value_container, 
-                text="t", 
-                font=('Segoe UI', 15), 
+                value_container,
+                text="t",
+                font=('Segoe UI', 15),
                 foreground="#64748b",
                 background="#ffffff"
             ).pack(pady=(5, 0))
-            
+
             self.sensor_widgets[key] = {
                 'value': value_lbl,
                 'rssi': rssi_lbl,
@@ -522,9 +592,20 @@ class BalanzaGUI(ttk.Window):
         # --- PANEL CENTRAL: TOTAL (MS GRANDE) ---
         control_panel = ttk.Frame(grid_area, style='Card.TFrame', padding=self.scaled(10))
         control_panel.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=self.scaled(6), pady=self.scaled(6))
-        # Permitir que el panel central adapte su altura al contenido en pantallas pequenas
+        # Forzar tamaño fijo del panel central (TOTAL) para que no cambie con los textos
         try:
-            control_panel.grid_propagate(True)
+            panel_w = self.scaled(420)
+            panel_h = self.scaled(420)
+            control_panel.configure(width=panel_w, height=panel_h)
+        except Exception:
+            panel_w = self.scaled(420)
+            panel_h = self.scaled(420)
+        try:
+            control_panel.grid_propagate(False)
+        except Exception:
+            pass
+        try:
+            control_panel.pack_propagate(False)
         except Exception:
             pass
         
@@ -541,9 +622,17 @@ class BalanzaGUI(ttk.Window):
             text="0", 
             style='TotalValue.TLabel', 
             anchor="center",
-            width=10  # Largura fixa para evitar mudanças
         )
         self.lbl_total.pack(fill=X, pady=12)
+        try:
+            # target width: usar panel_w menos padding interior
+            self.lbl_total.target_width = max(1, panel_w - self.scaled(60))
+        except Exception:
+            self.lbl_total.target_width = None
+        try:
+            self.total_section.pack_propagate(False)
+        except Exception:
+            pass
         self.lbl_total_unit = ttk.Label(self.total_section, text="t", style='TotalUnit.TLabel', anchor="center")
         self.lbl_total_unit.pack()
         
@@ -691,7 +780,18 @@ class BalanzaGUI(ttk.Window):
         # Atualizar Tara Acumulada em Toneladas
         if 'total_tare' in data:
             tara_ton = data['total_tare']
-            self.lbl_tare_info.configure(text=f"Tara Acumulada: {self._format_weight(tara_ton)} t")
+            # Actualizar el widget nuevo si existe, sino mantener compatibilidad
+            tare_text = f"{self._format_weight(tara_ton)} t"
+            if hasattr(self, 'lbl_tare_value'):
+                try:
+                    self.lbl_tare_value.configure(text=tare_text)
+                except Exception:
+                    pass
+            elif hasattr(self, 'lbl_tare_info'):
+                try:
+                    self.lbl_tare_info.configure(text=f"Tara Acumulada: {tare_text}")
+                except Exception:
+                    pass
         
         # Verificar si hay sensores desconectados para cambiar color del panel
         any_disconnected = data.get('any_disconnected', False)
@@ -732,15 +832,22 @@ class BalanzaGUI(ttk.Window):
                 total_small = max(40, int(normal_total * 0.9))
                 total_extra_small = max(30, int(normal_total * 0.7))
                 try:
+                    # Ajustar el texto primero y luego adaptar la fuente para que quepa
+                    self.lbl_total.configure(text=total_text, style='TotalValue.TLabel')
                     if self._show_decimals and str(total_text).strip().startswith("-"):
-                        self.lbl_total.configure(font=("Consolas", total_extra_small, 'bold'))
+                        tgt = total_extra_small
                     elif self._show_decimals:
-                        self.lbl_total.configure(font=("Consolas", total_small, 'bold'))
+                        tgt = total_small
                     else:
-                        self.lbl_total.configure(font=("Consolas", normal_total, 'bold'))
+                        tgt = normal_total
+                    fixed_total_w = getattr(self.lbl_total, 'target_width', self.scaled(360))
+                    self._fit_label_font(self.lbl_total, str(total_text), 'Consolas', max_size=tgt, min_size=total_extra_small, explicit_width=fixed_total_w)
                 except Exception:
-                    pass
-                self.lbl_total.configure(text=total_text, style='TotalValue.TLabel')
+                    # Fallback conservador
+                    try:
+                        self.lbl_total.configure(text=total_text)
+                    except Exception:
+                        pass
                 self._widget_last_total = incoming_total_last
             self.lbl_total_unit.configure(text="t", style='TotalUnit.TLabel')
         
@@ -756,7 +863,7 @@ class BalanzaGUI(ttk.Window):
                 if incoming_last > prev_last:
                     display_text = self._format_weight(valor_ton)
                     widgets['value'].configure(text=display_text)
-                    # Si mostramos decimales y el valor es negativo, reducir la fuente
+                    # Ajustar la fuente para que el texto encaje sin cambiar el contenedor
                     try:
                         try:
                             normal_cell = self.scaled_font(64)
@@ -764,12 +871,16 @@ class BalanzaGUI(ttk.Window):
                             normal_cell = 64
                         cell_small = max(10, int(normal_cell * 0.75))
                         cell_extra_small = max(8, int(normal_cell * 0.6))
+
                         if self._show_decimals and str(display_text).strip().startswith("-"):
-                            widgets['value'].configure(font=("Consolas", cell_extra_small, 'bold'))
+                            tgt = cell_extra_small
                         elif self._show_decimals:
-                            widgets['value'].configure(font=("Consolas", cell_small, 'bold'))
+                            tgt = cell_small
                         else:
-                            widgets['value'].configure(font=("Consolas", normal_cell, 'bold'))
+                            tgt = normal_cell
+
+                        fixed_w = getattr(widgets['value'], 'target_width', self.scaled(260))
+                        self._fit_label_font(widgets['value'], str(display_text), 'Consolas', max_size=tgt, min_size=cell_extra_small, explicit_width=fixed_w)
                     except Exception:
                         pass
                     self._widget_last_seen[key] = incoming_last
@@ -1002,8 +1113,7 @@ class BalanzaGUI(ttk.Window):
         """Alterna entre mostrar valores con o sin decimales."""
         # Toggle flag only; keep the button label as '0.00'
         self._show_decimals = not self._show_decimals
-
-        # Ajustar tamaños de fuente según presencia de decimales y valores negativos
+        # Simplified: only two font states exist now - with decimals and without decimals.
         try:
             normal_cell = self.scaled_font(64)
         except Exception:
@@ -1013,52 +1123,31 @@ class BalanzaGUI(ttk.Window):
         except Exception:
             normal_total = 120
 
-        cell_small = max(10, int(normal_cell * 0.75))
-        cell_extra_small = max(8, int(normal_cell * 0.6))
-        total_small = max(40, int(normal_total * 0.9))
-        total_extra_small = max(30, int(normal_total * 0.7))
+        if self._show_decimals:
+            sensor_target = max(12, int(normal_cell * 0.85))
+            total_target = max(40, int(normal_total * 0.85))
+        else:
+            sensor_target = normal_cell
+            total_target = normal_total
 
-        negative_present = False
-        try:
-            data = getattr(self, '_last_sensor_data', None)
-            if data:
-                # Chequear total
-                try:
-                    if float(data.get('total', 0.0)) < 0:
-                        negative_present = True
-                except Exception:
-                    pass
-                # Chequear sensores individuales
-                for s in data.get('sensores', {}).values():
-                    try:
-                        if float(s.get('valor', 0.0)) < 0:
-                            negative_present = True
-                            break
-                    except Exception:
-                        continue
-        except Exception:
-            negative_present = False
+        min_sensor = max(8, int(sensor_target * 0.6))
+        min_total = max(20, int(total_target * 0.6))
 
-        # Aplicar tamaño de fuente a widgets individuales
+        # Aplicar tamaño de fuente a widgets individuales sin cambiar el tamaño del contenedor
         for key, widgets in getattr(self, 'sensor_widgets', {}).items():
             try:
-                if self._show_decimals:
-                    size = cell_extra_small if negative_present else cell_small
-                    widgets['value'].configure(font=("Consolas", size, 'bold'))
-                else:
-                    widgets['value'].configure(font=("Consolas", normal_cell, 'bold'))
+                txt = widgets['value'].cget('text') or "0"
+                fixed_w = getattr(widgets['value'], 'target_width', self.scaled(260))
+                self._fit_label_font(widgets['value'], str(txt), 'Consolas', max_size=sensor_target, min_size=min_sensor, explicit_width=fixed_w)
             except Exception:
                 pass
 
-        # Ajustar TOTAL
+        # Ajustar TOTAL sin alterar contenedor central (dos estados solamente)
         try:
             if hasattr(self, 'lbl_total') and self.lbl_total:
-                if self._show_decimals and negative_present:
-                    self.lbl_total.configure(font=("Consolas", total_extra_small, 'bold'))
-                elif self._show_decimals:
-                    self.lbl_total.configure(font=("Consolas", total_small, 'bold'))
-                else:
-                    self.lbl_total.configure(font=("Consolas", normal_total, 'bold'))
+                txt_total = self.lbl_total.cget('text') or "0"
+                fixed_total_w = getattr(self.lbl_total, 'target_width', self.scaled(360))
+                self._fit_label_font(self.lbl_total, str(txt_total), 'Consolas', max_size=total_target, min_size=min_total, explicit_width=fixed_total_w)
         except Exception:
             pass
 
@@ -2217,12 +2306,22 @@ class BalanzaGUI(ttk.Window):
         main_content.pack(fill=BOTH, expand=True, pady=(15, 0))
         main_content.columnconfigure(0, weight=1, uniform="cols")
         main_content.columnconfigure(1, weight=1, uniform="cols")
-        main_content.rowconfigure(0, weight=1)
+        # Fila 0: headers; Fila 1: contenido principal
+        main_content.rowconfigure(0, weight=0)
+        main_content.rowconfigure(1, weight=1)
         
+        # Header sobre ambas columnas: Viga Izquierda / Viga Derecha
+        top_headers = ttk.Frame(main_content)
+        top_headers.grid(row=0, column=0, columnspan=2, sticky='ew', pady=(0, 8))
+        # Dos labels que ocupan cada columna
+        lbl_left_beam = ttk.Label(top_headers, text="Viga Izquierda", font=("Segoe UI", 12, "bold"))
+        lbl_left_beam.pack(side=LEFT, fill=X, expand=YES, padx=(4, 2))
+        lbl_right_beam = ttk.Label(top_headers, text="Viga Derecha", font=("Segoe UI", 12, "bold"))
+        lbl_right_beam.pack(side=LEFT, fill=X, expand=YES, padx=(2, 4))
+
         # === COLUMNA IZQUIERDA: Búsqueda de Nodos ===
         discover_frame = ttk.Labelframe(main_content, text="Descoberta de Nós", padding=15)
-        discover_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
-        main_content.rowconfigure(0, weight=1)
+        discover_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 5))
         main_content.columnconfigure(0, weight=1)
         discover_frame.grid_propagate(False)
         
@@ -2276,8 +2375,8 @@ class BalanzaGUI(ttk.Window):
         
         # === COLUMNA DERECHA: Asignación de Células ===
         assign_frame = ttk.Labelframe(main_content, text="Atribuição de Células", padding=15)
-        assign_frame.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
-        
+        assign_frame.grid(row=1, column=1, sticky="nsew", padx=(5, 0))
+
         # Matriz 2x2 con tamaño fijo para evitar resize al abrir keypad
         matrix_frame = ttk.Frame(assign_frame)
         matrix_frame.pack(fill=BOTH, expand=True)
