@@ -2429,6 +2429,68 @@ class BalanzaGUI(ttk.Window):
         def do_save():
             if save_config_ref[0]:
                 save_config_ref[0]()
+
+        # ==================== BOTONES ABAJO (MOVIDOS AQUÍ) - COMPACTOS ====================
+        # On small screens (1280x800) pin the button bar to the dialog bottom
+        small_screen = (screen_w == 1280 and screen_h == 800)
+        # Compactar paddings para ahorrar espacio vertical
+        bottom_padding = (0, 5) if not small_screen else (0, 4)
+        btn_parent = dialog if small_screen else main_frame
+        btn_bottom_frame = ttk.Frame(btn_parent, padding=bottom_padding)
+        if small_screen:
+            # Use place to guarantee it's at the very bottom and not occluded
+            try:
+                btn_bottom_frame.place(relx=0, rely=1.0, anchor='sw', relwidth=1.0, height=self.scaled(70))
+            except Exception:
+                btn_bottom_frame.pack(fill=X, side=BOTTOM, pady=(4, 8))
+            try:
+                btn_bottom_frame.lift()
+            except Exception:
+                pass
+        else:
+            btn_bottom_frame.pack(fill=X, side=BOTTOM, pady=(2, 5))
+
+        ttk.Separator(btn_bottom_frame, orient="horizontal").pack(fill=X, pady=(0, 5))
+
+        btn_container = ttk.Frame(btn_bottom_frame)
+        # Centrar el contenedor para que los botones no se peguen a la izquierda
+        btn_container.pack(anchor='center')
+
+        # Buttons size adjustments for small screens (más compactos)
+        if small_screen:
+            btn_width = 14
+            btn_padding = (14, 8)
+        else:
+            btn_width = 15
+            btn_padding = (20, 10)
+
+        btn_salvar = ttk.Button(btn_container, text="SALVAR",
+                       bootstyle="success",
+                       command=do_save,
+                       width=btn_width,
+                       padding=btn_padding)
+        btn_salvar.configure(style='Large.success.TButton')
+        btn_salvar.pack(side=LEFT, padx=10)
+
+        btn_cancelar = ttk.Button(btn_container, text="CANCELAR",
+                       bootstyle="secondary",
+                       command=safe_close_dialog,
+                       width=btn_width,
+                       padding=btn_padding)
+        btn_cancelar.configure(style='Large.warning.TButton')
+        btn_cancelar.pack(side=LEFT, padx=10)
+
+        # Separador visual
+        ttk.Frame(btn_container, width=self.scaled(20)).pack(side=LEFT)
+
+        btn_fechar = ttk.Button(btn_container, text="FECHAR",
+                       bootstyle="danger-outline",
+                       command=safe_close_dialog,
+                       width=btn_width,
+                       padding=btn_padding)
+        btn_fechar.configure(style='Large.danger.TButton')
+        btn_fechar.pack(side=LEFT, padx=10)
+        # ==================== FIN BOTONES ABAJO (COMPACTOS) ====================
         
         # Header: Solo Tabs (ocupa solo el ancho, no debe expandir verticalmente)
         header_frame = ttk.Frame(main_frame)
@@ -2510,7 +2572,8 @@ class BalanzaGUI(ttk.Window):
         # Si estamos en pantalla pequeña, reservar espacio inferior igual
         # a la altura de la barra de botones para que no la solape.
         if small_screen:
-            main_content.pack(fill=BOTH, expand=True, pady=(15, self.scaled(100)))
+            # Reservar menos espacio inferior en tablets para evitar recortes
+            main_content.pack(fill=BOTH, expand=True, pady=(15, self.scaled(30)))
         else:
             main_content.pack(fill=BOTH, expand=True, pady=(15, 0))
         # Tres columnas: Descoberta más ancha, Viga 1 y Viga 2 iguales
@@ -2588,13 +2651,13 @@ class BalanzaGUI(ttk.Window):
         
         # === COLUMNA DERECHA: Asignación de Células dividida en 2 vigas ===
         # Colocamos las vigas como columnas independientes en main_content
-        viga1 = ttk.Labelframe(main_content, text="Viga 1", padding=8, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Viga.TLabelframe')
+        viga1 = ttk.Labelframe(main_content, text="Viga 1", padding=5, borderwidth=self.scaled(2), relief='solid', labelanchor='n', style='Viga.TLabelframe')
         viga1.grid(row=1, column=1, rowspan=1, sticky="nsew", padx=8, pady=8)
         viga1.columnconfigure(0, weight=1)
         viga1.rowconfigure(0, weight=1)
         viga1.rowconfigure(1, weight=1)
 
-        viga2 = ttk.Labelframe(main_content, text="Viga 2", padding=8, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Viga.TLabelframe')
+        viga2 = ttk.Labelframe(main_content, text="Viga 2", padding=5, borderwidth=self.scaled(2), relief='solid', labelanchor='n', style='Viga.TLabelframe')
         viga2.grid(row=1, column=2, rowspan=1, sticky="nsew", padx=8, pady=8)
         viga2.columnconfigure(0, weight=1)
         viga2.rowconfigure(0, weight=1)
@@ -2731,67 +2794,6 @@ class BalanzaGUI(ttk.Window):
         # Asignar la función a la referencia del header
         save_config_ref[0] = save_config
 
-        # ==================== BOTONES ABAJO ====================
-        # On small screens (1280x800) pin the button bar to the dialog bottom
-        small_screen = (screen_w == 1280 and screen_h == 800)
-        # Reduce paddings on small screens to keep buttons visible
-        bottom_padding = (0, 10) if not small_screen else (0, 8)
-        btn_parent = dialog if small_screen else main_frame
-        btn_bottom_frame = ttk.Frame(btn_parent, padding=bottom_padding)
-        if small_screen:
-            # Use place to guarantee it's at the very bottom and not occluded
-            try:
-                btn_bottom_frame.place(relx=0, rely=1.0, anchor='sw', relwidth=1.0, height=self.scaled(90))
-            except Exception:
-                btn_bottom_frame.pack(fill=X, side=BOTTOM, pady=(6, 12))
-            try:
-                btn_bottom_frame.lift()
-            except Exception:
-                pass
-        else:
-            btn_bottom_frame.pack(fill=X, side=BOTTOM, pady=(6, 12))
-
-        ttk.Separator(btn_bottom_frame, orient="horizontal").pack(fill=X, pady=(0, 12))
-
-        btn_container = ttk.Frame(btn_bottom_frame)
-        # Centrar el contenedor para que los botones no se peguen a la izquierda
-        btn_container.pack(anchor='center')
-
-        # Buttons size adjustments for small screens
-        if small_screen:
-            btn_width = 12
-            btn_padding = (16, 10)
-        else:
-            btn_width = 16
-            btn_padding = (28, 14)
-
-        btn_salvar = ttk.Button(btn_container, text="SALVAR",
-                       bootstyle="success",
-                       command=do_save,
-                       width=btn_width,
-                       padding=btn_padding)
-        btn_salvar.configure(style='Large.success.TButton')
-        btn_salvar.pack(side=LEFT, padx=14)
-
-        btn_cancelar = ttk.Button(btn_container, text="CANCELAR",
-                       bootstyle="secondary",
-                       command=safe_close_dialog,
-                       width=btn_width,
-                       padding=btn_padding)
-        btn_cancelar.configure(style='Large.warning.TButton')
-        btn_cancelar.pack(side=LEFT, padx=14)
-
-        # Separador visual
-        ttk.Frame(btn_container, width=self.scaled(24)).pack(side=LEFT)
-
-        btn_fechar = ttk.Button(btn_container, text="FECHAR",
-                       bootstyle="danger-outline",
-                       command=safe_close_dialog,
-                       width=btn_width,
-                       padding=btn_padding)
-        btn_fechar.configure(style='Large.danger.TButton')
-        btn_fechar.pack(side=LEFT, padx=14)
-
         # Configurar protocolo de cierre
         dialog.protocol("WM_DELETE_WINDOW", safe_close_dialog)
 
@@ -2867,9 +2869,12 @@ class BalanzaGUI(ttk.Window):
                     self._update_sensor_buttons_visuals(inner_container)
 
                 btn_frame = ttk.Frame(inner_container, style='Card.TFrame', cursor="hand2")
-                btn_frame.grid(row=row, column=col, sticky="nsew", padx=15, pady=15)
-                btn_frame.grid_propagate(False)
-                btn_frame.configure(height=140)
+                btn_frame.grid(row=row, column=col, sticky="nsew", padx=12, pady=10)
+                # permitir que el alto se ajuste según contenido (no forzar altura fija)
+                try:
+                    btn_frame.grid_propagate(True)
+                except Exception:
+                    pass
                 btn_frame.bind("<Button-1>", lambda e, n=name: select_sensor(n))
 
                 content_frame = ttk.Frame(btn_frame, style='CardNoBorder.TFrame')
