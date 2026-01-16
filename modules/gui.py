@@ -277,7 +277,6 @@ class BalanzaGUI(ttk.Window):
         # Intentar cargar un solo logo principal junto al título
         import os
         assets_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets")
-        logo_path = os.path.join(assets_path, "logo.png")
 
         self.logo_img = None
         # Tamaño de logo (escalado)
@@ -287,7 +286,6 @@ class BalanzaGUI(ttk.Window):
             try:
                 resample_method = getattr(Image, 'Resampling', Image).LANCZOS
             except Exception:
-                # Fallback si la colección de enum o atributo no existe
                 try:
                     resample_method = Image.LANCZOS
                 except Exception:
@@ -338,6 +336,7 @@ class BalanzaGUI(ttk.Window):
             return None
 
         # Cargar logo principal (logo.png)
+        logo_path = os.path.join(assets_path, "logo.png")
         self.logo_img = load_logo(logo_path, logo_height)
         
         # Logo junto al título (si existe) - mantener solo el logo en la barra superior
@@ -488,11 +487,14 @@ class BalanzaGUI(ttk.Window):
         self.sensor_widgets = {} 
 
         # Helper to create cards mapped to config keys
-        def create_sensor_card(key, title, row, col):
+        def create_sensor_card(key, title, row, col, parent=None):
             # Card con borde visible y tamaño uniforme
             card_w = self.scaled(300)
             card_h = self.scaled(200)
-            card = ttk.Frame(grid_area, style='Card.TFrame', padding=20)
+            if parent is None:
+                parent = grid_area
+            card = ttk.Frame(parent, style='Card.TFrame', padding=20)
+            # If placed inside a viga group, row/col semantics are relative to parent
             card.grid(row=row, column=col, sticky="nsew", padx=8, pady=8)
             # Forzar tamaño fijo del contenedor para que no cambie al modificar fuentes
             try:
@@ -511,21 +513,6 @@ class BalanzaGUI(ttk.Window):
             # Header con título y estado
             header = ttk.Frame(card, style='CardNoBorder.TFrame')
             header.pack(fill=X, pady=(0, 8))
-
-            ttk.Label(header, text=title, style='CardTitle.TLabel').pack(side=LEFT)
-            # Mostrar un subtítulo general por columna: solo en la fila superior (row == 0)
-            try:
-                if row == 0:
-                    if col == 0:
-                        side_text = "Viga Esquerda"
-                    elif col == 2:
-                        side_text = "Viga Direita"
-                    else:
-                        side_text = None
-                    if side_text:
-                        ttk.Label(header, text=side_text, font=("Segoe UI", 10), foreground="#64748b").pack(side=LEFT, padx=(10, 0))
-            except Exception:
-                pass
 
             # Indicador de estado (más visible)
             status_frame = ttk.Frame(header, style='CardNoBorder.TFrame')
@@ -580,14 +567,32 @@ class BalanzaGUI(ttk.Window):
         # Crear sensores en posiciones: izquierda y derecha (numerados)
         keys = list(NODOS_CONFIG.keys())
         if len(keys) >= 4:
-            create_sensor_card(keys[0], "CÉLULA 1", 0, 0)
-            create_sensor_card(keys[1], "CÉLULA 2", 0, 2)
-            create_sensor_card(keys[2], "CÉLULA 3", 1, 0)
-            create_sensor_card(keys[3], "CÉLULA 4", 1, 2)
+            # Crear marcos que agrupen las celdas por viga
+            left_group = ttk.Labelframe(grid_area, text="Viga 1", padding=8, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Viga.TLabelframe')
+            left_group.grid(row=0, column=0, rowspan=2, sticky="nsew", padx=8, pady=8)
+            left_group.columnconfigure(0, weight=1)
+            left_group.rowconfigure(0, weight=1)
+            left_group.rowconfigure(1, weight=1)
+
+            right_group = ttk.Labelframe(grid_area, text="Viga 2", padding=8, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Viga.TLabelframe')
+            right_group.grid(row=0, column=2, rowspan=2, sticky="nsew", padx=8, pady=8)
+            right_group.columnconfigure(0, weight=1)
+            right_group.rowconfigure(0, weight=1)
+            right_group.rowconfigure(1, weight=1)
+
+            create_sensor_card(keys[0], "CÉLULA 1", 0, 0, parent=left_group)
+            create_sensor_card(keys[1], "CÉLULA 2", 0, 0, parent=right_group)
+            create_sensor_card(keys[2], "CÉLULA 3", 1, 0, parent=left_group)
+            create_sensor_card(keys[3], "CÉLULA 4", 1, 0, parent=right_group)
         elif len(keys) >= 2:
             # Fallback si solo hay 2 celdas configuradas
-            create_sensor_card(keys[0], "CÉLULA 1", 0, 0)
-            create_sensor_card(keys[1], "CÉLULA 2", 0, 2)
+            # Agrupar en vigas también para 2 celdas
+            left_group = ttk.Labelframe(grid_area, text="Viga 1", padding=8, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Viga.TLabelframe')
+            left_group.grid(row=0, column=0, rowspan=2, sticky="nsew", padx=8, pady=8)
+            right_group = ttk.Labelframe(grid_area, text="Viga 2", padding=8, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Viga.TLabelframe')
+            right_group.grid(row=0, column=2, rowspan=2, sticky="nsew", padx=8, pady=8)
+            create_sensor_card(keys[0], "CÉLULA 1", 0, 0, parent=left_group)
+            create_sensor_card(keys[1], "CÉLULA 2", 0, 0, parent=right_group)
 
         # --- PANEL CENTRAL: TOTAL (MS GRANDE) ---
         control_panel = ttk.Frame(grid_area, style='Card.TFrame', padding=self.scaled(10))
@@ -609,12 +614,15 @@ class BalanzaGUI(ttk.Window):
         except Exception:
             pass
         
-        # Seccin TOTAL con fondo azul - MUY GRANDE Y PROMINENTE
-        # Guardar referencia para poder cambiar color en caso de desconexin
-        # Reducir padding del panel total para ahorrar espacio vertical
-        self.total_section = ttk.Frame(control_panel, style='TotalPanel.TFrame', padding=self.scaled(18))
-        self.total_section.pack(fill=BOTH, expand=YES)
-        
+        # Sección TOTAL: crear contenedor antes de usarlo
+        try:
+            self.total_section = ttk.Frame(control_panel, style='TotalPanel.TFrame', padding=self.scaled(18))
+            self.total_section.pack(fill=BOTH, expand=YES)
+        except Exception:
+            # Fallback mínimo
+            self.total_section = ttk.Frame(control_panel)
+            self.total_section.pack(fill=BOTH, expand=YES)
+
         self.lbl_total_title = ttk.Label(self.total_section, text="PESO TOTAL", style='TotalLabel.TLabel', anchor="center")
         self.lbl_total_title.pack(fill=X)
         self.lbl_total = ttk.Label(
@@ -2179,6 +2187,8 @@ class BalanzaGUI(ttk.Window):
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
         dialog.geometry(f"{screen_w}x{screen_h}+0+0")
+        # Detectar pantallas pequeñas (tablet 1280x800) para ajustar paddings
+        small_screen = (screen_w == 1280 and screen_h == 800)
         dialog.lift()
         dialog.focus_force()
         # Ocupar toda la pantalla (Tkinter fullscreen)
@@ -2218,6 +2228,8 @@ class BalanzaGUI(ttk.Window):
         border_frame.pack(fill=BOTH, expand=YES)
         
         main_frame = ttk.Frame(border_frame, padding=10)
+        # Empaquetar main_frame sin padding inferior; la barra de botones
+        # se coloca con place() en pantallas pequeñas para evitar solapamientos
         main_frame.pack(fill=BOTH, expand=YES)
         
         # Variable para almacenar referencia a save_config (se define después)
@@ -2227,14 +2239,13 @@ class BalanzaGUI(ttk.Window):
             if save_config_ref[0]:
                 save_config_ref[0]()
         
-        # Header: Solo Tabs (ocupa todo el ancho)
-        # Header: Solo Tabs (ocupa todo el alto)
+        # Header: Solo Tabs (ocupa solo el ancho, no debe expandir verticalmente)
         header_frame = ttk.Frame(main_frame)
-        header_frame.pack(fill=BOTH, expand=YES, pady=(0, 5))
+        header_frame.pack(fill=BOTH, expand=True, pady=(0, 5))
 
-        # Notebook/Tabs
+        # Notebook/Tabs (compacto en alto)
         notebook = ttk.Notebook(header_frame, style='BigTab.TNotebook')
-        notebook.pack(fill=BOTH, expand=YES)
+        notebook.pack(fill=BOTH, expand=True)
 
         # ==================== Tab Sensores ====================
         tab_nodes = ttk.Frame(notebook, padding=10)
@@ -2298,32 +2309,43 @@ class BalanzaGUI(ttk.Window):
                 self.show_alert("Erro", str(e), "error", parent=dialog)
                 
         ttk.Button(port_grid, text="Atualizar", command=refresh_ports, bootstyle="secondary-outline", width=10).grid(row=0, column=2, padx=(15, 0))
+
+        # Import/Export moved to the CALIBRACAO tab (see _setup_calibration_tab)
         
         node_entries = {}
         
         # === CONTENEDOR PRINCIPAL: Dos columnas lado a lado (ocupa todo el espacio) ===
         main_content = ttk.Frame(tab_nodes)
-        main_content.pack(fill=BOTH, expand=True, pady=(15, 0))
-        main_content.columnconfigure(0, weight=1, uniform="cols")
-        main_content.columnconfigure(1, weight=1, uniform="cols")
+        # Si estamos en pantalla pequeña, reservar espacio inferior igual
+        # a la altura de la barra de botones para que no la solape.
+        if small_screen:
+            main_content.pack(fill=BOTH, expand=True, pady=(15, self.scaled(100)))
+        else:
+            main_content.pack(fill=BOTH, expand=True, pady=(15, 0))
+        # Tres columnas: Descoberta más ancha, Viga 1 y Viga 2 iguales
+        main_content.columnconfigure(0, weight=12)
+        main_content.columnconfigure(1, weight=10)
+        main_content.columnconfigure(2, weight=10)
         # Fila 0: headers; Fila 1: contenido principal
         main_content.rowconfigure(0, weight=0)
         main_content.rowconfigure(1, weight=1)
-        
-        # Header sobre ambas columnas: Viga Izquierda / Viga Derecha
-        top_headers = ttk.Frame(main_content)
-        top_headers.grid(row=0, column=0, columnspan=2, sticky='ew', pady=(0, 8))
-        # Dos labels que ocupan cada columna
-        lbl_left_beam = ttk.Label(top_headers, text="Viga Izquierda", font=("Segoe UI", 12, "bold"))
-        lbl_left_beam.pack(side=LEFT, fill=X, expand=YES, padx=(4, 2))
-        lbl_right_beam = ttk.Label(top_headers, text="Viga Derecha", font=("Segoe UI", 12, "bold"))
-        lbl_right_beam.pack(side=LEFT, fill=X, expand=YES, padx=(2, 4))
 
         # === COLUMNA IZQUIERDA: Búsqueda de Nodos ===
-        discover_frame = ttk.Labelframe(main_content, text="Descoberta de Nós", padding=15)
+        discover_frame = ttk.Labelframe(main_content, text="Descoberta de Nós", padding=15, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Viga.TLabelframe')
         discover_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 5))
-        main_content.columnconfigure(0, weight=1)
-        discover_frame.grid_propagate(False)
+        try:
+            discover_frame.grid_propagate(True)
+        except Exception:
+            pass
+        # Estilo para las Vigas / Descoberta: etiqueta en negrita y fuente ligeramente mayor
+        try:
+            style = ttk.Style()
+            style.configure('Viga.TLabelframe.Label', font=("Segoe UI", self.scaled(13), 'bold'))
+        except Exception:
+            try:
+                style.configure('Viga.TLabelframe.Label', font=("Segoe UI", 13, 'bold'))
+            except Exception:
+                pass
         
         discover_btn_frame = ttk.Frame(discover_frame)
         discover_btn_frame.pack(anchor="n", fill=X, pady=(0, 10))
@@ -2373,17 +2395,19 @@ class BalanzaGUI(ttk.Window):
         
         self._disc_tree.pack(fill=BOTH, expand=True, pady=(10, 0))
         
-        # === COLUMNA DERECHA: Asignación de Células ===
-        assign_frame = ttk.Labelframe(main_content, text="Atribuição de Células", padding=15)
-        assign_frame.grid(row=1, column=1, sticky="nsew", padx=(5, 0))
+        # === COLUMNA DERECHA: Asignación de Células dividida en 2 vigas ===
+        # Colocamos las vigas como columnas independientes en main_content
+        viga1 = ttk.Labelframe(main_content, text="Viga 1", padding=8, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Viga.TLabelframe')
+        viga1.grid(row=1, column=1, rowspan=1, sticky="nsew", padx=8, pady=8)
+        viga1.columnconfigure(0, weight=1)
+        viga1.rowconfigure(0, weight=1)
+        viga1.rowconfigure(1, weight=1)
 
-        # Matriz 2x2 con tamaño fijo para evitar resize al abrir keypad
-        matrix_frame = ttk.Frame(assign_frame)
-        matrix_frame.pack(fill=BOTH, expand=True)
-        matrix_frame.columnconfigure(0, weight=1, uniform="cells")
-        matrix_frame.columnconfigure(1, weight=1, uniform="cells")
-        matrix_frame.rowconfigure(0, weight=1, uniform="cells")
-        matrix_frame.rowconfigure(1, weight=1, uniform="cells")
+        viga2 = ttk.Labelframe(main_content, text="Viga 2", padding=8, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Viga.TLabelframe')
+        viga2.grid(row=1, column=2, rowspan=1, sticky="nsew", padx=8, pady=8)
+        viga2.columnconfigure(0, weight=1)
+        viga2.rowconfigure(0, weight=1)
+        viga2.rowconfigure(1, weight=1)
         
         positions = [
             (0, 0, 1, "ATRÁS ESQUERDA"),
@@ -2396,12 +2420,19 @@ class BalanzaGUI(ttk.Window):
             key = f"celda_{celda_num}"
             current_node_data = current_config["nodes"].get(key, {"id": 0, "ch": "ch1", "nombre": f"Celda {celda_num}", "serial": ""})
             
-            # Frame de cada celda con borde más visible
-            cell_frame = ttk.Labelframe(matrix_frame, text=f"CÉLULA {celda_num} - {pos_name}", padding=15)
-            cell_frame.grid(row=row, column=col, sticky="nsew", padx=8, pady=8)
-            # Evitar que el frame propague cambios de tamaño
-            cell_frame.grid_propagate(False)
-            cell_frame.pack_propagate(False)
+            # Frame de cada celda con borde más visible, dentro de la viga correspondiente
+            parent_viga = viga1 if col == 0 else viga2
+            cell_frame = ttk.Labelframe(parent_viga, text=f"CÉLULA {celda_num} - {pos_name}", padding=15)
+            cell_frame.grid(row=row, column=0, sticky="nsew", padx=8, pady=8)
+            # Permitir que el frame propague cambios de tamaño para evitar recortes
+            try:
+                cell_frame.grid_propagate(True)
+            except Exception:
+                pass
+            try:
+                cell_frame.pack_propagate(True)
+            except Exception:
+                pass
             
             # Layout interno centrado
             cell_grid = ttk.Frame(cell_frame)
@@ -2509,13 +2540,24 @@ class BalanzaGUI(ttk.Window):
         save_config_ref[0] = save_config
 
         # ==================== BOTONES ABAJO ====================
-        # On small screens (1280x800) place the button bar in the outer border_frame
+        # On small screens (1280x800) pin the button bar to the dialog bottom
         small_screen = (screen_w == 1280 and screen_h == 800)
-        parent_for_buttons = border_frame if small_screen else main_frame
         # Reduce paddings on small screens to keep buttons visible
         bottom_padding = (0, 10) if not small_screen else (0, 8)
-        btn_bottom_frame = ttk.Frame(parent_for_buttons, padding=bottom_padding)
-        btn_bottom_frame.pack(fill=X, side=BOTTOM, pady=(6, 12))
+        btn_parent = dialog if small_screen else main_frame
+        btn_bottom_frame = ttk.Frame(btn_parent, padding=bottom_padding)
+        if small_screen:
+            # Use place to guarantee it's at the very bottom and not occluded
+            try:
+                btn_bottom_frame.place(relx=0, rely=1.0, anchor='sw', relwidth=1.0, height=self.scaled(90))
+            except Exception:
+                btn_bottom_frame.pack(fill=X, side=BOTTOM, pady=(6, 12))
+            try:
+                btn_bottom_frame.lift()
+            except Exception:
+                pass
+        else:
+            btn_bottom_frame.pack(fill=X, side=BOTTOM, pady=(6, 12))
 
         ttk.Separator(btn_bottom_frame, orient="horizontal").pack(fill=X, pady=(0, 12))
 
@@ -2787,37 +2829,103 @@ class BalanzaGUI(ttk.Window):
                 self.style.configure('Calib.Info.TButton', font=btn_font, padding=(self.scaled(10), self.scaled(8)))
                 self.style.configure('Calib.Secondary.TButton', font=btn_font, padding=(self.scaled(10), self.scaled(8)))
                 self.style.configure('Calib.Start.TButton', font=("Segoe UI", self.scaled_font(24), 'bold'), padding=(self.scaled(12), self.scaled(10)))
+                # Main unified style for both primary calibration actions
+                self.style.configure('Calib.Main.TButton', font=("Segoe UI", self.scaled_font(22), 'bold'), padding=(self.scaled(12), self.scaled(10)))
             except Exception:
                 pass
 
-            # Crear los botones y colocarlos en una rejilla para garantizar alineación exacta
-            btn_export = ttk.Button(
-                center_buttons,
-                text=" EXPORTAR CURVAS (CSV) ",
-                bootstyle="info",
-                command=export_curves_csv
-            )
-            btn_export.configure(style='Calib.Info.TButton')
+            # Crear función modal de import/export que muestre SOLO tres botones grandes
+            def show_import_export_choice_calib():
+                dlg = ttk.Toplevel(self)
+                dlg.overrideredirect(True)
+                dlg.transient(self)
 
-            def import_curves_csv():
-                # Reusar el importador principal que solicita un CSV y lo aplica
+                dlg.resizable(False, False)
+                dlg.lift()
+                dlg.attributes('-topmost', True)
+
+                # Use the same bordered dialog structure as show_large_confirmation
+                outer_frame = ttk.Frame(dlg, bootstyle="dark", padding=4)
+                outer_frame.pack(fill=BOTH, expand=YES)
+
+                frame = ttk.Frame(outer_frame, padding=40)
+                frame.pack(fill=BOTH, expand=YES)
+
+                # Row: IMPORTAR | EXPORTAR
+                row_frame = ttk.Frame(frame)
+                row_frame.pack(fill=X)
+                row_frame.columnconfigure(0, weight=1)
+                row_frame.columnconfigure(1, weight=1)
+
+                def do_import():
+                    try:
+                        dlg.destroy()
+                        self.import_calibrations_gui(parent=config_dialog)
+                    except Exception:
+                        pass
+
+                def do_export():
+                    try:
+                        dlg.destroy()
+                        export_curves_csv()
+                    except Exception:
+                        pass
+
+                # Import/Export side by side with a small horizontal gap
+                btn_import = ttk.Button(row_frame, text="IMPORTAR", bootstyle="info", command=do_import)
+                btn_import.grid(row=0, column=0, sticky='ew', padx=(0, 8), ipadx=12, ipady=self.scaled(16))
                 try:
-                    self.import_calibrations_gui(parent=config_dialog)
-                finally:
-                    if config_dialog:
-                        try:
-                            config_dialog.lift()
-                            config_dialog.focus_force()
-                        except Exception:
-                            pass
+                    btn_import.configure(style='Large.info.TButton')
+                except Exception:
+                    pass
 
-            btn_import = ttk.Button(
+                btn_export = ttk.Button(row_frame, text="EXPORTAR", bootstyle="success", command=do_export)
+                btn_export.grid(row=0, column=1, sticky='ew', padx=(8, 0), ipadx=12, ipady=self.scaled(16))
+                try:
+                    btn_export.configure(style='Large.success.TButton')
+                except Exception:
+                    pass
+
+                # Cancel full width below; match spacing of confirmation dialog
+                cancel_frame = ttk.Frame(frame)
+                cancel_frame.pack(fill=X, pady=(16, 0))
+                btn_cancel = ttk.Button(cancel_frame, text="CANCELAR", bootstyle="danger", command=dlg.destroy)
+                try:
+                    btn_cancel.configure(style='Large.danger.TButton')
+                except Exception:
+                    pass
+                btn_cancel.pack(fill=X, ipadx=12, ipady=self.scaled(18))
+
+                # Calculate minimal required size and center the dialog
+                try:
+                    dlg.update_idletasks()
+                    req_w = outer_frame.winfo_reqwidth()
+                    req_h = outer_frame.winfo_reqheight()
+                    margin_x = self.scaled(24)
+                    margin_y = self.scaled(12)
+                    final_w = max(req_w + margin_x, self.scaled(420))
+                    final_h = req_h + margin_y
+                    sx = self.winfo_screenwidth()
+                    sy = self.winfo_screenheight()
+                    x = max(0, (sx - final_w) // 2)
+                    y = max(0, (sy - final_h) // 2)
+                    dlg.geometry(f"{final_w}x{final_h}+{x}+{y}")
+                except Exception:
+                    pass
+
+                try:
+                    dlg.grab_set()
+                except Exception:
+                    pass
+
+            # Single combined button to open the import/export modal (moved to calibration section)
+            btn_imp_exp = ttk.Button(
                 center_buttons,
-                text=" IMPORTAR CURVAS (CSV) ",
+                text=" IMPORTAR / EXPORTAR ",
                 bootstyle="secondary",
-                command=import_curves_csv
+                command=show_import_export_choice_calib
             )
-            btn_import.configure(style='Calib.Secondary.TButton')
+            btn_imp_exp.configure(style='Calib.Main.TButton')
 
             # Configurar grid: INICIAR en la fila 0 (colspan=2), export/import en fila 1
             center_buttons.grid_columnconfigure(0, weight=1)
@@ -2830,18 +2938,15 @@ class BalanzaGUI(ttk.Window):
                 command=start_calibration_action
             )
             # Ensure the warning bootstyle is applied and keep our custom Calib.Start style
-            btn_start.configure(style='Calib.Start.TButton', bootstyle='warning')
+            btn_start.configure(style='Calib.Main.TButton', bootstyle='warning')
 
-            # Colocar START en la fila superior ocupando 2 columnas con separación moderada
-            # Usar un pady más pequeño para ahorrar espacio vertical
-            btn_start.grid(row=0, column=0, columnspan=2, pady=(0, self.scaled(8)), sticky='ew')
+            # Colocar los dos botones en la misma fila, con separación consistene
+            btn_start.grid(row=0, column=0, padx=(0, self.scaled(12)), pady=(0, self.scaled(8)), sticky='ew')
+            btn_imp_exp.grid(row=0, column=1, padx=(self.scaled(12), 0), pady=(0, self.scaled(8)), sticky='ew')
 
-            # Export/Import en la fila inferior, garantizando igual anchura
-            btn_export.grid(row=1, column=0, padx=(0, self.scaled(6)), sticky='ew')
-            btn_import.grid(row=1, column=1, padx=(self.scaled(6), 0), sticky='ew')
-
-            # Empacar el contenedor centrado con separación superior reducida
-            center_buttons.pack(anchor='center', pady=(self.scaled(4), 0))
+            # Empacar el contenedor para ocupar todo el ancho y alinear cada botón
+            # Usar el mismo padding horizontal que las tarjetas de sensor para que coincida visualmente
+            center_buttons.pack(fill=X, pady=(self.scaled(8), 0), padx=15)
 
         # === TEXTO DE AYUDA LIMPIO (Removido a pedido) ===
         # help_text = (...)
