@@ -1425,20 +1425,112 @@ class BalanzaGUI(ttk.Window):
             return
 
         try:
-            # Copiar el archivo seleccionado al directorio de calibraciones
-            import shutil
-            dest = os.path.join(CALIBRATIONS_DIR, 'calibrations.csv')
-            shutil.copy2(path, dest)
-            self.log_message(f"CSV de calibraciones importado a {dest}")
-            messagebox.showinfo("Importación", f"CSV importado a:\n{dest}")
-
-            # Aplicar inmediatamente
+            # Copiar / reemplazar el archivo adecuado según formato detectado.
+            import shutil, csv as _csv
+            # Leer primer bloque para detectar formato ancho (Carga Real) vs largo
+            with open(path, 'r', encoding='utf-8') as f:
+                sample = f.read(4096)
+            is_wide = False
             try:
-                self._apply_saved_calibrations_on_connect()
-                self.log_message("Calibraciones aplicadas desde CSV importado.")
-            except Exception as e:
-                self.log_message(f"Error aplicando calibraciones desde CSV importado: {e}")
-                messagebox.showwarning("Advertencia", f"CSV importado pero no se pudieron aplicar las calibraciones: {e}")
+                first_line = sample.splitlines()[0].strip().lower() if sample else ''
+                if 'carga' in first_line or 'carga real' in first_line:
+                    is_wide = True
+            except Exception:
+                is_wide = False
+
+            applied_report = []
+            if is_wide:
+                # Replace curvas_celdas.csv and apply each column as a calibration
+                dest = os.path.join(CALIBRATIONS_DIR, 'curvas_celdas.csv')
+                shutil.copy2(path, dest)
+                self.log_message(f"CSV de curvas importado a {dest} (formato ancho)")
+
+                # Parse and apply
+                try:
+                    with open(dest, 'r', encoding='utf-8') as f:
+                        reader = _csv.reader(f)
+                        try:
+                            headers = next(reader)
+                        except StopIteration:
+                            headers = []
+                        targets = [h.strip() for h in headers[1:]]
+                        cols = {t: [] for t in targets}
+                        weights = []
+                        for row in reader:
+                            if not row:
+                                continue
+                            try:
+                                w = float(row[0])
+                            except Exception:
+                                continue
+                            weights.append(w)
+                            for idx, t in enumerate(targets):
+                                if idx + 1 >= len(row):
+                                    continue
+                                val = row[idx + 1].strip()
+                                if val == '':
+                                    continue
+                                try:
+                                    r = float(val)
+                                except Exception:
+                                    continue
+                                cols[t].append((w, r))
+
+                    # Apply each non-empty column
+                    if hasattr(self, 'data_processor') and self.data_processor:
+                        for target, pts in cols.items():
+                            if not pts:
+                                continue
+                            serial_r = None
+                            composite_r = None
+                            if ':' in target:
+                                composite_r = target
+                            elif '_' in target:
+                                composite_r = target.replace('_', ':')
+                            else:
+                                serial_r = target
+                            try:
+                                if hasattr(self.data_processor, 'set_calibration_segments'):
+                                    self.data_processor.set_calibration_segments(pts, serial=serial_r, composite=composite_r)
+                                    applied_report.append((target, len(pts)))
+                                    self.log_message(f"Calibración aplicada desde import (curvas) a target={target} puntos={len(pts)}")
+                                else:
+                                    self.data_processor.calibration_segments = pts
+                                    self.data_processor.calibration_method = 'segments'
+                                    applied_report.append((target, len(pts)))
+                            except Exception as e:
+                                self.log_message(f"Fallo aplicando calibración importada para target={target}: {e}")
+                except Exception as e:
+                    self.log_message(f"Error procesando CSV importado (ancho): {e}")
+                    messagebox.showerror("Error", f"CSV importado, pero no se pudo procesar: {e}")
+            else:
+                # Legacy / long format: copy to calibrations.csv and reuse existing loader
+                dest = os.path.join(CALIBRATIONS_DIR, 'calibrations.csv')
+                shutil.copy2(path, dest)
+                self.log_message(f"CSV de calibraciones importado a {dest} (formato largo)")
+                try:
+                    # Reuse existing logic that parses long format and applies
+                    self._apply_saved_calibrations_on_connect()
+                    self.log_message("Calibraciones aplicadas desde CSV importado (largo).")
+                except Exception as e:
+                    self.log_message(f"Error aplicando calibraciones desde CSV importado: {e}")
+                    messagebox.showwarning("Advertencia", f"CSV importado pero no se pudieron aplicar las calibraciones: {e}")
+
+            # Mostrar informe resumido al usuario si hubo aplicaciones
+            try:
+                if applied_report:
+                    lines = [f"{t}: {n} puntos" for (t, n) in applied_report]
+                    msg = "Se aplicaron las siguientes curvas:\n" + "\n".join(lines)
+                    messagebox.showinfo("Importación completa", msg)
+                else:
+                    # Si no aplicó nada y no hubo error, mostrar confirmación de copia
+                    if not is_wide:
+                        messagebox.showinfo("Importación", f"CSV importado a:\n{dest}")
+                    else:
+                        if not applied_report:
+                            messagebox.showinfo("Importación", f"CSV importado a:\n{dest}\nPero no se aplicaron curvas (archivo vacío o valores inválidos).")
+            except Exception:
+                pass
         except Exception as e:
             self.log_message(f"Fallo importando CSV: {e}")
             messagebox.showerror("Error", f"Fallo importando CSV: {e}")
@@ -3116,10 +3208,10 @@ class BalanzaGUI(ttk.Window):
         self._cal_manager.load_points()
         # Mostrar si existe el archivo de calibración
         try:
-            path = self._cal_manager._get_calib_path()
+            path = self._cal_manager._get_csv_path()
             if path and os.path.exists(path):
-                pass  # ...existing code...
-        except Exception as e:
+                pass
+        except Exception:
             pass
 
         # Debug: imprimir puntos cargados
@@ -3625,6 +3717,12 @@ class BalanzaGUI(ttk.Window):
                         else: 
                             self._cal_manager.points[idx].reading = val
                         self._update_cal_wizard_graph()
+                        try:
+                            # Persist change immediately
+                            if hasattr(self._cal_manager, 'save_points'):
+                                self._cal_manager.save_points()
+                        except Exception:
+                            pass
                 except: 
                     pass
 

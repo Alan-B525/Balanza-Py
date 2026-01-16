@@ -15,6 +15,7 @@ import os
 from dataclasses import dataclass, field, asdict
 from typing import Optional, Tuple, List, Dict, Any
 from datetime import datetime
+import csv
 
 try:
     import numpy as np
@@ -62,79 +63,166 @@ class CalibrationManager:
             self.load_points()
         else:
             self._log_to_file("Advertencia: serial no definido o vacío, no se cargará archivo de calibración.")
-    def _get_calib_path(self):
-        if self.serial and str(self.serial).strip():
-            return os.path.join(self._calib_dir, f"{self.serial}.json")
-        return None
+    def _get_csv_path(self):
+        return os.path.join(self._calib_dir, "curvas_celdas.csv")
 
     def save_points(self):
-        path = self._get_calib_path()
-        if not path:
-            return
-        data = [{"weight": p.weight, "reading": p.reading, "timestamp": p.timestamp} for p in self.points]
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-
-    def load_points(self):
-        path = self._get_calib_path()
-        self._log_to_file(f"Intentando cargar puntos de calibración desde: {path}")
-        if not path or not os.path.exists(path):
-            self._log_to_file(f"Archivo de calibración no existe: {path}")
-            return
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            loaded = []
-            if isinstance(data, list):
-                for item in data:
-                    if not isinstance(item, dict):
-                        continue
-                    w = item.get('weight')
-                    r = item.get('reading')
-                    ts = item.get('timestamp', time.time())
-                    if w is None or r is None:
-                        continue
-                    try:
-                        cp = CalibrationPoint(float(w), float(r), float(ts))
-                        loaded.append(cp)
-                    except Exception:
-                        continue
-            else:
-                self._log_to_file(f"Formato inesperado en archivo de calibración: {type(data)}")
-            self.points = loaded
-            self._log_to_file(f"Cargados {len(self.points)} puntos de calibración desde: {path}")
-            # Si cargamos puntos desde disco, aplicarlos automáticamente
+        # Save into unified CSV. If CSV exists, merge columns; else create new CSV.
+        # Determine key to use for CSV column: prefer serial, else try dp.nodos_config, else use normalized celda_id
+        serial_key = None
+        if self.serial and str(self.serial).strip():
+            serial_key = str(self.serial).strip()
+        else:
+            # try resolve from dp.nodos_config if available
             try:
-                if self.points and hasattr(self.dp, 'set_calibration_segments'):
-                    pts = self.get_points()  # lista de (weight, reading)
-                    # Intentar asociar composite como en apply_calibration
-                    composite = None
-                    try:
-                        if self.celda_id is not None:
-                            internal = self.celda_id
-                            if isinstance(internal, (int, float)):
-                                internal = f"celda_{int(internal)}"
-                            elif isinstance(internal, str) and not internal.startswith("celda_"):
-                                internal = f"celda_{internal}"
-                            if hasattr(self.dp, 'nodos_config') and internal in self.dp.nodos_config:
-                                cfg = self.dp.nodos_config.get(internal, {})
-                                nid = cfg.get('id')
-                                ch = cfg.get('ch', 'ch1')
-                                if nid:
-                                    composite = f"{nid}:{ch}"
-                    except Exception:
-                        composite = None
-
-                    try:
-                        self.dp.set_calibration_segments(pts, serial=self.serial, composite=composite)
-                        self._log_to_file(f"Auto-aplicada calibración desde {path} a serial={self.serial} composite={composite}")
-                    except Exception as e:
-                        self._log_to_file(f"Fallo auto-aplicando calibración: {e}")
+                if self.celda_id is not None and hasattr(self.dp, 'nodos_config'):
+                    internal = self.celda_id
+                    if isinstance(internal, (int, float)):
+                        internal = f"celda_{int(internal)}"
+                    elif isinstance(internal, str) and not internal.startswith("celda_"):
+                        internal = f"celda_{internal}"
+                    cfg = self.dp.nodos_config.get(internal, {})
+                    serial_candidate = cfg.get('serial') if isinstance(cfg, dict) else None
+                    if serial_candidate:
+                        serial_key = str(serial_candidate)
             except Exception:
                 pass
+
+        if not serial_key:
+            # fallback to using celda_id as column header so we can save even when disconnected
+            if self.celda_id is not None:
+                internal = self.celda_id
+                if isinstance(internal, (int, float)):
+                    serial_key = f"celda_{int(internal)}"
+                else:
+                    serial_key = str(internal)
+            else:
+                serial_key = "unknown"
+            self._log_to_file(f"Advertencia: serial no disponible, usando clave alternativa '{serial_key}' para guardar calibración")
+
+        csv_path = self._get_csv_path()
+        # Build mapping weight->reading for current points
+        current_map = {float(p.weight): float(p.reading) for p in self.points}
+
+        # Read existing CSV (if any)
+        if os.path.exists(csv_path):
+            weights, serials_map = self._read_csv(csv_path)
+        else:
+            weights, serials_map = [], {}
+
+        # Merge weights: union of existing and current
+        new_weights = sorted(set(weights) | set(current_map.keys()))
+
+        # Ensure serials_map has entries for the target key
+        if serial_key not in serials_map:
+            serials_map[serial_key] = {}
+
+        # Update the readings for this serial
+        for w in new_weights:
+            if w in current_map:
+                serials_map[serial_key][w] = current_map[w]
+            else:
+                # Explicitly clear value for this serial when point missing (delete case)
+                serials_map[serial_key][w] = None
+
+        # Prune weights that have no readings across any serials
+        final_weights = []
+        for w in new_weights:
+            any_val = False
+            for s in serials_map:
+                if serials_map[s].get(w) is not None:
+                    any_val = True
+                    break
+            if any_val:
+                final_weights.append(w)
+        new_weights = final_weights
+
+        # Write back CSV
+        self._write_csv(csv_path, new_weights, serials_map)
+        self._log_to_file(f"Guardada calibración en CSV: {csv_path} para clave={serial_key}")
+
+    def load_points(self):
+        csv_path = self._get_csv_path()
+        loaded: List[CalibrationPoint] = []
+
+        # Try CSV first
+        try:
+            if os.path.exists(csv_path):
+                weights, serials_map = self._read_csv(csv_path)
+                # Try several keys: explicit serial, normalized celda id
+                candidates = []
+                if self.serial and str(self.serial).strip():
+                    candidates.append(str(self.serial).strip())
+                if self.celda_id is not None:
+                    internal = self.celda_id
+                    if isinstance(internal, (int, float)):
+                        candidates.append(f"celda_{int(internal)}")
+                    else:
+                        candidates.append(str(internal))
+
+                found = False
+                for key in candidates:
+                    if key in serials_map:
+                        serial_map = serials_map.get(key, {})
+                        tmp_loaded: List[CalibrationPoint] = []
+                        for w in weights:
+                            r = serial_map.get(w)
+                            if r is None:
+                                continue
+                            tmp_loaded.append(CalibrationPoint(float(w), float(r), time.time()))
+                        # Only accept this key if we actually found points for it
+                        if tmp_loaded:
+                            self.points = tmp_loaded
+                            self._log_to_file(f"Cargados {len(self.points)} puntos de calibración desde CSV: {csv_path} (clave={key})")
+                            found = True
+                            break
+                csv_loaded = found
+            else:
+                csv_loaded = False
         except Exception as e:
-            self._log_to_file(f"Error al cargar puntos: {e}")
+            self._log_to_file(f"Error leyendo CSV de calibración: {e}")
+            csv_loaded = False
+
+        # If CSV not loaded, nothing to load (we no longer use per-serial JSON files)
+        if not csv_loaded:
+            self._log_to_file(f"No se encontró CSV de calibración ({csv_path}) o serial no definido; no se cargaron puntos.")
             self.points = []
+
+        # Si cargamos puntos, guardar en CSV (migración) y luego auto-aplicar
+        try:
+            if self.points:
+                try:
+                    # Persistir puntos cargados (migración JSON->CSV o asegurar existencia en CSV)
+                    self.save_points()
+                except Exception as e:
+                    self._log_to_file(f"Fallo guardando puntos después de cargar: {e}")
+
+            if self.points and hasattr(self.dp, 'set_calibration_segments'):
+                pts = self.get_points()  # lista de (weight, reading)
+                composite = None
+                try:
+                    if self.celda_id is not None:
+                        internal = self.celda_id
+                        if isinstance(internal, (int, float)):
+                            internal = f"celda_{int(internal)}"
+                        elif isinstance(internal, str) and not internal.startswith("celda_"):
+                            internal = f"celda_{internal}"
+                        if hasattr(self.dp, 'nodos_config') and internal in self.dp.nodos_config:
+                            cfg = self.dp.nodos_config.get(internal, {})
+                            nid = cfg.get('id')
+                            ch = cfg.get('ch', 'ch1')
+                            if nid:
+                                composite = f"{nid}:{ch}"
+                except Exception:
+                    composite = None
+
+                try:
+                    self.dp.set_calibration_segments(pts, serial=self.serial, composite=composite)
+                    self._log_to_file(f"Auto-aplicada calibración a serial={self.serial} composite={composite}")
+                except Exception as e:
+                    self._log_to_file(f"Fallo auto-aplicando calibración: {e}")
+        except Exception:
+            pass
     def _log_to_file(self, message):
         try:
             from . import logger
@@ -149,15 +237,78 @@ class CalibrationManager:
             except Exception:
                 pass
 
+    # -----------------------
+    # CSV helpers
+    # -----------------------
+    def _read_csv(self, path: str) -> Tuple[List[float], Dict[str, Dict[float, float]]]:
+        """Lee `curvas_celdas.csv` y retorna (weights_list, {serial: {weight: reading}}).
+        Las celdas vacías se convierten en None.
+        """
+        weights: List[float] = []
+        serials_map: Dict[str, Dict[float, float]] = {}
+        with open(path, "r", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+        if not rows:
+            return weights, serials_map
+        header = rows[0]
+        # header[0] expected to be 'Carga Real'
+        serials = [h.strip() for h in header[1:]]
+        for s in serials:
+            serials_map[s] = {}
+        for row in rows[1:]:
+            if not row:
+                continue
+            try:
+                w = float(row[0])
+            except Exception:
+                continue
+            weights.append(w)
+            for idx, s in enumerate(serials, start=1):
+                val = None
+                if idx < len(row):
+                    cell = row[idx].strip()
+                    if cell != "":
+                        try:
+                            val = float(cell)
+                        except Exception:
+                            val = None
+                serials_map[s][w] = val
+        return weights, serials_map
+
+    def _write_csv(self, path: str, weights: List[float], serials_map: Dict[str, Dict[float, Any]]):
+        # serials order stable
+        serials = sorted(serials_map.keys(), key=lambda x: str(x))
+        with open(path, "w", encoding="utf-8", newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["Carga Real"] + serials)
+            for w in weights:
+                row = [("%.6g" % w)]
+                for s in serials:
+                    val = serials_map.get(s, {}).get(w)
+                    if val is None:
+                        row.append("")
+                    else:
+                        row.append(str(val))
+                writer.writerow(row)
+
     def clear_points(self):
         self.points = []
 
     def add_point(self, weight: float, reading: float):
         self.points.append(CalibrationPoint(weight, reading, time.time()))
+        try:
+            self.save_points()
+        except Exception:
+            pass
 
     def remove_point(self, index: int):
         if 0 <= index < len(self.points):
             self.points.pop(index)
+            try:
+                self.save_points()
+            except Exception:
+                pass
 
     def get_points(self) -> List[Tuple[float, float]]:
         return [(p.weight, p.reading) for p in self.points]
@@ -234,8 +385,22 @@ class CalibrationManager:
         if not model.get("valid"):
             return
 
-        # Guardar puntos al aplicar calibración
-        self.save_points()
+        # Si el modelo contiene 'points', actualizamos self.points y guardamos.
+        points = model.get("points", [])
+        if points:
+            try:
+                # Esperamos lista de tuplas (weight, reading)
+                self.points = [CalibrationPoint(float(w), float(r), time.time()) for (w, r) in points]
+            except Exception:
+                # Intentar invertir si vienen como (reading, weight)
+                try:
+                    self.points = [CalibrationPoint(float(r), float(w), time.time()) for (w, r) in points]
+                except Exception:
+                    pass
+            try:
+                self.save_points()
+            except Exception as e:
+                self._log_to_file(f"Error guardando puntos al aplicar calibración: {e}")
 
         method = "segments"
 
