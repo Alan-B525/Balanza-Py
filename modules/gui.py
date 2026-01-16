@@ -476,9 +476,21 @@ class BalanzaGUI(ttk.Window):
             pass
         
         # Columnas con tamao escalado según resolución
-        grid_area.columnconfigure(0, weight=1, minsize=self.scaled(250))
-        grid_area.columnconfigure(1, weight=2, minsize=self.scaled(350))  # Centro ms ancho para el TOTAL
-        grid_area.columnconfigure(2, weight=1, minsize=self.scaled(250))
+        try:
+            is_tablet = getattr(self, 'scale', 1.0) <= 1.0
+            if is_tablet:
+                # En tablets dar más espacio al panel TOTAL (columna central)
+                grid_area.columnconfigure(0, weight=1, minsize=self.scaled(220))
+                grid_area.columnconfigure(1, weight=3, minsize=self.scaled(520))  # TOTAL más ancho en tablets
+                grid_area.columnconfigure(2, weight=1, minsize=self.scaled(220))
+            else:
+                grid_area.columnconfigure(0, weight=1, minsize=self.scaled(250))
+                grid_area.columnconfigure(1, weight=2, minsize=self.scaled(350))  # Centro ms ancho para el TOTAL
+                grid_area.columnconfigure(2, weight=1, minsize=self.scaled(250))
+        except Exception:
+            grid_area.columnconfigure(0, weight=1, minsize=self.scaled(250))
+            grid_area.columnconfigure(1, weight=2, minsize=self.scaled(350))
+            grid_area.columnconfigure(2, weight=1, minsize=self.scaled(250))
         # Reducir más el minsize de filas de sensores para dejar espacio al footer
         # Ajustar más conservadoramente para pantallas pequeñas
         grid_area.rowconfigure(0, weight=1, minsize=self.scaled(100))
@@ -513,6 +525,16 @@ class BalanzaGUI(ttk.Window):
             # Header con título y estado
             header = ttk.Frame(card, style='CardNoBorder.TFrame')
             header.pack(fill=X, pady=(0, 8))
+
+            # Mostrar título de la tarjeta (p. ej. "CÉLULA 1")
+            try:
+                title_lbl = ttk.Label(header, text=title, style='CardTitle.TLabel')
+                title_lbl.pack(side=LEFT, anchor='w')
+            except Exception:
+                try:
+                    ttk.Label(header, text=title).pack(side=LEFT, anchor='w')
+                except Exception:
+                    pass
 
             # Indicador de estado (más visible)
             status_frame = ttk.Frame(header, style='CardNoBorder.TFrame')
@@ -599,12 +621,21 @@ class BalanzaGUI(ttk.Window):
         control_panel.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=self.scaled(6), pady=self.scaled(6))
         # Forzar tamaño fijo del panel central (TOTAL) para que no cambie con los textos
         try:
-            panel_w = self.scaled(420)
-            panel_h = self.scaled(420)
+            is_tablet = locals().get('is_tablet', getattr(self, 'scale', 1.0) <= 1.0)
+            if is_tablet:
+                panel_w = self.scaled(520)
+                panel_h = self.scaled(420)
+            else:
+                panel_w = self.scaled(420)
+                panel_h = self.scaled(420)
             control_panel.configure(width=panel_w, height=panel_h)
         except Exception:
-            panel_w = self.scaled(420)
-            panel_h = self.scaled(420)
+            if locals().get('is_tablet', False):
+                panel_w = self.scaled(520)
+                panel_h = self.scaled(420)
+            else:
+                panel_w = self.scaled(420)
+                panel_h = self.scaled(420)
         try:
             control_panel.grid_propagate(False)
         except Exception:
@@ -1177,29 +1208,22 @@ class BalanzaGUI(ttk.Window):
         if not hasattr(self, 'data_processor') or not self.data_processor:
             return
 
-        # First: support a single CSV file containing all calibrations (backwards-compatible)
-        csv_path = os.path.join(CALIBRATIONS_DIR, 'calibrations.csv')
+        # First: support single-file CSVs. Prefer `curvas_celdas.csv` (wide unified format)
         try:
-            if os.path.exists(csv_path):
-                import csv as _csv
-                applied = set()
-                with open(csv_path, 'r', encoding='utf-8') as f:
-                    # Try to detect wide format (Carga,serial1,serial2,...) vs legacy long format
-                    sample = f.read(2048)
-                    f.seek(0)
-                    # If the header line contains 'Carga' or 'Carga Real' treat as wide format
-                    first_line = f.readline()
-                    f.seek(0)
-                    hdr_lower = first_line.strip().lower()
-                    rows_by_target = {}
-                    if hdr_lower.startswith('carga') or 'carga' in hdr_lower or 'carga real' in hdr_lower:
-                        # Wide format: first column is weight, remaining columns are targets (serials or composite names)
+            import csv as _csv
+            applied = set()
+            # Prefer unified curvas_celdas.csv
+            unified_path = os.path.join(CALIBRATIONS_DIR, 'curvas_celdas.csv')
+            if os.path.exists(unified_path):
+                try:
+                    with open(unified_path, 'r', encoding='utf-8') as f:
                         reader = _csv.reader(f)
                         try:
                             headers = next(reader)
                         except StopIteration:
                             headers = []
                         targets = [h.strip() for h in headers[1:]]
+                        cols = {t: [] for t in targets}
                         for row in reader:
                             if not row:
                                 continue
@@ -1207,7 +1231,7 @@ class BalanzaGUI(ttk.Window):
                                 w = float(row[0])
                             except Exception:
                                 continue
-                            for idx, target in enumerate(targets):
+                            for idx, t in enumerate(targets):
                                 if idx + 1 >= len(row):
                                     continue
                                 val = row[idx + 1].strip()
@@ -1216,52 +1240,127 @@ class BalanzaGUI(ttk.Window):
                                 try:
                                     r = float(val)
                                 except Exception:
-                                    # skip non-numeric
                                     continue
-                                # Infer serial/composite
-                                serial_r = None
-                                composite_r = None
-                                if ':' in target:
-                                    composite_r = target
-                                elif '_' in target:
-                                    composite_r = target.replace('_', ':')
-                                else:
-                                    serial_r = target
+                                cols[t].append((w, r))
+
+                    # Apply each non-empty column
+                    if hasattr(self.data_processor, 'set_calibration_segments'):
+                        for target, pts in cols.items():
+                            if not pts:
+                                continue
+                            serial_r = None
+                            composite_r = None
+                            if ':' in target:
+                                composite_r = target
+                            elif '_' in target:
+                                composite_r = target.replace('_', ':')
+                            else:
+                                serial_r = target
+                            try:
+                                self.data_processor.set_calibration_segments(pts, serial=serial_r, composite=composite_r)
+                                self.log_message(f"Calibración aplicada desde {os.path.basename(unified_path)} a target={target} puntos={len(pts)}")
+                                applied.add((serial_r, composite_r))
+                            except Exception as e:
+                                self.log_message(f"Fallo aplicando calibración unificada para target={target}: {e}")
+                    else:
+                        # fallback: set attributes
+                        for target, pts in cols.items():
+                            if not pts:
+                                continue
+                            try:
+                                self.data_processor.calibration_segments = pts
+                                self.data_processor.calibration_method = 'segments'
+                                applied.add((None, None))
+                            except Exception as e:
+                                self.log_message(f"Fallo aplicando calibración unificada (fallback) para target={target}: {e}")
+
+                    if applied:
+                        return
+                except Exception as e:
+                    self.log_message(f"Error leyendo {unified_path}: {e}")
+
+            # Fallback: legacy calibrations.csv (may be wide or long format)
+            csv_path = os.path.join(CALIBRATIONS_DIR, 'calibrations.csv')
+            if os.path.exists(csv_path):
+                try:
+                    with open(csv_path, 'r', encoding='utf-8') as f:
+                        sample = f.read(2048)
+                        f.seek(0)
+                        first_line = f.readline()
+                        f.seek(0)
+                        hdr_lower = first_line.strip().lower()
+                        rows_by_target = {}
+                        if hdr_lower.startswith('carga') or 'carga' in hdr_lower or 'carga real' in hdr_lower:
+                            # wide format
+                            reader = _csv.reader(f)
+                            try:
+                                headers = next(reader)
+                            except StopIteration:
+                                headers = []
+                            targets = [h.strip() for h in headers[1:]]
+                            for row in reader:
+                                if not row:
+                                    continue
+                                try:
+                                    w = float(row[0])
+                                except Exception:
+                                    continue
+                                for idx, target in enumerate(targets):
+                                    if idx + 1 >= len(row):
+                                        continue
+                                    val = row[idx + 1].strip()
+                                    if val == '':
+                                        continue
+                                    try:
+                                        r = float(val)
+                                    except Exception:
+                                        continue
+                                    serial_r = None
+                                    composite_r = None
+                                    if ':' in target:
+                                        composite_r = target
+                                    elif '_' in target:
+                                        composite_r = target.replace('_', ':')
+                                    else:
+                                        serial_r = target
+                                    key = (serial_r, composite_r)
+                                    rows_by_target.setdefault(key, []).append((w, r))
+                        else:
+                            # long format
+                            f.seek(0)
+                            reader = _csv.DictReader(f)
+                            for row in reader:
+                                serial_r = (row.get('serial') or '').strip() or None
+                                composite_r = (row.get('composite') or '').strip() or None
+                                try:
+                                    w = float(row.get('weight', '0'))
+                                    r = float(row.get('reading', '0'))
+                                except Exception:
+                                    continue
                                 key = (serial_r, composite_r)
                                 rows_by_target.setdefault(key, []).append((w, r))
-                    else:
-                        # Legacy long format (serial,composite,weight,reading,...)
-                        f.seek(0)
-                        reader = _csv.DictReader(f)
-                        for row in reader:
-                            serial_r = (row.get('serial') or '').strip() or None
-                            composite_r = (row.get('composite') or '').strip() or None
-                            try:
-                                w = float(row.get('weight', '0'))
-                                r = float(row.get('reading', '0'))
-                            except Exception:
-                                continue
-                            key = (serial_r, composite_r)
-                            rows_by_target.setdefault(key, []).append((w, r))
 
-                # Apply each group
-                for (serial_k, composite_k), pts in rows_by_target.items():
-                    try:
-                        if hasattr(self.data_processor, 'set_calibration_segments'):
-                            self.data_processor.set_calibration_segments(pts, serial=serial_k, composite=composite_k)
-                            self.log_message(f"Calibración aplicada desde {os.path.basename(csv_path)} a serial={serial_k} composite={composite_k}")
-                        else:
-                            # fallback
-                            self.data_processor.calibration_segments = pts
-                            self.data_processor.calibration_method = 'segments'
-                            self.log_message(f"Calibración (fallback) cargada desde CSV para serial={serial_k} composite={composite_k}")
-                        applied.add((serial_k, composite_k))
-                    except Exception as e:
-                        self.log_message(f"Fallo aplicando calibración CSV para serial={serial_k} composite={composite_k}: {e}")
+                    # Apply groups
+                    for (serial_k, composite_k), pts in rows_by_target.items():
+                        try:
+                            if hasattr(self.data_processor, 'set_calibration_segments'):
+                                self.data_processor.set_calibration_segments(pts, serial=serial_k, composite=composite_k)
+                                self.log_message(f"Calibración aplicada desde {os.path.basename(csv_path)} a serial={serial_k} composite={composite_k}")
+                            else:
+                                self.data_processor.calibration_segments = pts
+                                self.data_processor.calibration_method = 'segments'
+                                self.log_message(f"Calibración (fallback) cargada desde CSV para serial={serial_k} composite={composite_k}")
+                            applied.add((serial_k, composite_k))
+                        except Exception as e:
+                            self.log_message(f"Fallo aplicando calibración CSV para serial={serial_k} composite={composite_k}: {e}")
 
-                if applied:
-                    # If we applied from CSV, skip per-serial JSON fallback
-                    return
+                    if applied:
+                        return
+                except Exception:
+                    pass
+        except Exception:
+            # If any unexpected error occurs, continue to JSON fallback below
+            pass
         except Exception:
             # If CSV parsing fails, continue to JSON fallback below
             pass
@@ -2514,7 +2613,8 @@ class BalanzaGUI(ttk.Window):
             
             # Frame de cada celda con borde más visible, dentro de la viga correspondiente
             parent_viga = viga1 if col == 0 else viga2
-            cell_frame = ttk.Labelframe(parent_viga, text=f"CÉLULA {celda_num} - {pos_name}", padding=15)
+            # Mostrar sólo la etiqueta simple CÉLULA N (no mostrar posición frente/atrás/izq/der)
+            cell_frame = ttk.Labelframe(parent_viga, text=f"CÉLULA {celda_num}", padding=15)
             cell_frame.grid(row=row, column=0, sticky="nsew", padx=8, pady=8)
             # Permitir que el frame propague cambios de tamaño para evitar recortes
             try:
