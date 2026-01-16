@@ -85,6 +85,8 @@ class DataProcessor:
         self._ema_values: Dict[str, Optional[float]] = {}
         self._tares: Dict[str, float] = {}
         self._last_raw_readings: Dict[str, float] = {}
+        # Último valor procesado (estable) por composite (sample & hold)
+        self._last_stable_values: Dict[str, float] = {}
         self._last_seen: Dict[str, float] = {}
         self._node_connected_state: Dict[str, bool] = {}
         self._last_total_seen: float = 0.0
@@ -106,6 +108,7 @@ class DataProcessor:
             self._median_buffers[composite] = deque(maxlen=self.median_window)
             self._ema_values[composite] = None
             self._tares[composite] = 0.0
+            self._last_stable_values[composite] = 0.0
             self._last_seen[composite] = 0.0
             self._node_connected_state[composite] = False
             # Guardar serial si existe en la configuración para mapping de calibración
@@ -182,6 +185,7 @@ class DataProcessor:
             channel = cfg.get("ch", "ch1")
             composite = f"{node_id}:{channel}"
             is_connected = self._check_connection(composite, current_time, resultado)
+            # Si el paquete actual contiene dato para este composite, lo usamos
             valor_crudo = 0.0
             if composite in datos_por_nodo:
                 original_val = datos_por_nodo[composite]
@@ -219,9 +223,17 @@ class DataProcessor:
                 # por lo que no realizamos conversión a kg aquí — todo el procesamiento
                 # usa la misma unidad de entrada para mantener consistencia.
                 valor_crudo = raw_f * mult
-            # NO aplicar filtros si USE_FILTERS es False
-            # Usamos la clave compuesta para buffers/EMA/memoria
+            else:
+                # Si no llegaron datos en este ciclo, usamos el último valor estable
+                # (Sample & Hold) para evitar resetear a 0 y provocar parpadeos.
+                valor_crudo = self._last_raw_readings.get(composite, 0.0)
+
+            # Aplicar filtros (si están activados) sobre el valor actual o retenido
             valor_filtrado = self._filter_value(composite, valor_crudo)
+
+            # Actualizar la memoria estable (hold) solo si hubo dato nuevo
+            if composite in datos_por_nodo:
+                self._last_stable_values[composite] = valor_filtrado
             # Aplicar calibración por sensor (segments) si existe
             calibrated_value = None
             try:
@@ -349,21 +361,22 @@ class DataProcessor:
         if not raw_data:
             return result
 
-        # Tomamos SOLO el último frame válido
-        last_frame = raw_data[-1]
-
-        if not isinstance(last_frame, dict):
-            return result
-
-        values = last_frame.get("values", {})
-        if not isinstance(values, dict):
-            return result
-
-        for key, val in values.items():
-            try:
-                result[str(key)] = float(val)
-            except Exception:
+        # Procesar TODOS los frames recibidos en el lote y combinar valores.
+        # Si hay varios frames con la misma clave, el último valor prevalece.
+        for frame in raw_data:
+            if not isinstance(frame, dict):
                 continue
+            values = frame.get("values", {})
+            if not isinstance(values, dict):
+                continue
+            for key, val in values.items():
+                try:
+                    result[str(key)] = float(val)
+                except Exception:
+                    try:
+                        result[str(key)] = float(str(val))
+                    except Exception:
+                        continue
 
         return result
 
@@ -410,29 +423,27 @@ class DataProcessor:
         self.system_offset = offset
 
     def set_tara(self) -> float:
-        """Establece tara global usando el peso actual."""
-        # Necesitamos el ultimo peso bruto calculado. 
-        # Como procesar() es stateless respecto al peso bruto anterior,
-        # Recalculamos rapido con los ultimos EMAs
-        # La tara debe calcularse siempre a partir de los ÚLTIMOS DATOS CRUDOS
-        # para evitar aplicar tara sobre un valor que ya está tarado.
-        # Usamos _last_total_raw (suma filtrada/raw por nodo) cuando esté disponible.
-        sum_raw = getattr(self, '_last_total_raw', 0.0) or 0.0
+        """Establece la tara global para que el total visible pase a 0.
 
-        if sum_raw > 0.0:
-            peso_bruto_actual = (sum_raw * self.system_slope) + self.system_offset
+        Usamos `self._last_total_weight` (el total mostrado por `procesar()`),
+        sumado a la tara actual, para reconstruir el peso bruto actual y
+        asignarlo como nueva tara. Esto asegura que la tara tomada coincida
+        con lo que el usuario ve en pantalla, incluso si hay calibraciones
+        por sensor.
+        """
+        try:
+            tara_actual = self._tares.get("global", 0.0)
+            # peso_bruto_actual = peso_neto_visible + tara_actual
+            peso_bruto_actual = float(self._last_total_weight or 0.0) + float(tara_actual)
             self._tares["global"] = peso_bruto_actual
+            # opcional: guardar estado de taras
+            try:
+                self._save_tara_state()
+            except Exception:
+                pass
             return peso_bruto_actual
-
-        # Fallback: si no hay _last_total_raw, intentar reconstruir desde EMAs
-        sum_raw_fallback = 0.0
-        for v in self._ema_values.values():
-            if v is not None:
-                sum_raw_fallback += v
-
-        peso_bruto_actual = (sum_raw_fallback * self.system_slope) + self.system_offset
-        self._tares["global"] = peso_bruto_actual
-        return peso_bruto_actual
+        except Exception:
+            return 0.0
 
     def reset_tara(self) -> None:
         self._tares["global"] = 0.0
