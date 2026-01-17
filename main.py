@@ -322,7 +322,7 @@ def main():
         import datetime, os
         try:
             from modules import logger
-            logger.info('Estado de tara cargado de app_state.json')
+            logger.info('Estado de tara cargado de settings.json')
         except Exception:
             pass
     try:

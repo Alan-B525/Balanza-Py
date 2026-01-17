@@ -117,35 +117,102 @@ class MSCLDriver(ISistemaPesaje):
     # CONEXIÓN
     # =========================================================================
 
-    def conectar(self, puerto: str) -> bool:
-        with self._lock:
-            if self._state in (ConnectionState.CONNECTED, ConnectionState.SAMPLING):
-                return True
-
-            self._state = ConnectionState.CONNECTING
-            self._log(f"Abriendo puerto serie: {puerto}")
-
+    def conectar(self, puerto: str, lista_nodos: List[int]):
+        """
+        Conecta a la BaseStation, configura los nodos y arranca la red sincronizada.
+        """
+        try:
+            self.logger.info(f"Iniciando conexión en puerto {puerto}...")
+            
+            # 1. Conexión Serial
+            self.connection = mscl.Connection.Serial(puerto)
+            self.base_station = mscl.BaseStation(self.connection)
+            
+            # 2. Limpieza inicial: Asegurar estado limpio
+            self.logger.info("Desactivando Beacon previo para configuración...")
             try:
-                self._connection = mscl.Connection.Serial(puerto, self.BAUD_RATE)
-                self._base_station = mscl.BaseStation(self._connection)
+                self.base_station.disableBeacon()
+            except mscl.Error as e:
+                self.logger.warning(f"No se pudo desactivar beacon (puede que ya esté apagado): {e}")
 
-                try:
-                    self._base_station.enableBeacon()
-                    self._log("Beacon solicitado (modo escucha pasiva).")
-                except Exception as e:
-                    self._log(f"Beacon no confirmado: {e}")
-
-                self._stats['start_time'] = time.time()
-                self._state = ConnectionState.SAMPLING
-                self._log("✓ Sistema escuchando datos MSCL.")
-
-                return True
-
-            except Exception as e:
-                self._log(f"ERROR DE CONEXIÓN: {e}")
-                self._force_reset_connection()
+            # 3. Crear la Red de Muestreo Sincronizado
+            self.network = mscl.SyncSamplingNetwork(self.base_station)
+            
+            # 4. Procesar y Añadir cada nodo
+            nodos_exitosos = 0
+            for node_address in lista_nodos:
+                if self._preparar_y_agregar_nodo(node_address):
+                    nodos_exitosos += 1
+            
+            if nodos_exitosos == 0:
+                self.logger.error("No se pudo inicializar ningún nodo. Abortando conexión.")
+                self.desconectar()
                 return False
 
+            # 5. Iniciar el Muestreo Sincronizado (El 'Disparo')
+            self.logger.info("Iniciando muestreo sincronizado de la red (Start Sampling)...")
+            try:
+                self.network.startSampling()
+                self.logger.info("¡Red iniciada correctamente! Beacon activo.")
+            except mscl.Error as e:
+                self.logger.error(f"Error crítico al iniciar muestreo de red: {e}")
+                # Aquí podrías decidir si reintentar o fallar
+                return False
+
+            # 6. Actualizar estado y lanzar hilo de lectura
+            self._state = ConnectionState.SAMPLING
+            self._stop_event.clear()
+            self._thread = threading.Thread(target=self._loop_adquisicion)
+            self._thread.start()
+            
+            return True
+
+        except Exception as e:
+            self.logger.critical(f"Error fatal en proceso de conexión: {e}")
+            self.desconectar()
+            return False
+
+    def _preparar_y_agregar_nodo(self, node_address: int) -> bool:
+        """
+        Contacta, resetea a Idle, configura y añade un nodo a la red.
+        """
+        try:
+            self.logger.info(f"[{node_address}] Conectando nodo...")
+            node = mscl.WirelessNode(node_address, self.base_station)
+            
+            # A. Ping para verificar presencia
+            response = node.ping()
+            if not response.success():
+                self.logger.error(f"[{node_address}] No responde al Ping. ¿Está encendido?")
+                return False
+                
+            # B. Forzar IDLE (Crítico para poder configurar y añadir a red)
+            self.logger.debug(f"[{node_address}] Forzando modo IDLE...")
+            node.setToIdle()
+            
+            # C. Configuración (Ejemplo: Hardcodear configuración ideal)
+            # Esto asegura que el nodo siempre tenga la config correcta, venga de donde venga.
+            # Puedes sacar estos valores de un archivo de configuración si prefieres.
+            config = mscl.WirelessNodeConfig(node)
+            
+            # Ejemplo: Configurar a 32 Hz
+            if config.sampleRate() != mscl.SampleRate.Hertz(32):
+                self.logger.info(f"[{node_address}] Configurando Sample Rate a 32Hz...")
+                config.sampleRate(mscl.SampleRate.Hertz(32))
+                config.apply()
+            
+            # D. Añadir a la red de software
+            self.logger.info(f"[{node_address}] Añadiendo a la red sincronizada...")
+            self.network.addNode(node)
+            
+            return True
+            
+        except mscl.Error as e:
+            self.logger.error(f"[{node_address}] Error MSCL al preparar nodo: {e}")
+            return False
+        except Exception as e:
+            self.logger.error(f"[{node_address}] Error general: {e}")
+            return False
 
     def _force_reset_connection(self):
         try:
@@ -163,28 +230,37 @@ class MSCLDriver(ISistemaPesaje):
 
 
     def desconectar(self):
-        with self._lock:
-            self._log("Cerrando conexión MSCL...")
+        self.logger.info("Desconectando sistema...")
+        self._stop_event.set()
+        
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
 
+        try:
+            # Detener la red si existe
+            if hasattr(self, 'base_station') and self.base_station:
+                self.logger.info("Desactivando Beacon...")
+                self.base_station.disableBeacon()
+                
+                # Opcional: Mandar comando de 'Set to Idle' a los nodos conocidos
+                # para que dejen de buscar la red inmediatamente.
+                if hasattr(self, 'network'):
+                    # Nota: SyncSamplingNetwork no tiene un 'stop' global que ponga en idle a todos
+                    # automáticamente en versiones viejas, pero apagar el beacon suele bastar.
+                    pass
+
+        except Exception as e:
+            self.logger.error(f"Error durante la desconexión de MSCL: {e}")
+        
+        # Cerrar conexión serial
+        if hasattr(self, 'connection'):
             try:
-                if self._base_station:
-                    try:
-                        if self._base_station.beaconEnabled():
-                            self._base_station.disableBeacon()
-                            self._log("Beacon desactivado.")
-                    except:
-                        pass
-            finally:
-                self._base_station = None
-
-            # MSCL no siempre expone disconnect(), dejar que Python libere el recurso
-            self._connection = None
-
-            self._active_node_ids.clear()
-            self._frame_buffer.clear()
-
-            self._state = ConnectionState.DISCONNECTED
-            self._log("✓ Conexión cerrada correctamente.")
+                self.connection.disconnect()
+            except:
+                pass
+                
+        self._state = ConnectionState.DISCONNECTED
+        self.logger.info("Sistema desconectado.")
 
 
     # =========================================================================

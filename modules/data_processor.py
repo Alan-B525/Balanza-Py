@@ -114,7 +114,7 @@ class DataProcessor:
             # Guardar serial si existe en la configuración para mapping de calibración
             serial = cfg.get('serial') if isinstance(cfg, dict) else None
             self._composite_to_serial[composite] = serial
-            self._log_to_file(f"Inicializado nodo {nombre_logico} (ID={node_id})")
+            # evento de inicialización: no loguear para evitar ruido en el log
     
     def _apply_median_filter(self, node_key, value: float) -> float:
         if not self.USE_FILTERS:
@@ -449,51 +449,60 @@ class DataProcessor:
         self._tares["global"] = 0.0
     
     def load_tara_state(self) -> bool:
-        """Carga el estado de tara desde app_state.json."""
-        import json
-        import os
-        state_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app_state.json")
-        
-        if os.path.exists(state_path):
-            try:
-                with open(state_path, 'r', encoding='utf-8') as f:
-                    state = json.load(f)
-                
-                if 'taras' in state:
-                    for node_id_str, tara_value in state['taras'].items():
-                        node_id = int(node_id_str)
-                        if node_id in self._tares:
-                            self._tares[node_id] = float(tara_value)
+        """Carga la tara global desde `settings.json` (clave `tara_global`).
+
+        Solo carga la `tara_global` para evitar crear archivos extra.
+        """
+        try:
+            import json
+            import os
+            from config import SETTINGS_FILE
+            path = SETTINGS_FILE
+            if not path or not os.path.exists(path):
+                return False
+            with open(path, 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+            if 'tara_global' in settings:
+                try:
+                    self._tares['global'] = float(settings.get('tara_global', 0.0))
                     return True
-            except Exception as e:
-                print(f"[DATA_PROCESSOR] Error cargando estado de tara: {e}")
+                except Exception:
+                    return False
+        except Exception as e:
+            try:
+                self._log_to_file(f"Error cargando tara desde settings: {e}")
+            except Exception:
+                pass
         return False
     
     def _save_tara_state(self) -> bool:
-        """Guarda el estado de tara en app_state.json."""
-        import json
-        import os
-        state_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app_state.json")
-        
+        """Guarda sólo la `tara_global` dentro de `settings.json`.
+
+        Mantiene el resto del `settings.json` intacto si existe.
+        """
         try:
-            # Cargar estado existente si hay
-            state = {}
-            if os.path.exists(state_path):
+            import json
+            import os
+            from config import SETTINGS_FILE
+            path = SETTINGS_FILE
+            settings = {}
+            if path and os.path.exists(path):
                 try:
-                    with open(state_path, 'r', encoding='utf-8') as f:
-                        state = json.load(f)
-                except:
-                    pass
-            
-            # Actualizar taras (convertir keys a string para JSON)
-            state['taras'] = {str(k): v for k, v in self._tares.items()}
-            state['last_updated'] = time.strftime("%Y-%m-%d %H:%M:%S")
-            
-            with open(state_path, 'w', encoding='utf-8') as f:
-                json.dump(state, f, indent=2, ensure_ascii=False)
+                    with open(path, 'r', encoding='utf-8') as f:
+                        settings = json.load(f)
+                except Exception:
+                    settings = {}
+
+            # Guardar sólo la tara global
+            settings['tara_global'] = float(self._tares.get('global', 0.0))
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(settings, f, indent=2, ensure_ascii=False)
             return True
         except Exception as e:
-            print(f"[DATA_PROCESSOR] Error guardando estado de tara: {e}")
+            try:
+                self._log_to_file(f"Error guardando tara en settings: {e}")
+            except Exception:
+                pass
             return False
     
     def get_tara(self, node_key) -> float:
@@ -619,52 +628,108 @@ class DataProcessor:
         except Exception as e:
             self._log_to_file(f"Error registrando calibración por segmentos: {e}")
 
-    def _map_raw_to_weight(self, composite: str, raw_value: float) -> Optional[float]:
-        """Mapea una lectura cruda a peso usando la calibración por segmentos si existe.
-
-        Busca primero una calibración asociada a la clave `composite`, luego
-        por `serial` asociado a esa composite.
+def _map_raw_to_weight(self, composite: str, raw_value: float) -> Optional[float]:
+        """
+        Mapea una lectura cruda a peso físico utilizando calibración por segmentos.
+        
+        OPTIMIZACIONES:
+        1. Calcula pendientes (m) y offsets (b) solo la primera vez.
+        2. Extrapolación: Proyecta la curva hacia el infinito para valores fuera de rango 
+           (usa la primera pendiente para valores bajos y la última para altos).
         """
         try:
+            # -----------------------------------------------------------
+            # 1. Búsqueda del objeto de calibración (Lógica original)
+            # -----------------------------------------------------------
             calib = None
             if composite in self.sensor_calibrations:
                 calib = self.sensor_calibrations[composite]
             else:
+                # Intenta buscar por Num serial si no encuentra por composite
                 serial = self._composite_to_serial.get(composite)
                 if serial and serial in self.sensor_calibrations:
                     calib = self.sensor_calibrations[serial]
-            if not calib:
+            
+            # Si no hay calibración o el método no es 'segments', salir.
+            if not calib or calib.get('method') != 'segments':
                 return None
-            if calib.get('method') != 'segments':
-                return None
-            pts = calib.get('points', [])
-            if not pts:
-                return None
-            # pts: list of (reading, weight) sorted by reading
-            pts = sorted(pts, key=lambda x: x[0])
+
+            # -----------------------------------------------------------
+            # 2. Generación de Tabla de Búsqueda (Se ejecuta SOLO UNA VEZ)
+            # -----------------------------------------------------------
+            # Verificamos si ya calculamos la tabla para no repetir el trabajo.
+            if '_lookup_table' not in calib:
+                pts = calib.get('points', [])
+                if not pts:
+                    return None
+                
+                # Se ordenan los puntos por valor crudo (eje X) de menor a mayor
+                pts = sorted(pts, key=lambda x: x[0])
+                
+                # Caso especial: Si solo hay 1 punto, actúa como un offset simple
+                if len(pts) == 1:
+                    calib['_lookup_table'] = {'type': 'single', 'val': float(pts[0][1])}
+                else:
+                    segments = []
+                    # Pre-calcular pendiente (m) y offset (b) para cada tramo
+                    # Fórmula: y = mx + b  ->  b = y - mx
+                    for i in range(len(pts) - 1):
+                        x0, y0 = pts[i]
+                        x1, y1 = pts[i + 1]
+                        
+                        # Protección contra división por cero (si dos puntos tienen el mismo X)
+                        if x1 == x0:
+                            m = 0.0
+                        else:
+                            m = (y1 - y0) / (x1 - x0)
+                        
+                        b = y0 - (m * x0) # Despeje del offset
+                        
+                        # Guardar: límite superior del tramo, pendiente y offset
+                        segments.append({
+                            'limit': x1, # Hasta qué valor raw aplica este segmento
+                            'm': m,
+                            'b': b
+                        })
+                    
+                    # Guardar la tabla optimizada dentro del mismo objeto de calibración
+                    calib['_lookup_table'] = {'type': 'multi', 'segments': segments}
+
+            # -----------------------------------------------------------
+            # 3. Cálculo Rápido (Se ejecuta en CADA lectura)
+            # -----------------------------------------------------------
+            table = calib['_lookup_table']
             r = float(raw_value)
-            # If only one point, return its weight
-            if len(pts) == 1:
-                return float(pts[0][1])
-            # Below minimum -> extrapolate using first segment
-            if r <= pts[0][0]:
-                # Fuera de rango por debajo: devolver el peso del primer punto (clamp)
-                x0, y0 = pts[0]
-                self._log_to_file(f"Calibracion clamp abajo: {composite} raw={r} -> {y0} (primer punto)")
-                return float(y0)
-            # Between points -> interpolate
-            for i in range(len(pts) - 1):
-                x0, y0 = pts[i]
-                x1, y1 = pts[i + 1]
-                if x0 <= r <= x1:
-                    if x1 == x0:
-                        return float(y0)
-                    return float(y0 + (r - x0) * (y1 - y0) / (x1 - x0))
-            # Por encima del rango: devolver el peso del último punto (clamp)
-            x_last, y_last = pts[-1]
-            self._log_to_file(f"Calibracion clamp arriba: {composite} raw={r} -> {y_last} (ultimo punto)")
-            return float(y_last)
+
+            # Si es calibración de un solo punto
+            if table['type'] == 'single':
+                return table['val']
+
+            segments = table['segments']
+            
+            # --- Selección de Segmento y Extrapolación ---
+            
+            # Por defecto, seleccionamos el último segmento.
+            # Esto maneja automáticamente la "Extrapolación Alta":
+            # si r > todos los límites, el bucle for termina sin break y usamos el último.
+            selected_seg = segments[-1]
+
+            # Buscamos si el valor cae dentro de un segmento anterior (Interpolación o Extrapolación Baja)
+            for seg in segments:
+                if r <= seg['limit']:
+                    selected_seg = seg
+                    break
+            
+            # NOTA SOBRE EXTRAPOLACIÓN BAJA:
+            # Si 'r' es menor que el primer punto de calibración, la condición (r <= seg['limit'])
+            # se cumple inmediatamente en la primera iteración (index 0).
+            # Por tanto, se usa la pendiente y offset del primer tramo para proyectar hacia atrás.
+
+            # Aplicar la ecuación de la recta: y = mx + b
+            return (selected_seg['m'] * r) + selected_seg['b']
+
         except Exception:
+            # En caso de error numérico, retornamos None para no romper el flujo
             return None
 
 

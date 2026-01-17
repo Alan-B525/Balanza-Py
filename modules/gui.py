@@ -219,8 +219,8 @@ class BalanzaGUI(ttk.Window):
         self.style.configure('TareInfo.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, sf(14), "bold"))
         # Estilo centrado y no negrita para el indicador de TARA (título)
         self.style.configure('TareCenter.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, sf(14)))
-        # Estilo de valor de Tara (monoespaciado, no negrita)
-        self.style.configure('TareValue.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_MONO, sf(40)))
+        # Estilo de valor de Tara (monoespaciado, BOLD para mayor énfasis)
+        self.style.configure('TareValue.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_MONO, sf(40), 'bold'))
         
         # Buttons - Escalados
         self.style.configure('TButton', font=(FONT_MAIN, sf(12), 'bold'))  # Default global BOLD
@@ -464,279 +464,78 @@ class BalanzaGUI(ttk.Window):
         except Exception:
             footer_frame = None
 
-        # --- Main Grid (Layout Original: Sensores | Total | Sensores) ---
+        # =====================================================================
+        # GRID CENTRAL ESTÁTICO (Viga 1 | Total | Viga 2)
+        # =====================================================================
         grid_area = ttk.Frame(main_container, style='Body.TFrame')
-        # Empaquetar el grid central normalmente (sin reservar padding fijo)
         grid_area.pack(fill=BOTH, expand=YES)
-        try:
-            # Forzar tamaño objetivo del área central para mantener layout estable
-            grid_area.configure(width=self.scaled(1000), height=self.scaled(600))
-            grid_area.pack_propagate(False)
-        except Exception:
-            pass
-        
-        # Columnas con tamao escalado según resolución
-        try:
-            is_tablet = getattr(self, 'scale', 1.0) <= 1.0
-            if is_tablet:
-                # En tablets dar más espacio al panel TOTAL (columna central)
-                grid_area.columnconfigure(0, weight=1, minsize=self.scaled(220))
-                grid_area.columnconfigure(1, weight=3, minsize=self.scaled(520))  # TOTAL más ancho en tablets
-                grid_area.columnconfigure(2, weight=1, minsize=self.scaled(220))
-            else:
-                grid_area.columnconfigure(0, weight=1, minsize=self.scaled(250))
-                grid_area.columnconfigure(1, weight=2, minsize=self.scaled(350))  # Centro ms ancho para el TOTAL
-                grid_area.columnconfigure(2, weight=1, minsize=self.scaled(250))
-        except Exception:
-            grid_area.columnconfigure(0, weight=1, minsize=self.scaled(250))
-            grid_area.columnconfigure(1, weight=2, minsize=self.scaled(350))
-            grid_area.columnconfigure(2, weight=1, minsize=self.scaled(250))
-        # Reducir más el minsize de filas de sensores para dejar espacio al footer
-        # Ajustar más conservadoramente para pantallas pequeñas
-        grid_area.rowconfigure(0, weight=1, minsize=self.scaled(100))
-        grid_area.rowconfigure(1, weight=1, minsize=self.scaled(100))
+        # CONFIGURACIÓN CLAVE: 'uniform' obliga a que las columnas 0 y 2 midan IDÉNTICO
+        grid_area.columnconfigure(0, weight=1, minsize=self.scaled(300), uniform="vigas")
+        grid_area.columnconfigure(1, weight=2, minsize=self.scaled(450))
+        grid_area.columnconfigure(2, weight=1, minsize=self.scaled(300), uniform="vigas")
+        grid_area.rowconfigure(0, weight=1)
 
-        self.sensor_widgets = {} 
-
-        # Helper to create cards mapped to config keys
-        def create_sensor_card(key, title, row, col, parent=None):
-            # Card con borde visible y tamaño uniforme
-            card_w = self.scaled(300)
-            card_h = self.scaled(200)
-            if parent is None:
-                parent = grid_area
+        def create_static_beam_card(parent, title, col):
             card = ttk.Frame(parent, style='Card.TFrame', padding=20)
-            # If placed inside a viga group, row/col semantics are relative to parent
-            card.grid(row=row, column=col, sticky="nsew", padx=8, pady=8)
-            # Forzar tamaño fijo del contenedor para que no cambie al modificar fuentes
+            card.grid(row=0, column=col, sticky="nsew", padx=10, pady=10)
+            # BLOQUEO DE TAMAÑO: Evita que el contenido estire la tarjeta
             try:
-                card.configure(width=card_w, height=card_h)
+                card.pack_propagate(False)
             except Exception:
                 pass
             try:
                 card.grid_propagate(False)
             except Exception:
                 pass
+
+            ttk.Label(card, text=title, style='CardTitle.TLabel', font=("Segoe UI", self.scaled_font(22), "bold")).pack(pady=(20, 30))
+            val_lbl = ttk.Label(card, text="0", style='CardValue.TLabel', font=("Consolas", self.scaled_font(60), "bold"), anchor="center")
+            val_lbl.pack(expand=YES, fill=X)
+            # Guardar ancho objetivo para el auto-ajuste de fuente (calculado aprox)
             try:
-                card.pack_propagate(False)
+                val_lbl.target_width = self.scaled(280)
             except Exception:
-                pass
+                val_lbl.target_width = None
+            ttk.Label(card, text="t", style='Unit.TLabel').pack(pady=(0, 30))
+            return val_lbl
 
-            # Header con título y estado
-            header = ttk.Frame(card, style='CardNoBorder.TFrame')
-            header.pack(fill=X, pady=(0, 8))
+        # 1. TARJETA VIGA 1 (Izquierda)
+        self.lbl_viga1_sum = create_static_beam_card(grid_area, "VIGA 1", 0)
+        # Mantener compatibilidad con nombres anteriores
+        self.lbl_viga1_total = self.lbl_viga1_sum
 
-            # Mostrar título de la tarjeta (p. ej. "CÉLULA 1")
-            try:
-                title_lbl = ttk.Label(header, text=title, style='CardTitle.TLabel')
-                title_lbl.pack(side=LEFT, anchor='w')
-            except Exception:
-                try:
-                    ttk.Label(header, text=title).pack(side=LEFT, anchor='w')
-                except Exception:
-                    pass
-
-            # Indicador de estado (más visible)
-            status_frame = ttk.Frame(header, style='CardNoBorder.TFrame')
-            status_frame.pack(side=RIGHT)
-
-            rssi_lbl = ttk.Label(status_frame, text="", font=("Segoe UI", 16), foreground="#94a3b8")
-            rssi_lbl.pack(side=LEFT)
-            status_lbl = ttk.Label(status_frame, text="Sem Sinal", font=("Segoe UI", 12, "bold"), foreground="#94a3b8")
-            status_lbl.pack(side=LEFT, padx=(5, 0))
-
-            # Separador
-            ttk.Separator(card, orient=HORIZONTAL).pack(fill=X, pady=8)
-
-            # Valor principal - Centrado - grande, la fuente se ajustará para caber
-            value_container = ttk.Frame(card, style='CardNoBorder.TFrame')
-            value_container.pack(fill=BOTH, expand=YES)
-            try:
-                value_container.pack_propagate(False)
-            except Exception:
-                pass
-
-            value_lbl = ttk.Label(
-                value_container,
-                text="0.00",
-                font=('Consolas', self.scaled_font(40), 'bold'),
-                foreground="#1e293b",
-                background="#ffffff",
-                anchor="center",
-            )
-            value_lbl.pack(expand=YES)
-            try:
-                # target_width: ancho útil disponible para el texto dentro de la tarjeta
-                value_lbl.target_width = max(1, card_w - self.scaled(40))
-            except Exception:
-                value_lbl.target_width = None
-
-            # Unidad
-            ttk.Label(
-                value_container,
-                text="t",
-                font=('Segoe UI', 15),
-                foreground="#64748b",
-                background="#ffffff"
-            ).pack(pady=(5, 0))
-
-            self.sensor_widgets[key] = {
-                'value': value_lbl,
-                'rssi': rssi_lbl,
-                'status': status_lbl
-            }
-
-        # Crear sensores en posiciones: izquierda y derecha (numerados)
-        keys = list(NODOS_CONFIG.keys())
-        if len(keys) >= 4:
-            # Crear marcos que agrupen las celdas por viga
-            left_group = ttk.Labelframe(grid_area, text="Viga 1", padding=8, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Viga.TLabelframe')
-            left_group.grid(row=0, column=0, rowspan=2, sticky="nsew", padx=8, pady=8)
-            left_group.columnconfigure(0, weight=1)
-            left_group.rowconfigure(0, weight=1)
-            left_group.rowconfigure(1, weight=1)
-
-            right_group = ttk.Labelframe(grid_area, text="Viga 2", padding=8, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Viga.TLabelframe')
-            right_group.grid(row=0, column=2, rowspan=2, sticky="nsew", padx=8, pady=8)
-            right_group.columnconfigure(0, weight=1)
-            right_group.rowconfigure(0, weight=1)
-            right_group.rowconfigure(1, weight=1)
-
-            create_sensor_card(keys[0], "CÉLULA 1", 0, 0, parent=left_group)
-            create_sensor_card(keys[1], "CÉLULA 2", 0, 0, parent=right_group)
-            create_sensor_card(keys[2], "CÉLULA 3", 1, 0, parent=left_group)
-            create_sensor_card(keys[3], "CÉLULA 4", 1, 0, parent=right_group)
-        elif len(keys) >= 2:
-            # Fallback si solo hay 2 celdas configuradas
-            # Agrupar en vigas también para 2 celdas
-            left_group = ttk.Labelframe(grid_area, text="Viga 1", padding=8, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Viga.TLabelframe')
-            left_group.grid(row=0, column=0, rowspan=2, sticky="nsew", padx=8, pady=8)
-            right_group = ttk.Labelframe(grid_area, text="Viga 2", padding=8, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Viga.TLabelframe')
-            right_group.grid(row=0, column=2, rowspan=2, sticky="nsew", padx=8, pady=8)
-            create_sensor_card(keys[0], "CÉLULA 1", 0, 0, parent=left_group)
-            create_sensor_card(keys[1], "CÉLULA 2", 0, 0, parent=right_group)
-
-        # --- PANEL CENTRAL: TOTAL (MS GRANDE) ---
-        control_panel = ttk.Frame(grid_area, style='Card.TFrame', padding=self.scaled(10))
-        control_panel.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=self.scaled(6), pady=self.scaled(6))
-        # Forzar tamaño fijo del panel central (TOTAL) para que no cambie con los textos
+        # 2. TARJETA TOTAL (Centro)
+        total_card = ttk.Frame(grid_area, style='Card.TFrame', padding=10)
+        total_card.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
         try:
-            is_tablet = locals().get('is_tablet', getattr(self, 'scale', 1.0) <= 1.0)
-            if is_tablet:
-                panel_w = self.scaled(520)
-                panel_h = self.scaled(420)
-            else:
-                panel_w = self.scaled(420)
-                panel_h = self.scaled(420)
-            control_panel.configure(width=panel_w, height=panel_h)
-        except Exception:
-            if locals().get('is_tablet', False):
-                panel_w = self.scaled(520)
-                panel_h = self.scaled(420)
-            else:
-                panel_w = self.scaled(420)
-                panel_h = self.scaled(420)
-        try:
-            control_panel.grid_propagate(False)
+            total_card.pack_propagate(False)
         except Exception:
             pass
-        try:
-            control_panel.pack_propagate(False)
-        except Exception:
-            pass
-        
-        # Sección TOTAL: crear contenedor antes de usarlo
-        try:
-            self.total_section = ttk.Frame(control_panel, style='TotalPanel.TFrame', padding=self.scaled(18))
-            self.total_section.pack(fill=BOTH, expand=YES)
-        except Exception:
-            # Fallback mínimo
-            self.total_section = ttk.Frame(control_panel)
-            self.total_section.pack(fill=BOTH, expand=YES)
 
-        self.lbl_total_title = ttk.Label(self.total_section, text="PESO TOTAL", style='TotalLabel.TLabel', anchor="center")
-        self.lbl_total_title.pack(fill=X)
-        self.lbl_total = ttk.Label(
-            self.total_section, 
-            text="0", 
-            style='TotalValue.TLabel', 
-            anchor="center",
-        )
-        self.lbl_total.pack(fill=X, pady=12)
-        try:
-            # target width: usar panel_w menos padding interior
-            self.lbl_total.target_width = max(1, panel_w - self.scaled(60))
-        except Exception:
-            self.lbl_total.target_width = None
+        self.total_section = ttk.Frame(total_card, style='TotalPanel.TFrame', padding=self.scaled(20))
+        self.total_section.pack(fill=BOTH, expand=YES)
         try:
             self.total_section.pack_propagate(False)
         except Exception:
             pass
-        self.lbl_total_unit = ttk.Label(self.total_section, text="t", style='TotalUnit.TLabel', anchor="center")
-        self.lbl_total_unit.pack()
-        
-        # Separador dentro del panel
-        ttk.Separator(control_panel, orient=HORIZONTAL).pack(fill=X, pady=self.scaled(10))
-        
-        # Seccin de Acciones debajo del total
-        actions_section = ttk.Frame(control_panel, style='CardNoBorder.TFrame', padding=self.scaled(5))
-        actions_section.pack(fill=X)
-        
-        # Info de Tara: un botón a la izquierda, texto en dos líneas en el centro, y un botón a la derecha
-        taracont = ttk.Frame(actions_section, style='CardNoBorder.TFrame')
-        taracont.pack(fill=X)
 
-        # Configurar grid para 3 columnas: boton izquierdo, texto (expandible), boton derecho
-        taracont.columnconfigure(0, weight=0)
-        taracont.columnconfigure(1, weight=1)
-        taracont.columnconfigure(2, weight=0)
+        self.lbl_total_title = ttk.Label(self.total_section, text="PESO TOTAL", style='TotalLabel.TLabel')
+        self.lbl_total_title.pack(pady=(30, 10))
+        self.lbl_total = ttk.Label(self.total_section, text="0", style='TotalValue.TLabel', anchor="center")
+        self.lbl_total.pack(expand=YES, fill=X)
+        try:
+            self.lbl_total.target_width = self.scaled(400)
+        except Exception:
+            self.lbl_total.target_width = None
+        self.lbl_total_unit = ttk.Label(self.total_section, text="t", style='TotalUnit.TLabel')
+        self.lbl_total_unit.pack(pady=(0, 30))
 
-        # Botón izquierdo (TARA)
-        btn_tare_left = ttk.Button(
-            taracont,
-            text="TARA",
-            command=self.do_tare,
-            bootstyle="warning",
-            style='Tare.TButton',
-            width=10,
-            padding=(self.scaled(12), self.scaled(8))
-        )
-        btn_tare_left.grid(row=0, column=0, sticky='w', padx=(0, 8))
+        # 3. TARJETA VIGA 2 (Derecha)
+        self.lbl_viga2_sum = create_static_beam_card(grid_area, "VIGA 2", 2)
+        self.lbl_viga2_total = self.lbl_viga2_sum
 
-        # Centro: título y valor apilados
-        tare_text_col = ttk.Frame(taracont)
-        tare_text_col.grid(row=0, column=1, sticky='nsew')
-        tare_text_col.columnconfigure(0, weight=1)
-
-        self.lbl_tare_title = ttk.Label(
-            tare_text_col,
-            text="Tara acumulada",
-            style='TareCenter.TLabel',
-            anchor="center",
-            justify='center'
-        )
-        self.lbl_tare_title.pack(fill=X)
-
-        self.lbl_tare_value = ttk.Label(
-            tare_text_col,
-            text="0 t",
-            style='TareValue.TLabel',
-            anchor="center",
-            justify='center'
-        )
-        self.lbl_tare_value.pack(fill=X, pady=(4, 0))
-
-        # Botón derecho (RESET)
-        btn_reset_right = ttk.Button(
-            taracont,
-            text="RESET",
-            command=self.reset_tare,
-            bootstyle="secondary",
-            style='Tare.TButton',
-            width=10,
-            padding=(self.scaled(12), self.scaled(8))
-        )
-        btn_reset_right.grid(row=0, column=2, sticky='e', padx=(8, 0))
+        # Inicializar diccionario vacío de widgets de sensores individuales
+        self.sensor_widgets = {}
         
         
     def _start_drag(self, event):
@@ -815,22 +614,37 @@ class BalanzaGUI(ttk.Window):
     def _update_display(self, data):
         # Guardar datos para actualización cuando cambie modo decimales
         self._last_sensor_data = data
+        # Tamaños de fuente base para vigas y total (usados en ajuste estático)
+        try:
+            normal_beam = self.scaled_font(60)
+        except Exception:
+            normal_beam = 60
+        try:
+            normal_total = self.scaled_font(120)
+        except Exception:
+            normal_total = 120
+
+        beam_tgt = max(20, int(normal_beam * 0.75)) if self._show_decimals else normal_beam
+        total_tgt = max(40, int(normal_total * 0.85)) if self._show_decimals else normal_total
+        min_font = self.scaled_font(14)
         
         # Atualizar Tara Acumulada em Toneladas
         if 'total_tare' in data:
             tara_ton = data['total_tare']
             # Actualizar el widget nuevo si existe, sino mantener compatibilidad
             tare_text = f"{self._format_weight(tara_ton)} t"
-            if hasattr(self, 'lbl_tare_value'):
-                try:
+            # Actualizar label en pestaña de mantenimiento
+            try:
+                if hasattr(self, 'lbl_tare_value') and self.lbl_tare_value:
                     self.lbl_tare_value.configure(text=tare_text)
-                except Exception:
-                    pass
-            elif hasattr(self, 'lbl_tare_info'):
-                try:
-                    self.lbl_tare_info.configure(text=f"Tara Acumulada: {tare_text}")
-                except Exception:
-                    pass
+            except Exception:
+                pass
+            # Actualizar label en vista principal (si existe)
+            try:
+                if hasattr(self, 'lbl_tare_value_main') and self.lbl_tare_value_main:
+                    self.lbl_tare_value_main.configure(text=tare_text)
+            except Exception:
+                pass
         
         # Verificar si hay sensores desconectados para cambiar color del panel
         any_disconnected = data.get('any_disconnected', False)
@@ -849,6 +663,16 @@ class BalanzaGUI(ttk.Window):
             self.lbl_total_title.configure(text="ERRO DE COMUNICAÇÃO", style='TotalLabelDanger.TLabel')
             self.lbl_total.configure(text="---", style='TotalValueDanger.TLabel')
             self.lbl_total_unit.configure(text="SISTEMA PARADO", style='TotalUnitDanger.TLabel')
+            # Mantener paridad visual en la pestaña de mantenimiento si existe
+            try:
+                if hasattr(self, 'lbl_maint_total') and self.lbl_maint_total:
+                    self.lbl_maint_total.configure(text="---", style='TotalValueDanger.TLabel')
+                if hasattr(self, 'lbl_maint_total_title') and self.lbl_maint_total_title:
+                    self.lbl_maint_total_title.configure(text="ERRO DE COMUNICAÇÃO", style='TotalLabelDanger.TLabel')
+                if hasattr(self, 'lbl_maint_total_unit') and self.lbl_maint_total_unit:
+                    self.lbl_maint_total_unit.configure(text="SISTEMA PARADO", style='TotalUnitDanger.TLabel')
+            except Exception:
+                pass
         else:
             # AZUL - Todos os sensores conectados (normal)
             self.total_section.configure(style='TotalPanel.TFrame')
@@ -887,21 +711,124 @@ class BalanzaGUI(ttk.Window):
                         self.lbl_total.configure(text=total_text)
                     except Exception:
                         pass
+                # Actualizar también la vista de mantenimiento si existe
+                try:
+                    if hasattr(self, 'lbl_maint_total') and self.lbl_maint_total:
+                        try:
+                            self.lbl_maint_total.configure(text=total_text, style='TotalValue.TLabel')
+                            fw_m = getattr(self.lbl_maint_total, 'target_width', getattr(self.lbl_total, 'target_width', self.scaled(260)))
+                            self._fit_label_font(self.lbl_maint_total, str(total_text), 'Consolas', max_size=tgt, min_size=total_extra_small, explicit_width=fw_m)
+                        except Exception:
+                            try:
+                                self.lbl_maint_total.configure(text=total_text)
+                            except Exception:
+                                pass
+                    if hasattr(self, 'lbl_maint_total_unit') and self.lbl_maint_total_unit:
+                        self.lbl_maint_total_unit.configure(text="t", style='TotalUnit.TLabel')
+                    if hasattr(self, 'lbl_maint_total_title') and self.lbl_maint_total_title:
+                        self.lbl_maint_total_title.configure(text="PESO TOTAL", style='TotalLabel.TLabel')
+                except Exception:
+                    pass
                 self._widget_last_total = incoming_total_last
             self.lbl_total_unit.configure(text="t", style='TotalUnit.TLabel')
         
         # Actualizar Sensores Individuales
         sensores = data['sensores']
-        for key, widgets in self.sensor_widgets.items():
+        # Calcular sumas por Viga (V1 = celda_1 + celda_3, V2 = celda_2 + celda_4)
+        try:
+            v1_keys = ['celda_1', 'celda_3']
+            v2_keys = ['celda_2', 'celda_4']
+            v1 = 0.0
+            v2 = 0.0
+            found_v1 = False
+            found_v2 = False
+            for k in v1_keys:
+                if k in sensores:
+                    v1 += float(sensores[k].get('valor', 0.0) or 0.0)
+                    found_v1 = True
+            for k in v2_keys:
+                if k in sensores:
+                    v2 += float(sensores[k].get('valor', 0.0) or 0.0)
+                    found_v2 = True
+
+            # Fallback: si no se detectan claves esperadas, repartir por mitades
+            if not (found_v1 or found_v2):
+                vals = [float(v.get('valor', 0.0) or 0.0) for v in sensores.values()]
+                half = len(vals) // 2 or 1
+                v1 = sum(vals[:half])
+                v2 = sum(vals[half:])
+
+            # Actualizar widgets de vigas si existen
+            try:
+                if hasattr(self, 'lbl_viga1_total') and self.lbl_viga1_total:
+                    txt1 = self._format_weight(v1)
+                    self.lbl_viga1_total.configure(text=txt1)
+                    try:
+                        fw = getattr(self.lbl_viga1_total, 'target_width', self.scaled(260))
+                        # Ajuste estático: usar beam_tgt y ancho explícito para evitar mover la tarjeta
+                        self._fit_label_font(self.lbl_viga1_total, str(txt1), 'Consolas', max_size=beam_tgt, min_size=self.scaled_font(18), explicit_width=fw)
+                    except Exception:
+                        pass
+                if hasattr(self, 'lbl_viga2_total') and self.lbl_viga2_total:
+                    txt2 = self._format_weight(v2)
+                    self.lbl_viga2_total.configure(text=txt2)
+                    try:
+                        fw2 = getattr(self.lbl_viga2_total, 'target_width', self.scaled(260))
+                        self._fit_label_font(self.lbl_viga2_total, str(txt2), 'Consolas', max_size=beam_tgt, min_size=self.scaled_font(18), explicit_width=fw2)
+                    except Exception:
+                        pass
+                # También actualizar labels alternativos creados en la nueva UI (compatibilidad)
+                try:
+                    if hasattr(self, 'lbl_viga1_sum') and self.lbl_viga1_sum and getattr(self, 'lbl_viga1_sum') is not None:
+                        txt_v1 = self._format_weight(v1)
+                        self.lbl_viga1_sum.configure(text=txt_v1)
+                        fw_v1 = getattr(self.lbl_viga1_sum, 'target_width', self.scaled(260))
+                        self._fit_label_font(self.lbl_viga1_sum, txt_v1, 'Consolas', max_size=beam_tgt, min_size=min_font, explicit_width=fw_v1)
+                except Exception:
+                    pass
+                try:
+                    if hasattr(self, 'lbl_viga2_sum') and self.lbl_viga2_sum and getattr(self, 'lbl_viga2_sum') is not None:
+                        txt_v2 = self._format_weight(v2)
+                        self.lbl_viga2_sum.configure(text=txt_v2)
+                        fw_v2 = getattr(self.lbl_viga2_sum, 'target_width', self.scaled(260))
+                        self._fit_label_font(self.lbl_viga2_sum, txt_v2, 'Consolas', max_size=beam_tgt, min_size=min_font, explicit_width=fw_v2)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        except Exception:
+            pass
+        for key, widgets in list(self.sensor_widgets.items()):
             if key in sensores:
                 info = sensores[key]
+                # Verificar que el widget de valor aún exista (puede pertenecer a un diálogo cerrado)
+                val_widget = widgets.get('value')
+                try:
+                    if not (hasattr(val_widget, 'winfo_exists') and val_widget.winfo_exists()):
+                        # El widget fue destruido; eliminar entrada para evitar futuros errores
+                        try:
+                            del self.sensor_widgets[key]
+                        except Exception:
+                            pass
+                        continue
+                except Exception:
+                    # Si no podemos comprobar, intentar continuar sin tocar
+                    pass
+
                 # Actualizar valor solo si la muestra es nueva (usar last_seen)
                 valor_ton = info.get('valor', 0.0)
                 incoming_last = info.get('last_seen', 0.0) or 0.0
                 prev_last = self._widget_last_seen.get(key, 0.0)
                 if incoming_last > prev_last:
                     display_text = self._format_weight(valor_ton)
-                    widgets['value'].configure(text=display_text)
+                    try:
+                        val_widget.configure(text=display_text)
+                    except Exception:
+                        # Ignorar errores de Tk (widget ya destruido u otro fallo)
+                        try:
+                            val_widget['text'] = display_text
+                        except Exception:
+                            pass
                     # Ajustar la fuente para que el texto encaje sin cambiar el contenedor
                     try:
                         try:
@@ -918,23 +845,52 @@ class BalanzaGUI(ttk.Window):
                         else:
                             tgt = normal_cell
 
-                        fixed_w = getattr(widgets['value'], 'target_width', self.scaled(260))
-                        self._fit_label_font(widgets['value'], str(display_text), 'Consolas', max_size=tgt, min_size=cell_extra_small, explicit_width=fixed_w)
+                        fixed_w = getattr(val_widget, 'target_width', self.scaled(260))
+                        self._fit_label_font(val_widget, str(display_text), 'Consolas', max_size=tgt, min_size=cell_extra_small, explicit_width=fixed_w)
                     except Exception:
                         pass
                     self._widget_last_seen[key] = incoming_last
-                
+
                 # Atualizar estado visual segundo conexo
-                if info.get('connected', True):
-                    widgets['value'].configure(foreground="#1e293b") # Cor normal
-                    widgets['rssi'].configure(text="", foreground="#22c55e")  # Verde
-                    if 'status' in widgets:
-                        widgets['status'].configure(text="Ativo", foreground="#22c55e")
-                else:
-                    widgets['value'].configure(foreground="#cbd5e1") # Cinza (desabilitado)
-                    widgets['rssi'].configure(text="", foreground="#ef4444")  # Vermelho
-                    if 'status' in widgets:
-                        widgets['status'].configure(text="Sem Sinal", foreground="#ef4444")
+                try:
+                    if info.get('connected', True):
+                        try:
+                            val_widget.configure(foreground="#1e293b")
+                        except Exception:
+                            pass
+                        rssi_widget = widgets.get('rssi')
+                        if rssi_widget and hasattr(rssi_widget, 'winfo_exists') and rssi_widget.winfo_exists():
+                            try:
+                                rssi_widget.configure(text="", foreground="#22c55e")
+                            except Exception:
+                                pass
+                        if 'status' in widgets:
+                            st = widgets.get('status')
+                            if st and hasattr(st, 'winfo_exists') and st.winfo_exists():
+                                try:
+                                    st.configure(text="Ativo", foreground="#22c55e")
+                                except Exception:
+                                    pass
+                    else:
+                        try:
+                            val_widget.configure(foreground="#cbd5e1")
+                        except Exception:
+                            pass
+                        rssi_widget = widgets.get('rssi')
+                        if rssi_widget and hasattr(rssi_widget, 'winfo_exists') and rssi_widget.winfo_exists():
+                            try:
+                                rssi_widget.configure(text="", foreground="#ef4444")
+                            except Exception:
+                                pass
+                        if 'status' in widgets:
+                            st = widgets.get('status')
+                            if st and hasattr(st, 'winfo_exists') and st.winfo_exists():
+                                try:
+                                    st.configure(text="Sem Sinal", foreground="#ef4444")
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
 
     def _update_status(self, connected):
         self.connected = connected
@@ -2415,13 +2371,21 @@ class BalanzaGUI(ttk.Window):
                 pass
 
         # === BORDA para delimitar a janela ===
-        border_frame = ttk.Frame(dialog, bootstyle="dark", padding=4)
+        # En pantallas pequeñas eliminamos el padding de la "borda" para
+        # evitar un pequeño borde visible entre el main y la barra de botones.
+        try:
+            border_pad = 0 if small_screen else 4
+            border_boot = "dark" if not small_screen else "secondary"
+        except Exception:
+            border_pad = 4
+            border_boot = "dark"
+        border_frame = ttk.Frame(dialog, bootstyle=border_boot, padding=border_pad)
         border_frame.pack(fill=BOTH, expand=YES)
         
         main_frame = ttk.Frame(border_frame, padding=10)
-        # Empaquetar main_frame sin padding inferior; la barra de botones
-        # se coloca con place() en pantallas pequeñas para evitar solapamientos
-        main_frame.pack(fill=BOTH, expand=YES)
+        # Permitir que main_frame se expanda para que las pestañas puedan usar
+        # toda la altura disponible (reservando espacio inferior para la barra de botones).
+        main_frame.pack(fill=BOTH, expand=True)
         
         # Variable para almacenar referencia a save_config (se define después)
         save_config_ref = [None]
@@ -2440,7 +2404,15 @@ class BalanzaGUI(ttk.Window):
         if small_screen:
             # Use place to guarantee it's at the very bottom and not occluded
             try:
-                btn_bottom_frame.place(relx=0, rely=1.0, anchor='sw', relwidth=1.0, height=self.scaled(70))
+                # Reservar más altura para los botones en tablet para aprovechar
+                # el espacio vacío y evitar que queden pegados al borde inferior.
+                btn_height = self.scaled(110)
+                btn_bottom_frame.place(relx=0, rely=1.0, anchor='sw', relwidth=1.0, height=btn_height)
+                # Ajustar el padding inferior del main_frame para reservar el espacio
+                try:
+                    main_frame.pack_configure(pady=(0, btn_height))
+                except Exception:
+                    pass
             except Exception:
                 btn_bottom_frame.pack(fill=X, side=BOTTOM, pady=(4, 8))
             try:
@@ -2494,10 +2466,13 @@ class BalanzaGUI(ttk.Window):
         
         # Header: Solo Tabs (ocupa solo el ancho, no debe expandir verticalmente)
         header_frame = ttk.Frame(main_frame)
+        # Permitir que el header y el notebook se expandan para rellenar verticalmente
         header_frame.pack(fill=BOTH, expand=True, pady=(0, 5))
 
         # Notebook/Tabs (compacto en alto)
         notebook = ttk.Notebook(header_frame, style='BigTab.TNotebook')
+        # Permitir que el notebook se expanda verticalmente para que las pestañas
+        # (p. ej. SENSORES) puedan usar toda la altura disponible.
         notebook.pack(fill=BOTH, expand=True)
 
         # ==================== Tab Sensores ====================
@@ -2741,6 +2716,287 @@ class BalanzaGUI(ttk.Window):
         notebook.add(tab_cal, text="  CALIBRAÇÃO  ")
         
         self._setup_calibration_tab(tab_cal, current_config, safe_close_dialog, dialog)
+
+        # === PESTAÑA ADICIONAL: MANUTENÇÃO (moved inside Config dialog) ===
+        try:
+            tab_maint_cfg = ttk.Frame(notebook, padding=10)
+            notebook.add(tab_maint_cfg, text="  MANUTENÇÃO  ")
+
+            maint_grid = ttk.Frame(tab_maint_cfg, style='Body.TFrame')
+            maint_grid.pack(fill=BOTH, expand=YES)
+            # Columnas estáticas: izquierda | centro | derecha
+            maint_grid.columnconfigure(0, weight=1, minsize=self.scaled(300), uniform="vigas_maint")
+            maint_grid.columnconfigure(1, weight=2, minsize=self.scaled(420))
+            maint_grid.columnconfigure(2, weight=1, minsize=self.scaled(300), uniform="vigas_maint")
+            # Permitir que el grid principal expanda verticalmente; las columnas
+            # (vigas + panel central) deben ocupar toda la altura disponible
+            try:
+                maint_grid.rowconfigure(0, weight=1)
+                maint_grid.rowconfigure(1, weight=1)
+            except Exception:
+                pass
+
+            # Crear/actualizar sensor_widgets mapping para que _update_display actualice estos widgets
+            self.sensor_widgets = {}
+
+            def create_sensor_card_cfg(parent, key, title, row, col):
+                card_w = self.scaled(280)
+                card_h = self.scaled(180)
+                # Usar el parent pasado (viga frame o maint_grid)
+                card = ttk.Frame(parent, style='Card.TFrame', padding=12)
+                card.grid(row=row, column=col, sticky="nsew", padx=6, pady=6)
+                # Fijar tamaño y bloquear propagación para que la tarjeta no cambie
+                try:
+                    card.configure(width=card_w, height=card_h)
+                except Exception:
+                    pass
+                try:
+                    card.grid_propagate(False)
+                except Exception:
+                    pass
+                try:
+                    card.pack_propagate(False)
+                except Exception:
+                    pass
+
+                h = ttk.Frame(card, style='CardNoBorder.TFrame')
+                h.pack(fill=X)
+                # Centrar título y mostrar rssi debajo (centrado)
+                try:
+                    ttk.Label(h, text=title, style='CardTitle.TLabel', anchor='center', justify='center').pack(fill=X)
+                except Exception:
+                    ttk.Label(h, text=title).pack(fill=X)
+                rssi = ttk.Label(h, text="", font=("Segoe UI", 10), anchor='center', justify='center')
+                rssi.pack(fill=X)
+                ttk.Separator(card, orient=HORIZONTAL).pack(fill=X, pady=6)
+                val = ttk.Label(card, text="0.00", style='CardValue.TLabel', font=("Consolas", self.scaled_font(28), "bold"), anchor='center', justify='center')
+                val.pack(expand=YES, fill=BOTH)
+                ttk.Label(card, text="t", style='Unit.TLabel').pack()
+                # Guardar target_width para ajuste de fuente, basado en ancho de la tarjeta
+                try:
+                    val.target_width = max(1, card_w - self.scaled(40))
+                except Exception:
+                    try:
+                        val.target_width = val.winfo_reqwidth() or self.scaled(220)
+                    except Exception:
+                        val.target_width = self.scaled(220)
+                # Guardar usando el nombre lógico del sensor (key)
+                self.sensor_widgets[key] = {'value': val, 'rssi': rssi}
+
+            # Mapear celdas según configuración (buscar claves conocidas)
+            nodes = list(current_config.get('nodes', {}).keys())
+            # Preferir nombres lógicos celda_1..celda_4 si existen
+            order = ['celda_1', 'celda_3', 'celda_2', 'celda_4']
+            # Si faltan, usar los disponibles en orden
+            present = [k for k in order if k in nodes]
+            others = [k for k in nodes if k not in present]
+            keys_seq = present + others
+
+            # Colocar en grid: izquierda (0) filas 0/1: celda_1/celda_3 dentro de VIGA 1
+            # y derecha (2) filas 0/1: celda_2/celda_4 dentro de VIGA 2
+            # Crear marcos etiquetados para VIGA 1 y VIGA 2
+            nodes_cfg = current_config.get('nodes', {})
+
+            # IDs para etiquetas de viga
+            def collect_ids(keys):
+                ids = []
+                for k in keys:
+                    if k in nodes_cfg:
+                        try:
+                            ids.append(str(nodes_cfg[k].get('id', '?')))
+                        except Exception:
+                            ids.append('?')
+                # Uniq
+                ids = list(dict.fromkeys(ids))
+                return ','.join(ids) if ids else '?'
+
+            v1_ids = collect_ids(['celda_1', 'celda_3'])
+            v2_ids = collect_ids(['celda_2', 'celda_4'])
+
+            # Usar LabelFrame para mostrar borde y título de la viga
+            try:
+                viga1_frame = ttk.Labelframe(maint_grid, text=f"VIGA 1 - NÓ: {v1_ids}", padding=6, labelanchor='n', style='Viga.TLabelframe')
+            except Exception:
+                viga1_frame = ttk.Frame(maint_grid, style='Card.TFrame', padding=6)
+            # Hacer que la viga ocupe verticalmente su sección
+            viga1_frame.grid(row=0, column=0, rowspan=2, sticky="nsew", padx=6, pady=6)
+            try:
+                viga1_frame.configure(width=self.scaled(320), height=self.scaled(420))
+            except Exception:
+                pass
+            try:
+                viga1_frame.grid_propagate(False)
+            except Exception:
+                pass
+            try:
+                viga1_frame.columnconfigure(0, weight=1)
+                # Permitir que las filas internas expandan para rellenar la viga
+                viga1_frame.rowconfigure(0, weight=1)
+                viga1_frame.rowconfigure(1, weight=1)
+            except Exception:
+                pass
+
+            try:
+                viga2_frame = ttk.Labelframe(maint_grid, text=f"VIGA 2 - NÓ: {v2_ids}", padding=6, labelanchor='n', style='Viga.TLabelframe')
+            except Exception:
+                viga2_frame = ttk.Frame(maint_grid, style='Card.TFrame', padding=6)
+            # Hacer que la viga ocupe verticalmente su sección
+            viga2_frame.grid(row=0, column=2, rowspan=2, sticky="nsew", padx=6, pady=6)
+            try:
+                viga2_frame.configure(width=self.scaled(320), height=self.scaled(420))
+            except Exception:
+                pass
+            try:
+                viga2_frame.grid_propagate(False)
+            except Exception:
+                pass
+            try:
+                viga2_frame.columnconfigure(0, weight=1)
+                # Permitir que las filas internas expandan para rellenar la viga
+                viga2_frame.rowconfigure(0, weight=1)
+                viga2_frame.rowconfigure(1, weight=1)
+            except Exception:
+                pass
+
+            # Colocar cards de las celdas dentro de viga1_frame y viga2_frame (si existen)
+            left_placements = [('celda_1', 0), ('celda_3', 1)]
+            right_placements = [('celda_2', 0), ('celda_4', 1)]
+            for key, r in left_placements:
+                if key in nodes_cfg:
+                    # Mostrar serial y canal junto al título si existen
+                    node = nodes_cfg.get(key, {})
+                    serial = node.get('serial', '')
+                    ch = node.get('ch', '')
+                    title = f"CÉLULA {key.split('_')[-1]}"
+                    extra = []
+                    if serial:
+                        extra.append(str(serial))
+                    if ch:
+                        extra.append(f"{ch}")
+                    if extra:
+                        title = f"{title} ({' '.join(extra)})"
+                    create_sensor_card_cfg(viga1_frame, key, title, r, 0)
+
+            for key, r in right_placements:
+                if key in nodes_cfg:
+                    node = nodes_cfg.get(key, {})
+                    serial = node.get('serial', '')
+                    ch = node.get('ch', '')
+                    title = f"CÉLULA {key.split('_')[-1]}"
+                    extra = []
+                    if serial:
+                        extra.append(str(serial))
+                    if ch:
+                        extra.append(f"{ch}")
+                    if extra:
+                        title = f"{title} ({' '.join(extra)})"
+                    create_sensor_card_cfg(viga2_frame, key, title, r, 0)
+
+            # Panel Central de Mantenimiento (Total + Tara y Diagnóstico)
+            # Hacer el panel central algo más ancho horizontalmente
+            ctrl_w = self.scaled(520)
+            # Reducir altura para compactar verticalmente el panel central
+            ctrl_h = self.scaled(360)
+            ctrl_frame = ttk.Frame(maint_grid, style='Card.TFrame', padding=16)
+            # Hacer que el panel central ocupe verticalmente su sección
+            ctrl_frame.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=6, pady=6)
+            try:
+                ctrl_frame.configure(width=ctrl_w, height=ctrl_h)
+            except Exception:
+                pass
+            try:
+                ctrl_frame.grid_propagate(False)
+            except Exception:
+                pass
+            try:
+                ctrl_frame.pack_propagate(False)
+            except Exception:
+                pass
+
+            # TOTAL dentro de la pestaña de mantenimiento (sección grande y centrada)
+            try:
+                # Crear sección principal usando TotalPanel y permitir que se expanda
+                # verticalmente para ocupar todo el espacio entre el encabezado
+                # y la sección de control de tara.
+                total_section = ttk.Frame(ctrl_frame, style='TotalPanel.TFrame', padding=0)
+                total_section.pack(fill=BOTH, expand=YES, pady=(0, 0))
+            except Exception:
+                total_section = ttk.Frame(ctrl_frame)
+                total_section.pack(fill=BOTH, expand=YES, pady=(0, 0))
+
+            # Centrar el contenido de la sección TOTAL; usar también el estilo para fondo uniforme
+            total_center = ttk.Frame(total_section, style='TotalPanel.TFrame', padding=0)
+            total_center.pack(expand=YES, fill=BOTH, padx=0, pady=0)
+
+            # Content container con padding interno para centrar visualmente y bajar ligeramente
+            # Permitimos expansión completa para que el bloque de peso rellene hasta TARAS
+            content_frame = ttk.Frame(total_center, style='TotalPanel.TFrame', padding=(12, 8))
+            content_frame.pack(expand=YES, fill=BOTH)
+
+            self.lbl_maint_total_title = ttk.Label(content_frame, text="PESO TOTAL", style='TotalLabel.TLabel', anchor='center', justify='center')
+            # Añadir padding inferior adicional para separar del valor
+            self.lbl_maint_total_title.pack(pady=(0, 10))
+            self.lbl_maint_total = ttk.Label(content_frame, text="0", style='TotalValue.TLabel', anchor='center', justify='center')
+            # Espaciado mayor entre título y valor
+            self.lbl_maint_total.pack(pady=(22, 6))
+            try:
+                self.lbl_maint_total.target_width = max(1, ctrl_w - self.scaled(80))
+            except Exception:
+                try:
+                    self.lbl_maint_total.target_width = self.lbl_total.target_width
+                except Exception:
+                    self.lbl_maint_total.target_width = self.scaled(260)
+            # Unidad justo debajo del valor, sin ocupar mucho espacio extra
+            self.lbl_maint_total_unit = ttk.Label(content_frame, text="t", style='TotalUnit.TLabel', anchor='center', justify='center')
+            self.lbl_maint_total_unit.pack(pady=(0, 2))
+
+            # Sección inferior: control de TARA (título + botones). Fijada al fondo.
+            tare_section = ttk.Frame(ctrl_frame)
+            # Empaquetar al fondo con 0 padding para que TOTAL toque esta sección
+            tare_section.pack(fill=X, side='bottom', pady=(0, 0))
+
+            ttk.Label(tare_section, text="CONTROLE DE TARA", style='CardTitle.TLabel', anchor='center', justify='center').pack(fill=X, pady=(10, 4))
+
+            # Fila de acciones: [TARA]     [RESET]
+            actions_row = ttk.Frame(tare_section)
+            actions_row.pack(fill=X, pady=(4, 4))
+            # Columnas: izquierda (botón), centro (label), derecha (botón)
+            try:
+                actions_row.columnconfigure(0, weight=0)
+                actions_row.columnconfigure(1, weight=1)
+                actions_row.columnconfigure(2, weight=0)
+            except Exception:
+                pass
+
+            btn_tare = ttk.Button(actions_row, text="TARA", command=self.do_tare, style='Tare.TButton', bootstyle="warning", width=14)
+            btn_tare.grid(row=0, column=0, sticky='w', padx=(2, 8))
+
+
+            # En tablets la etiqueta central ocupaba mucho espacio vertical; mover el valor
+            # de Tara a una fila separada bajo los botones para mejorar el espaciado.
+            # Mantener referencia `self.lbl_tare_value` para actualizaciones.
+
+            # Placeholder en actions_row para mantener botones a los lados
+            try:
+                spacer = ttk.Frame(actions_row)
+                spacer.grid(row=0, column=1, sticky='nsew')
+            except Exception:
+                pass
+
+            # Label de tara persistente debajo de los botones (más compacto)
+            tare_value_row = ttk.Frame(tare_section)
+            tare_value_row.pack(fill=X, pady=(6, 2))
+            try:
+                self.lbl_tare_value = ttk.Label(tare_value_row, text="Tara: 0.00 t", style='TareValue.TLabel', anchor='center', justify='center', font=("Segoe UI", self.scaled_font(12), "bold"))
+            except Exception:
+                self.lbl_tare_value = ttk.Label(tare_value_row, text="Tara: 0.00 t", anchor='center', justify='center', font=("Segoe UI", self.scaled_font(12), "bold"))
+            self.lbl_tare_value.pack(fill=X)
+
+            btn_reset = ttk.Button(actions_row, text="RESET", command=self.reset_tare, style='Tare.TButton', bootstyle="secondary", width=14)
+            btn_reset.grid(row=0, column=2, sticky='e', padx=(8, 2))
+        except Exception:
+            # Si falla la creación de la pestaña, continuar sin bloquear el diálogo
+            pass
 
         # Definir la función save_config y asignarla a la referencia del header
         def save_config():
