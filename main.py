@@ -149,12 +149,22 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
                     acquisition_paused = False
                     
                 elif cmd == 'TARE':
-                    procesador.set_tara()
-                    data_queue.put({'type': 'LOG', 'payload': "Tara aplicada."})
+                    try:
+                        new_tare = procesador.set_tara()
+                        # Enviar actualización inmediata a la GUI para refrescar labels
+                        data_queue.put({'type': 'DATA', 'payload': {'total_tare': new_tare}})
+                        data_queue.put({'type': 'LOG', 'payload': "Tara aplicada."})
+                    except Exception:
+                        data_queue.put({'type': 'LOG', 'payload': "Erro aplicando tara."})
                     
                 elif cmd == 'RESET_TARE':
-                    procesador.reset_tara()
-                    data_queue.put({'type': 'LOG', 'payload': "Tara reiniciada para 0."})
+                    try:
+                        procesador.reset_tara()
+                        # Notificar GUI inmediatamente
+                        data_queue.put({'type': 'DATA', 'payload': {'total_tare': 0.0}})
+                        data_queue.put({'type': 'LOG', 'payload': "Tara reiniciada para 0."})
+                    except Exception:
+                        data_queue.put({'type': 'LOG', 'payload': "Erro reiniciando tara."})
                     
                 elif cmd == 'DISCOVER_NODES':
                     # Descobrir nos usando MSCL (WSDA-USB-200 Gateway)

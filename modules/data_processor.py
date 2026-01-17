@@ -447,6 +447,10 @@ class DataProcessor:
 
     def reset_tara(self) -> None:
         self._tares["global"] = 0.0
+        try:
+            self._save_tara_state()
+        except Exception:
+            pass
     
     def load_tara_state(self) -> bool:
         """Carga la tara global desde `settings.json` (clave `tara_global`).
