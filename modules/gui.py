@@ -1055,6 +1055,20 @@ class BalanzaGUI(ttk.Window):
                 width=14,
                 padding=(15, 12)
             )
+            # Si el diálogo de configuración está abierto, actualizar su botón también
+            try:
+                if hasattr(self, 'btn_connect_dialog') and getattr(self, 'btn_connect_dialog'):
+                    try:
+                        self.btn_connect_dialog.configure(text="DESCONECTAR", bootstyle="danger", style='Large.danger.TButton', width=12, padding=(20, 10))
+                        try:
+                            # Forzar fuente/estilo consistente para evitar cambios de tamaño
+                            self.btn_connect_dialog.configure(font=self.style.configure('Header.TButton').get('font'))
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             # Al conectarse, intentar cargar y aplicar calibraciones disponibles
             try:
                 self._apply_saved_calibrations_on_connect()
@@ -1070,6 +1084,18 @@ class BalanzaGUI(ttk.Window):
                 width=14,
                 padding=(15, 12)
             )
+            try:
+                if hasattr(self, 'btn_connect_dialog') and getattr(self, 'btn_connect_dialog'):
+                    try:
+                        self.btn_connect_dialog.configure(text="CONECTAR", bootstyle="success", style='Large.success.TButton', width=12, padding=(20, 10))
+                        try:
+                            self.btn_connect_dialog.configure(font=self.style.configure('Header.TButton').get('font'))
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
     def _show_numeric_keypad(self, entry_widget, title="Inserir Valor"):
         """Teclado numérico virtual grande y funcional."""
@@ -2644,6 +2670,18 @@ class BalanzaGUI(ttk.Window):
                 dialog.destroy()
             except:
                 pass
+            # Limpiar referencias a botones del diálogo para evitar referencias muertas
+            try:
+                if hasattr(self, 'btn_connect_dialog'):
+                    try:
+                        delattr(self, 'btn_connect_dialog')
+                    except Exception:
+                        try:
+                            self.btn_connect_dialog = None
+                        except Exception:
+                            pass
+            except Exception:
+                pass
 
         # === BORDA para delimitar a janela ===
         # En pantallas pequeñas eliminamos el padding de la "borda" para
@@ -2700,8 +2738,14 @@ class BalanzaGUI(ttk.Window):
         ttk.Separator(btn_bottom_frame, orient="horizontal").pack(fill=X, pady=(0, 5))
 
         btn_container = ttk.Frame(btn_bottom_frame)
-        # Centrar el contenedor para que los botones no se peguen a la izquierda
-        btn_container.pack(anchor='center')
+        # Distribuir los botones: izquierda (conectar + decimales) y derecha (salvar/cancelar/fechar)
+        btn_container.pack(fill=X)
+
+        left_frame = ttk.Frame(btn_container)
+        left_frame.pack(side=LEFT, anchor='w')
+
+        right_frame = ttk.Frame(btn_container)
+        right_frame.pack(side=RIGHT, anchor='e')
 
         # Buttons size adjustments for small screens (más compactos)
         if small_screen:
@@ -2711,32 +2755,63 @@ class BalanzaGUI(ttk.Window):
             btn_width = 15
             btn_padding = (20, 10)
 
-        btn_salvar = ttk.Button(btn_container, text="SALVAR",
+        # Left: CONECTAR and decimals (reuse dialog functions)
+        try:
+            connect_text = "CONECTAR" if not getattr(self, 'connected', False) else "DESCONECTAR"
+        except Exception:
+            connect_text = "CONECTAR"
+
+        btn_connect_dialog = ttk.Button(left_frame, text=connect_text,
+                                        command=self.toggle_connection,
+                                        bootstyle="success",
+                                        width=12, padding=btn_padding)
+        btn_connect_dialog.configure(style='Large.success.TButton')
+        btn_connect_dialog.pack(side=LEFT, padx=(8, 12))
+        # Guardar referencia en self para poder sincronizar estado desde _update_status
+        try:
+            self.btn_connect_dialog = btn_connect_dialog
+        except Exception:
+            pass
+
+        # Decimals button mirrors main button behavior
+        try:
+            dec_text = self.btn_decimals.cget('text') if hasattr(self, 'btn_decimals') else '0.00'
+        except Exception:
+            dec_text = '0.00'
+        btn_dec_dialog = ttk.Button(left_frame, text=dec_text,
+                                    command=self.toggle_decimals,
+                                    bootstyle="primary",
+                                    width=8, padding=btn_padding)
+        btn_dec_dialog.configure(style='Large.info.TButton')
+        btn_dec_dialog.pack(side=LEFT, padx=(0, 8))
+
+        # Right: SALVAR, CANCELAR, FECHAR
+        btn_salvar = ttk.Button(right_frame, text="SALVAR",
                        bootstyle="success",
                        command=do_save,
                        width=btn_width,
                        padding=btn_padding)
         btn_salvar.configure(style='Large.success.TButton')
-        btn_salvar.pack(side=LEFT, padx=10)
+        btn_salvar.pack(side=LEFT, padx=6)
 
-        btn_cancelar = ttk.Button(btn_container, text="CANCELAR",
+        btn_cancelar = ttk.Button(right_frame, text="CANCELAR",
                        bootstyle="secondary",
                        command=safe_close_dialog,
                        width=btn_width,
                        padding=btn_padding)
         btn_cancelar.configure(style='Large.warning.TButton')
-        btn_cancelar.pack(side=LEFT, padx=10)
+        btn_cancelar.pack(side=LEFT, padx=6)
 
         # Separador visual
-        ttk.Frame(btn_container, width=self.scaled(20)).pack(side=LEFT)
+        ttk.Frame(right_frame, width=self.scaled(20)).pack(side=LEFT)
 
-        btn_fechar = ttk.Button(btn_container, text="FECHAR",
+        btn_fechar = ttk.Button(right_frame, text="FECHAR",
                        bootstyle="danger-outline",
                        command=safe_close_dialog,
                        width=btn_width,
                        padding=btn_padding)
         btn_fechar.configure(style='Large.danger.TButton')
-        btn_fechar.pack(side=LEFT, padx=10)
+        btn_fechar.pack(side=LEFT, padx=6)
         # ==================== FIN BOTONES ABAJO (COMPACTOS) ====================
         
         # Header: Solo Tabs (ocupa solo el ancho, no debe expandir verticalmente)
@@ -3000,9 +3075,11 @@ class BalanzaGUI(ttk.Window):
             maint_grid = ttk.Frame(tab_maint_cfg, style='Body.TFrame')
             maint_grid.pack(fill=BOTH, expand=YES)
             # Columnas estáticas: izquierda | centro | derecha
-            maint_grid.columnconfigure(0, weight=1, minsize=self.scaled(300), uniform="vigas_maint")
-            maint_grid.columnconfigure(1, weight=2, minsize=self.scaled(420))
-            maint_grid.columnconfigure(2, weight=1, minsize=self.scaled(300), uniform="vigas_maint")
+            # Copiar la configuración estática de columnas de la ventana principal
+            # para que las vigas y el panel central mantengan su tamaño relativo.
+            maint_grid.columnconfigure(0, weight=1, minsize=self.scaled(300), uniform="vigas")
+            maint_grid.columnconfigure(1, weight=2, minsize=self.scaled(450))
+            maint_grid.columnconfigure(2, weight=1, minsize=self.scaled(300), uniform="vigas")
             # Permitir que el grid principal expanda verticalmente; las columnas
             # (vigas + panel central) deben ocupar toda la altura disponible
             try:
@@ -3173,15 +3250,29 @@ class BalanzaGUI(ttk.Window):
             # No fijar altura: permitir que el contenido determine el alto para evitar "celdas vacías"
             ctrl_frame = ttk.Frame(maint_grid, style='Card.TFrame', padding=20)
             # Hacer que el panel central ocupe verticalmente su sección
+            # Fijar ancho del panel central para que las columnas sean estables
+            try:
+                ctrl_frame.configure(width=ctrl_w)
+                ctrl_frame.grid_propagate(False)
+            except Exception:
+                pass
             ctrl_frame.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=6, pady=6)
 
             # TOTAL dentro de la pestaña de mantenimiento (sección grande y centrada)
             try:
                 total_section = ttk.Frame(ctrl_frame, style='TotalPanel.TFrame', padding=0)
                 total_section.pack(fill=BOTH, expand=YES)
+                try:
+                    total_section.pack_propagate(False)
+                except Exception:
+                    pass
             except Exception:
                 total_section = ttk.Frame(ctrl_frame)
                 total_section.pack(fill=BOTH, expand=YES)
+                try:
+                    total_section.pack_propagate(False)
+                except Exception:
+                    pass
 
             # Centrar el contenido de la sección TOTAL; usar también el estilo para fondo uniforme
             total_center = ttk.Frame(total_section, style='TotalPanel.TFrame', padding=0)
@@ -3192,11 +3283,22 @@ class BalanzaGUI(ttk.Window):
             content_frame.pack(expand=YES, fill=BOTH)
 
             self.lbl_maint_total_title = ttk.Label(content_frame, text="PESO TOTAL", style='TotalLabel.TLabel', anchor='center', justify='center')
-            # Padding reducido
+            # Padding reducido para el título
             self.lbl_maint_total_title.pack(pady=(0, 6))
+            # Spacer fijo para mantener separación estable entre título y valor
+            try:
+                spacer_h = self.scaled(20)
+            except Exception:
+                spacer_h = 20
+            spacer = ttk.Frame(content_frame, height=spacer_h)
+            try:
+                spacer.pack_propagate(False)
+            except Exception:
+                pass
+            spacer.pack()
             self.lbl_maint_total = ttk.Label(content_frame, text="0", style='TotalValue.TLabel', anchor='center', justify='center')
-            # Espaciado menor entre título y valor
-            self.lbl_maint_total.pack(pady=(8, 4))
+            # Mantener pequeño padding inferior
+            self.lbl_maint_total.pack(pady=(0, 4))
             try:
                 self.lbl_maint_total.target_width = max(1, ctrl_w - self.scaled(80))
             except Exception:
@@ -3210,7 +3312,16 @@ class BalanzaGUI(ttk.Window):
 
             # Sección inferior: control de TARA (dentro de mantenimiento)
             # Mostrar un único borde en la sección de TARA (Card.TFrame)
+            # Hacer la sección de TARA ligeramente más alta para dar prioridad
+            # visual a los controles de tara dentro del diálogo de configuración.
             tare_section = ttk.Frame(ctrl_frame, style='Card.TFrame', padding=(6,4))
+            # Fijar una altura razonable y desactivar pack propagation para
+            # que la sección ocupe más espacio vertical, quitándoselo al TOTAL.
+            try:
+                tare_section.configure(height=self.scaled(160))
+                tare_section.pack_propagate(False)
+            except Exception:
+                pass
             tare_section.pack(fill=X, side='bottom', pady=(0, 0))
 
             # Versión compacta: inner sin borde para que el borde exterior del tare_section sea el único visible
@@ -3243,11 +3354,12 @@ class BalanzaGUI(ttk.Window):
 
             # Valor de tara persistente (integrado en la misma sección) con padding reducido
             tare_value_row = ttk.Frame(tare_inner, style='CardNoBorder.TFrame')
-            tare_value_row.pack(fill=X, pady=(2, 0))
+            # Añadir más espacio superior para separar claramente el texto de los botones
+            tare_value_row.pack(fill=X, pady=(self.scaled(14), 0))
             try:
-                self.lbl_tare_value = ttk.Label(tare_value_row, text="Tara: 0.00 t", style='TareMaintValue.TLabel', anchor='center', justify='center', font=("Segoe UI", self.scaled_font(12), "bold"))
+                self.lbl_tare_value = ttk.Label(tare_value_row, text="Tara: 0.00 t", style='TareMaintValue.TLabel', anchor='center', justify='center', font=("Segoe UI", self.scaled_font(24), "bold"))
             except Exception:
-                self.lbl_tare_value = ttk.Label(tare_value_row, text="Tara: 0.00 t", anchor='center', justify='center', font=("Segoe UI", self.scaled_font(12), "bold"))
+                self.lbl_tare_value = ttk.Label(tare_value_row, text="Tara: 0.00 t", anchor='center', justify='center', font=("Segoe UI", self.scaled_font(24), "bold"))
             self.lbl_tare_value.pack(fill=X)
         except Exception:
             # Si falla la creación de la pestaña, continuar sin bloquear el diálogo
