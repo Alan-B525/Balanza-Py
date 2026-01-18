@@ -45,7 +45,7 @@ class BalanzaGUI(ttk.Window):
             else:
                 self.log_message("No existe un gestor de calibración activo.")
         except Exception as e:
-            self.log_message(f"Error cargando sesión de calibración: {e}")
+            self.log_message(f"Erro ao carregar sessão de calibração: {e}")
 
     def __init__(self, data_queue, command_queue, data_processor=None):
         super().__init__(themename=THEME_NAME)

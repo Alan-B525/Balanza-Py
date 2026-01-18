@@ -45,7 +45,7 @@ class DataProcessor:
     def _log_to_file(self, message):
         try:
             from . import logger
-            logger.info(f"[DATA_PROCESSOR] {message}")
+            logger.info(f"[PROCESSADOR] {message}")
         except Exception:
             try:
                 # Fallback silente

@@ -1,23 +1,25 @@
 """
-sensor_driver.py - Driver Industrial "Smart Join" (v6.0)
+sensor_driver.py - Driver Industrial "Acorazado" (V8)
+Basado en pruebas de campo exitosas.
 
-ESTRATEGIA CORRECTA:
-1. No forzar conexión con nodos dormidos (evita error EEPROM).
-2. Activar Beacon inmediatamente.
-3. "Auto-Enrolamiento": Cuando un nodo despierta y manda un dato, 
-   el driver lo detecta y lo registra en memoria automáticamente.
+ESTRATEGIA V8 (Recuperación y Robustez):
+1. Silencio Radial: Apagar Beacon y esperar 6s para que los nodos "zombies" despierten.
+2. Persistencia Agresiva: Bombardear con 'SetToIdle' antes de hacer Ping.
+3. Tolerancia a Fallos: Si la librería MSCL falla al configurar (bug v67), se salta el paso.
+4. Salida Limpia: Intenta dormir a los nodos al desconectar para ahorrar batería.
 """
 
 import sys
 import os
 import time
 import threading
+import traceback
 from typing import List, Dict, Any, Optional, Set
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 
-# Configuración de ruta MSCL
+# --- CONFIGURACIÓN DE RUTA MSCL ---
 _current_dir = os.path.dirname(os.path.abspath(__file__))
 _mscl_path = os.path.join(os.path.dirname(_current_dir), 'MSCL', 'x64', 'Release')
 if _mscl_path not in sys.path and os.path.exists(_mscl_path):
@@ -31,7 +33,7 @@ except ImportError:
     MSCL_AVAILABLE = False
 
 # =============================================================================
-# ESTRUCTURAS
+# ESTRUCTURAS DE DATOS (Compatibilidad Main App)
 # =============================================================================
 
 class ConnectionState(Enum):
@@ -50,7 +52,6 @@ class AggregatedFrame:
     creation_time: float = field(default_factory=time.time)
     
     def is_complete(self, expected_keys: Set[str]) -> bool:
-        # Nota: en modo descubrimiento, expected_keys puede crecer dinámicamente
         return expected_keys.issubset(set(self.readings.keys()))
 
 try:
@@ -59,62 +60,96 @@ except ImportError:
     class ISistemaPesaje: pass
 
 # =============================================================================
-# DRIVER PRINCIPAL
+# CLASE PRINCIPAL DEL DRIVER
 # =============================================================================
 
 class MSCLDriver(ISistemaPesaje):
 
+    # Configuración de Hardware
     BAUD_RATE = 3000000
-    DATA_TIMEOUT_MS = 500  # Muy rápido para no bloquear
-    FRAME_TIMEOUT_S = 0.05
-    TIMESTAMP_TOLERANCE_NS = 10_000_000 # 10ms
+    DATA_TIMEOUT_MS = 100    # Timeout corto para lectura no bloqueante
+    FRAME_TIMEOUT_S = 0.05   # Ventana de agregación
+    TIMESTAMP_TOLERANCE_NS = 20_000_000 # 20ms tolerancia de sincronización
+    
+    # Configuración V8
+    RECOVERY_TIMEOUT_S = 30  # Tiempo máx intentando despertar un nodo
+    SAMPLE_RATE_HZ = 0.5     # 1 muestra cada 2 segundos
 
     def __init__(self, nodos_config: Optional[Dict] = None, use_sensor_config: bool = True, avoid_eeprom: bool = True):
-        if not MSCL_AVAILABLE: raise ImportError("MSCL no encontrado")
+        if not MSCL_AVAILABLE: raise ImportError("Librería MSCL no encontrada.")
         
         self.nodos_config = nodos_config or {}
         
-        # Configuración Esperada (Base de datos de qué buscar)
+        # Base de datos de configuración (Qué esperamos leer)
         self._config_node_ids: Set[int] = set()
         self._config_data_keys: Set[str] = set()
         
-        # Estado de Red Dinámico
-        self._active_node_ids: Set[int] = set() # Nodos que ya despertaron y están enviando
-        
+        # Estado dinámico
+        self._active_node_ids: Set[int] = set() # Nodos confirmados en la red
         self._connection = None
         self._base_station = None
+        self._network = None  # Objeto SyncSamplingNetwork
         
         self._state = ConnectionState.DISCONNECTED
         self._lock = threading.RLock()
         
+        # Buffer de agregación de tramas (para sincronizar datos de varios nodos)
         self._frame_buffer: Dict[int, AggregatedFrame] = {}
-        self._value_cache: Dict[str, deque] = {}
-        
-        self._stats = {'total_packets': 0, 'start_time': None}
-        
+        self._value_cache: Dict[str, deque] = {} # Para estadísticas o debug
+        # Callback opcional para informar progreso a la UI
+        self._progress_cb = None
+
         self._parse_config()
 
+    def set_progress_callback(self, cb):
+        """Registra un callback callable(msg: str) para progreso de conexión."""
+        try:
+            if cb is None:
+                self._progress_cb = None
+            elif callable(cb):
+                self._progress_cb = cb
+        except Exception:
+            self._progress_cb = None
+
+    def _emit_progress(self, msg: str) -> None:
+        """Enviar mensaje de progreso tanto al logger como al callback si existe."""
+        try:
+            self._log(msg)
+        except Exception:
+            pass
+        try:
+            if self._progress_cb:
+                try:
+                    self._progress_cb(msg)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     def _parse_config(self):
-        """Carga la lista de nodos permitidos."""
+        """Traduce el diccionario de configuración a estructuras internas."""
         for name, cfg in self.nodos_config.items():
             nid = cfg.get('id', 0)
             if nid <= 0: continue
             
+            # Normalizar nombre canal (ej: "Channel 1" -> "ch1")
             ch_raw = cfg.get('ch', 'ch1').lower().replace("channel", "ch").replace(" ", "")
+            
             self._config_node_ids.add(nid)
             key = f"{nid}:{ch_raw}"
             self._config_data_keys.add(key)
             self._value_cache[key] = deque(maxlen=10)
 
     def _log(self, msg):
+        """Wrapper de log para integrarse con el sistema o imprimir."""
         try:
             from . import logger
-            logger.info(f"[MSCL] {msg}")
+            logger.info(f"[MSCL V8] {msg}")
         except:
-            print(f"[MSCL] {msg}")
+            print(f"[MSCL V8] {msg}")
 
     # =========================================================================
-    # CONEXIÓN
+    # LÓGICA DE CONEXIÓN ROBUSTA (V8)
     # =========================================================================
 
     def conectar(self, puerto: str) -> bool:
@@ -123,341 +158,385 @@ class MSCLDriver(ISistemaPesaje):
                 return True
 
             self._state = ConnectionState.CONNECTING
-            self._log(f"Abriendo puerto serie: {puerto}")
+            self._emit_progress(f"Iniciando protocolo V8 em {puerto} @ {self.BAUD_RATE}...")
 
             try:
+                # 1. Conexión Física
                 self._connection = mscl.Connection.Serial(puerto, self.BAUD_RATE)
                 self._base_station = mscl.BaseStation(self._connection)
 
+                # 2. SILENCIO RADIAL (CRÍTICO)
+                # Apagamos el Beacon y esperamos a que los nodos "zombies" (que creen que siguen midiendo)
+                # se den cuenta de que la red cayó y pasen a modo escucha.
+                self._emit_progress("Passo 1: Silenciando rede (6s)...")
                 try:
-                    self._base_station.enableBeacon()
-                    self._log("Beacon solicitado (modo escucha pasiva).")
+                    self._base_station.disableBeacon()
+                except: 
+                    pass
+                
+                # Pausa táctica obligatoria
+                time.sleep(6)
+
+                # 3. GESTIÓN Y RECUPERACIÓN DE NODOS
+                self._network = mscl.SyncSamplingNetwork(self._base_station)
+                nodos_recuperados = 0
+                
+                if not self._config_node_ids:
+                    self._emit_progress("AVISO: Nenhum nó configurado em settings.json.")
+
+                for nid in self._config_node_ids:
+                    self._emit_progress(f"Tentando recuperar nó {nid}...")
+                    if self._recuperar_y_preparar_nodo(nid):
+                        self._emit_progress(f"Nodo {nid} recuperado.")
+                        nodos_recuperados += 1
+                    else:
+                        self._emit_progress(f"Nodo {nid} NO recuperado.")
+                
+                if nodos_recuperados == 0 and self._config_node_ids:
+                    self._log("ERROR: No se pudo conectar con ningún nodo configurado.")
+                    self.desconectar()
+                    return False
+
+                # 4. APLICAR CONFIGURACIÓN A LA RED (Fix V6)
+                # Este paso envía la tabla de slots TDMA al Gateway
+                self._emit_progress("Passo 3: Aplicando configuração de rede ao Gateway...")
+                try:
+                    self._network.applyConfiguration()
                 except Exception as e:
-                    self._log(f"Beacon no confirmado: {e}")
+                    self._log(f"Advertencia al aplicar config de red: {e}")
 
-                self._stats['start_time'] = time.time()
+                # 5. INICIAR MUESTREO (Fix V5/V6)
+                self._emit_progress(f"Passo 4: Iniciando amostragem ({nodos_recuperados} nós)...")
+                try:
+                    self._network.startSampling()
+                    self._emit_progress(">>> RED OPERATIVA (Beacon Activo) <<<")
+                except Exception as e:
+                    self._log(f"Error crítico al iniciar red: {e}")
+                    self.desconectar()
+                    return False
+
                 self._state = ConnectionState.SAMPLING
-                self._log("✓ Sistema escuchando datos MSCL.")
-
                 return True
 
             except Exception as e:
-                self._log(f"ERROR DE CONEXIÓN: {e}")
-                self._force_reset_connection()
+                self._emit_progress(f"Falha geral na conexão: {e}")
+                self._emit_progress(traceback.format_exc())
+                self.desconectar()
                 return False
 
+    def _recuperar_y_preparar_nodo(self, node_id: int) -> bool:
+        """
+        Estrategia 'Francotirador': Busca, detiene y agrega el nodo a la red.
+        Maneja nodos dormidos y bugs de librería.
+        """
+        self._log(f"[{node_id}] Tentando recuperar controle...")
+        node = mscl.WirelessNode(node_id, self._base_station)
+        
+        start_time = time.time()
+        encontrado = False
 
-    def _force_reset_connection(self):
+        # Bucle de persistencia para despertar nodos dormidos
+        while (time.time() - start_time) < self.RECOVERY_TIMEOUT_S:
+            try:
+                # Estrategia "Stop Ciego": Mandar Idle aunque no responda ping
+                try: node.setToIdle()
+                except: pass
+
+                # Verificar si está vivo
+                if node.ping().success():
+                    self._log(f"[{node_id}] CONTATO! Nó parado.")
+                    node.setToIdle() # Asegurar estado Idle
+                    encontrado = True
+                    break
+            except:
+                pass
+            time.sleep(0.2) # Pequeña pausa para no saturar puerto
+
+        if not encontrado:
+            self._log(f"[{node_id}] ERROR: No respondió tras {self.RECOVERY_TIMEOUT_S}s.")
+            return False
+
+        # Configuración con Bypass de errores (Fix V5)
         try:
+            self._log(f"[{node_id}] Verificando configuração...")
+            config = mscl.WirelessNodeConfig(node)
+            
+            # SampleRate.Seconds(2) = 0.5 Hz (1 muestra cada 2s)
+            target = mscl.SampleRate.Seconds(2)
+            
+            if config.sampleRate().prettyStr() != target.prettyStr():
+                self._log(f"[{node_id}] Ajustando para 0.5Hz...")
+                config.sampleRate(target)
+                config.apply()
+                self._log(f"[{node_id}] Configuración aplicada.")
+            else:
+                self._log(f"[{node_id}] Configuración correcta.")
+                
+        except Exception as e:
+            # Si es el bug de la librería v67, logueamos y continuamos
+            self._log(f"[{node_id}] Aviso: Falha leitura/gravação de config (Bug MSCL?). Pulando passo.")
+            # Continuamos, asumiendo que la configuración previa sirve o que es mejor medir mal que no medir.
+
+        # Agregar a la red de software (Vital para el startSampling)
+        try:
+            self._network.addNode(node)
+            self._active_node_ids.add(node_id)
+            self._log(f"[{node_id}] Adicionado à rede de amostragem.")
+            return True
+        except Exception as e:
+            self._log(f"[{node_id}] Error al agregar a red: {e}")
+            return False
+
+    # =========================================================================
+    # CIERRE LIMPIO
+    # =========================================================================
+
+    def desconectar(self):
+        """Cierra conexión intentando dejar los nodos en IDLE (ahorro batería)."""
+        with self._lock:
+            self._log("Iniciando desconexão...")
+            
+            # 1. Intentar detener nodos individualmente (si es posible)
+            if self._base_station and self._active_node_ids:
+                self._log(f"Enviando comando STOP para {len(self._active_node_ids)} nós...")
+                for nid in list(self._active_node_ids):
+                    try:
+                        node = mscl.WirelessNode(nid, self._base_station)
+                        node.setToIdle()
+                    except:
+                        pass # Si falla, no importa, ya lo intentamos
+
+            # 2. Apagar Beacon (Fundamental para detener sincronización)
             if self._base_station:
                 try:
                     self._base_station.disableBeacon()
+                    self._log("Beacon desativado.")
                 except:
                     pass
-        finally:
+            
+            # 3. Cerrar conexión física
+            if self._connection:
+                try:
+                    self._connection.disconnect()
+                except:
+                    pass
+
+            self._active_node_ids.clear()
+            self._frame_buffer.clear()
             self._base_station = None
             self._connection = None
-            self._active_node_ids.clear()
-            self._frame_buffer.clear()
+            self._network = None
+            
             self._state = ConnectionState.DISCONNECTED
-
-
-    def desconectar(self):
-        with self._lock:
-            self._log("Cerrando conexión MSCL...")
-
-            try:
-                if self._base_station:
-                    try:
-                        if self._base_station.beaconEnabled():
-                            self._base_station.disableBeacon()
-                            self._log("Beacon desactivado.")
-                    except:
-                        pass
-            finally:
-                self._base_station = None
-
-            # MSCL no siempre expone disconnect(), dejar que Python libere el recurso
-            self._connection = None
-
-            self._active_node_ids.clear()
-            self._frame_buffer.clear()
-
-            self._state = ConnectionState.DISCONNECTED
-            self._log("✓ Conexión cerrada correctamente.")
-
+            self._log("Sistema desconectado.")
 
     # =========================================================================
-    # LECTURA INTELIGENTE (AUTO-ENROLAMIENTO)
+    # LECTURA DE DATOS
     # =========================================================================
 
     def obtener_datos(self) -> List[Dict[str, Any]]:
-        if not self._base_station or self._state not in (ConnectionState.CONNECTED, ConnectionState.SAMPLING):
+        """
+        Método llamado periódicamente por DataProcessor.
+        Lee datos del buffer del Gateway y los agrega en tramas sincronizadas.
+        """
+        if not self._base_station or self._state != ConnectionState.SAMPLING:
+            return []
+
+        # Leer del buffer interno del Gateway (MSCL C++)
+        try:
+            sweeps = self._base_station.getData(self.DATA_TIMEOUT_MS)
+        except Exception:
             return []
 
         now = time.time()
 
-        try:
-            sweeps = self._base_station.getData(self.DATA_TIMEOUT_MS)
-            if sweeps:
-                for sweep in sweeps:
-                    self._process_sweep_atomic(sweep)
-        except Exception as e:
-            self._log(f"Error en adquisición de datos: {e}")
-            self._state = ConnectionState.ERROR
-            return []
+        # Procesar cada paquete individualmente
+        for sweep in sweeps:
+            self._process_single_sweep(sweep)
 
-        frames = self._collect_frames(now)
-        if frames:
-            try:
-                # Log síntesis de lo que se va a devolver al procesador
-                first = frames[0]
-                keys = list(first.get('values', {}).keys())
-                sample = {k: first.get('values', {}).get(k) for k in keys[:6]}
-                #self._log(f"obtener_datos -> frames={len(frames)} keys_sample={keys[:6]} sample={sample}")
-            except Exception:
-                pass
+        # Recolectar tramas que estén completas o hayan expirado
+        return self._collect_ready_frames(now)
 
-        return frames
-
-    def _process_sweep_atomic(self, sweep):
+    def _process_single_sweep(self, sweep):
+        """Procesa un paquete de datos crudo y lo mete en el buffer de tramas."""
         try:
             nid = sweep.nodeAddress()
-
-            # Filtro de red
+            
+            # Solo procesamos nodos que configuramos
             if nid not in self._config_node_ids:
                 return
-
-            # Auto-enrolamiento
-            if nid not in self._active_node_ids:
-                self._active_node_ids.add(nid)
-                self._log(f"Nodo {nid} activo.")
 
             ts_ns = sweep.timestamp().nanoseconds()
             rssi = sweep.nodeRssi()
 
-            # Extraer TODOS los datapoints primero
+            # Extraer valores de canales (usando as_string/as_float seguro)
             values = {}
-
             for dp in sweep.data():
                 try:
-                    ch_name = str(dp.channelName()).lower()
+                    # Mapeo de nombre de canal (ej: "Channel 1" -> "ch1")
+                    # Usamos una lógica simple basada en strings
+                    ch_str = str(dp.channelName()).lower()
+                    ch_key = None
+                    
+                    if "1" in ch_str and ("ch" in ch_str or "val" in ch_str): ch_key = "ch1"
+                    elif "2" in ch_str and ("ch" in ch_str or "val" in ch_str): ch_key = "ch2"
+                    elif "3" in ch_str: ch_key = "ch3"
+                    elif "4" in ch_str: ch_key = "ch4"
+
+                    if ch_key:
+                        full_key = f"{nid}:{ch_key}"
+                        
+                        # Si este dato nos interesa
+                        if full_key in self._config_data_keys:
+                            # Intento de conversión segura (Fix V7)
+                            val = 0.0
+                            try:
+                                if dp.storedAs() == mscl.valueType_float:
+                                    val = dp.as_float()
+                                else:
+                                    val = float(dp.as_string())
+                            except:
+                                # Fallback extremo si as_float falla
+                                continue
+                            
+                            values[full_key] = val
+                            
+                            # Cache simple para debug
+                            if full_key in self._value_cache:
+                                self._value_cache[full_key].append(val)
                 except:
                     continue
 
-                ch_key = self._map_channel_name(ch_name)
-                if not ch_key:
-                    continue
-
-                full_key = f"{nid}:{ch_key}"
-
-                if full_key not in self._config_data_keys:
-                    continue
-
-                try:
-                    val = dp.as_float()
-                    values[full_key] = val
-                    self._value_cache[full_key].append(val)
-                except:
-                    continue
-
+            # Si encontramos datos útiles en este barrido, los guardamos
             if values:
-                self._insert_sweep_frame(ts_ns, values, nid, rssi)
+                self._insert_into_buffer(ts_ns, values, nid, rssi)
 
         except Exception:
-            pass
+            pass 
 
-    def _map_channel_name(self, ch_name: str) -> Optional[str]:
-        # Normalizar
-        name = ch_name.lower().strip()
-        
-        # Lógica prioritaria para MSCL estándar
-        if name in ('ch1', 'val1', 'strain1', 'load1'): return 'ch1'
-        if name in ('ch2', 'val2', 'strain2', 'load2'): return 'ch2'
-        if name in ('ch3', 'val3', 'strain3', 'load3'): return 'ch3'
-        if name in ('ch4', 'val4', 'strain4', 'load4'): return 'ch4'
-        
-        # Lógica fallback (contiene el número pero no es un número random del timestamp)
-        if '1' in name and ('ch' in name or 'val' in name): return 'ch1'
-        if '2' in name and ('ch' in name or 'val' in name): return 'ch2'
-        
-        return None
-
-    def _insert_sweep_frame(self, ts_ns, values, nid, rssi):
+    def _insert_into_buffer(self, ts_ns, values, nid, rssi):
+        """Agrega datos a un frame existente o crea uno nuevo."""
         with self._lock:
-            # Buscar frame cercano (ventana temporal)
+            # Buscar si ya existe un frame para este instante (con tolerancia)
             target_ts = None
             for t in self._frame_buffer:
                 if abs(t - ts_ns) <= self.TIMESTAMP_TOLERANCE_NS:
                     target_ts = t
                     break
-
+            
             if target_ts is None:
+                # Crear nuevo frame
                 frame = AggregatedFrame(timestamp_ns=ts_ns)
                 self._frame_buffer[ts_ns] = frame
             else:
                 frame = self._frame_buffer[target_ts]
-
+            
+            # Actualizar datos
             frame.readings.update(values)
             frame.rssi_map[nid] = rssi
 
-
-    def _process_active_sweep(self, sweep):
-        """Procesa datos y detecta nodos activos."""
-        try:
-            nid = sweep.nodeAddress()
-            
-            # FILTRO: ¿Es un nodo de los nuestros?
-            if nid not in self._config_node_ids: 
-                return # Ignorar nodos vecinos
-
-            # AUTO-ENROLAMIENTO
-            if nid not in self._active_node_ids:
-                self._active_node_ids.add(nid)
-                self._log(f"¡Nodo {nid} detectado y activo! Recibiendo datos.")
-
-            # Procesamiento Normal
-            ts_ns = sweep.timestamp().nanoseconds()
-            rssi = sweep.nodeRssi()
-            
-            for dp in sweep.data():
-                # Sin chequeo .valid() por compatibilidad
-                try:
-                    ch_name = str(dp.channelName()).lower()
-                except:
-                    ch_name = "unknown"
-                
-                ch_key = None
-                if "1" in ch_name and ("ch" in ch_name or "strain" in ch_name or "val" in ch_name):
-                    ch_key = "ch1"
-                elif "2" in ch_name and ("ch" in ch_name or "strain" in ch_name or "val" in ch_name):
-                    ch_key = "ch2"
-                elif "3" in ch_name: ch_key = "ch3"
-                elif "4" in ch_name: ch_key = "ch4"
-                
-                if ch_key:
-                    try:
-                        val = dp.as_float()
-                        full_key = f"{nid}:{ch_key}"
-                        
-                        # Solo procesamos canales que esperamos en config
-                        if full_key in self._config_data_keys:
-                            self._add_to_frame_buffer(ts_ns, full_key, val, rssi)
-                            self._value_cache[full_key].append(val)
-                    except:
-                        pass
-        except:
-            pass
-
-    def _add_to_frame_buffer(self, ts_ns, key, val, rssi):
-        with self._lock:
-            target = None
-            for t in self._frame_buffer:
-                if abs(t - ts_ns) < self.TIMESTAMP_TOLERANCE_NS:
-                    target = self._frame_buffer[t]
-                    break
-            
-            if not target:
-                target = AggregatedFrame(timestamp_ns=ts_ns)
-                self._frame_buffer[ts_ns] = target
-            
-            target.readings[key] = val
-            try:
-                nid = int(key.split(':')[0])
-                target.rssi_map[nid] = rssi
-            except: pass
-
-    def _collect_frames(self, now):
+    def _collect_ready_frames(self, now) -> List[Dict[str, Any]]:
+        """Devuelve frames completos o viejos y limpia el buffer."""
         completed = []
-        expired = []
+        expired_keys = []
 
         with self._lock:
-            frames = list(self._frame_buffer.items())
+            # Determinar qué claves esperamos recibir (solo de nodos activos configurados)
+            # Como en V8 forzamos los nodos, esperamos todos los configurados
+            expected_keys = self._config_data_keys
 
-            for ts, frame in frames:
-                # Claves esperadas SOLO de nodos activos
-                expected = {
-                    k for k in self._config_data_keys
-                    if int(k.split(":")[0]) in self._active_node_ids
-                }
-
-                is_complete = expected.issubset(frame.readings.keys())
+            for ts, frame in list(self._frame_buffer.items()):
+                # ¿Está completo? (Tiene todos los canales configurados)
+                is_complete = expected_keys.issubset(frame.readings.keys())
+                
+                # ¿Es viejo? (Pasó el tiempo de espera para sincronización)
                 is_expired = (now - frame.creation_time) > self.FRAME_TIMEOUT_S
 
                 if is_complete or is_expired:
+                    # Empaquetar para el DataProcessor
                     completed.append({
-                        'timestamp': frame.timestamp_ns / 1e9,
+                        'timestamp': frame.timestamp_ns / 1e9, # Segundos
                         'values': frame.readings.copy(),
                         'rssi': frame.rssi_map.copy(),
                         'complete': is_complete
                     })
-                    expired.append(ts)
-            for ts in expired:
+                    expired_keys.append(ts)
+            
+            # Limpiar procesados
+            for ts in expired_keys:
                 del self._frame_buffer[ts]
 
+        # Ordenar por timestamp para mantener secuencia
+        completed.sort(key=lambda x: x['timestamp'])
         return completed
 
     # =========================================================================
-    # DESCUBRIMIENTO (Para el botón de la UI)
+    # DESCUBRIMIENTO (UI)
     # =========================================================================
 
     def descubrir_nodos(self, timeout_ms: int = 5000) -> List[Dict[str, Any]]:
+        """Función auxiliar para la ventana de configuración."""
         if not self._base_station: 
             return []
 
-        self._log(f"Escaneando ({timeout_ms}ms)...")
+        self._log(f"Escaneando nodos ({timeout_ms}ms)...")
         found = {}
         start = time.time()
         
-        try: self._base_station.enableBeacon()
-        except: pass
-
-        while (time.time() - start) * 1000 < timeout_ms:
-            try:
-                sweeps = self._base_station.getData(100)
-                for sweep in sweeps:
-                    nid = sweep.nodeAddress()
-                    if nid not in found:
-                        found[nid] = {'id': nid, 'rssi': sweep.nodeRssi(), 'channels': set()}
-                    
-                    for dp in sweep.data():
-                        name = str(dp.channelName()).lower()
-                        if "1" in name: found[nid]['channels'].add('ch1')
-                        if "2" in name: found[nid]['channels'].add('ch2')
-            except: pass
-            time.sleep(0.01)
-
-        res = []
-        for nid, data in found.items():
-            chs = [{'channel': c, 'type': 'strain', 'value': 0.0} for c in sorted(data['channels'])]
-            if not chs: chs = [{'channel': 'ch1', 'type': 'strain', 'value': 0.0}, {'channel': 'ch2', 'type': 'strain', 'value': 0.0}]
-            data['channels'] = chs
-            res.append(data)
+        # Intentamos usar el NodeDiscovery helper de MSCL
+        try:
+            discovery = mscl.NodeDiscovery(self._base_station)
+            discovery.start()
+            time.sleep(timeout_ms / 1000.0)
+            discovery.stop()
             
-        return res
+            for n in discovery.foundNodes():
+                nid = n.nodeAddress()
+                found[nid] = {'id': nid, 'rssi': n.radioStrength(), 'channels': []}
+                # Asumimos canales por defecto para descubrimiento rápido
+                found[nid]['channels'] = [
+                    {'channel': 'ch1', 'type': 'strain', 'value': 0.0},
+                    {'channel': 'ch2', 'type': 'strain', 'value': 0.0}
+                ]
+        except:
+            self._log("Fallo en AutoDiscovery, retornando vacío.")
 
-    # COMPATIBILIDAD
+        return list(found.values())
+
+    # =========================================================================
+    # INTERFAZ Y COMPATIBILIDAD
+    # =========================================================================
+
     @property
-    def state(self) -> ConnectionState: return self._state
-    def esta_conectado(self) -> bool: return self._state in (ConnectionState.CONNECTED, ConnectionState.SAMPLING)
-    def get_statistics(self) -> Dict: return {'connection_state': self._state.value}
+    def state(self) -> ConnectionState: 
+        return self._state
+    
+    def esta_conectado(self) -> bool: 
+        return self._state in (ConnectionState.CONNECTED, ConnectionState.SAMPLING)
+    
+    def get_statistics(self) -> Dict: 
+        return {'connection_state': self._state.value}
 
     def get_node_status(self, nid: int) -> Optional[Dict]: 
-        # Determinar último `last_seen` agregando los timestamps de claves compuestas
-        last = 0.0
-        for k, t in getattr(self, '_last_seen', {}).items():
-            try:
-                num = int(str(k).split(":")[0])
-                if num == nid and t > last:
-                    last = t
-            except Exception:
-                continue
-        is_online = (time.time() - last) < 5.0 if last > 0 else False
-        return {'node_id': nid, 'is_online': is_online, 'last_seen': last}
+        # Verificar si hemos recibido datos de este nodo recientemente en el buffer
+        last_seen = 0
+        is_online = False
+        
+        # Buscar en cache de valores la última actualización
+        for key, deque_vals in self._value_cache.items():
+            if str(nid) in key and len(deque_vals) > 0:
+                is_online = True # Si hay datos en cache, asumimos vivo
+                break
+        
+        # O usar el set de activos
+        if nid in self._active_node_ids:
+            is_online = True
 
+        return {'node_id': nid, 'is_online': is_online, 'last_seen': time.time() if is_online else 0}
 
     def tarar(self, nid=None): pass
     def reset_tarar(self): pass
 
+# Factory function requerida por main.py
 def create_driver(nodos_config: Optional[Dict] = None, avoid_eeprom: bool = True) -> MSCLDriver:
     return MSCLDriver(nodos_config, avoid_eeprom=avoid_eeprom)

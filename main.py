@@ -101,6 +101,13 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
                         def do_connect():
                             nonlocal connection_in_progress, acquisition_paused
                             try:
+                                # Registrar callback de progreso si el driver lo soporta
+                                try:
+                                    if hasattr(sistema_pesaje, 'set_progress_callback'):
+                                        sistema_pesaje.set_progress_callback(lambda msg: data_queue.put({'type': 'LOG', 'payload': msg}))
+                                except Exception:
+                                    pass
+
                                 connected = sistema_pesaje.conectar(ACTIVE_COM)
                                 data_queue.put({'type': 'STATUS', 'payload': connected})
                                 if connected:
@@ -114,6 +121,11 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
                                 data_queue.put({'type': 'STATUS', 'payload': False})
                                 data_queue.put({'type': 'LOG', 'payload': f"Erro: {str(e)}"})
                             finally:
+                                try:
+                                    if hasattr(sistema_pesaje, 'set_progress_callback'):
+                                        sistema_pesaje.set_progress_callback(None)
+                                except Exception:
+                                    pass
                                 connection_in_progress = False
                         
                         connection_thread = threading.Thread(target=do_connect, daemon=True)

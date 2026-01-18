@@ -44,6 +44,16 @@ args = [
     # '--debug=all',             # Descomentar si falla al arrancar para ver trazas internas
 ] + add_data_args
 
+# Opcional: compilar en un subdirectorio dentro de dist
+# Define el nombre del subdirectorio aquí o a través de la variable de entorno DIST_SUBDIR
+DIST_SUBDIR = os.environ.get('DIST_SUBDIR', 'alternative')
+dist_target = os.path.join('dist', DIST_SUBDIR)
+# Asegurar que exista la carpeta destino
+os.makedirs(dist_target, exist_ok=True)
+
+# Añadir argumento de PyInstaller para la ruta de salida
+args.append(f'--distpath={dist_target}')
+
 print("Iniciando PyInstaller...")
 PyInstaller.__main__.run(args)
-print("Compilación finalizada. Revisa la carpeta 'dist/'.")
+print(f"Compilación finalizada. Revisa la carpeta '{dist_target}'.")

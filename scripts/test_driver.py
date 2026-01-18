@@ -1,12 +1,10 @@
 """
-unified_test_driver.py
-----------------------
-Driver de Pruebas Robusto con Logging Completo y Manejo de Errores de API.
-CORREGIDO: Manejo de fallo en NodeDiscovery en MSCL v67+.
-
-USO:
-    1. Asegúrate de que la carpeta 'MSCL' esté en la raíz.
-    2. Ejecuta: python scripts/unified_test_driver.py
+test_driver_v8.py
+-----------------
+DRIVER FINAL DE RECUPERACIÓN Y PRODUCCIÓN
+- Estrategia: "Silencio largo" + "Stop Ciego" + "Ping".
+- Solución al crash de lectura (as_string).
+- Solución al error de configuración (bypass).
 """
 
 import sys
@@ -15,240 +13,191 @@ import time
 import logging
 import traceback
 
-# --- 1. CONFIGURACIÓN DE LOGGING ---
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)s | %(message)s',
-    handlers=[
-        logging.FileHandler("test_driver.log", mode='w'),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger("TestDriver")
+# --- CONFIGURACIÓN ---
+COM_PORT = "COM3"
+BAUD_RATE = 3000000
+NODE_IDS = [4248, 4249]
+TIMEOUT_RECUPERACION_SEG = 60  # Espera larga para nodos dormidos
 
-# --- 2. CARGA DE LIBRERÍA MSCL ---
-def setup_mscl_environment():
-    try:
-        if getattr(sys, 'frozen', False):
-            base_path = sys._MEIPASS
-        else:
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            base_path = os.path.abspath(os.path.join(current_dir, '..'))
+# --- LOGGING ---
+logger = logging.getLogger("DriverV8")
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
+ch = logging.StreamHandler(sys.stdout)
+ch.setFormatter(formatter)
+logger.addHandler(ch)
+fh = logging.FileHandler("test_driver.log", mode='w', encoding='utf-8')
+fh.setFormatter(formatter)
+logger.addHandler(fh)
 
-        mscl_dir = os.path.join(base_path, 'MSCL', 'x64', 'Release')
+# --- CARGA MSCL ---
+def load_mscl():
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    paths = ["MSCL/x64/Release", "../MSCL/x64/Release", "../../MSCL/x64/Release"]
+    mscl_path = None
+    for p in paths:
+        full = os.path.abspath(os.path.join(script_dir, p))
+        if os.path.exists(os.path.join(full, "mscl.py")):
+            mscl_path = full
+            break
+    if not mscl_path: return False
+    if mscl_path not in sys.path: sys.path.insert(0, mscl_path)
+    if os.name == 'nt' and hasattr(os, 'add_dll_directory'):
+        try: os.add_dll_directory(mscl_path)
+        except: pass
+    return True
 
-        if mscl_dir not in sys.path:
-            sys.path.insert(0, mscl_dir)
-        
-        if os.name == 'nt' and hasattr(os, 'add_dll_directory'):
-            if os.path.exists(mscl_dir):
-                os.add_dll_directory(mscl_dir)
-
-    except Exception as e:
-        logger.critical(f"Error configurando entorno: {e}")
-
-setup_mscl_environment()
-
-try:
-    import mscl
-    # Convertimos a string explícitamente para evitar error en objeto Version
-    logger.info(f"Librería MSCL cargada. Versión: {mscl.MSCL_VERSION}")
-except ImportError as e:
-    logger.critical(f"No se pudo importar 'mscl'. Detalle: {e}")
+if not load_mscl():
+    print("FATAL: No se encontro MSCL.")
     sys.exit(1)
-except Exception:
-    logger.info("Librería MSCL cargada (Versión desconocida).")
 
-# --- 3. PARÁMETROS ---
-COM_PORT = "COM3"       # <--- CAMBIA ESTO SI ES NECESARIO
-TARGET_RATE_HZ = 32     # Frecuencia deseada
+import mscl
 
-def preparar_nodo(base_station, node_address):
-    """
-    Verifica conexión, asegura estado IDLE y verifica/aplica configuración.
-    """
-    logger.info(f"[{node_address}] Iniciando preparación del nodo...")
+def esperar_y_detener_nodo(base_station, node_id):
+    logger.info(f"[{node_id}] Intentando recuperar control... (Max {TIMEOUT_RECUPERACION_SEG}s)")
+    node = mscl.WirelessNode(node_id, base_station)
+    start_time = time.time()
+    attempts = 0
     
-    try:
-        node = mscl.WirelessNode(node_address, base_station)
+    while (time.time() - start_time) < TIMEOUT_RECUPERACION_SEG:
+        attempts += 1
         
-        # A. PING
-        logger.info(f"[{node_address}] Haciendo Ping...")
-        ping_resp = node.ping()
-        
-        if not ping_resp.success():
-            logger.error(f"[{node_address}] FALLO PING: El nodo no responde. Verifique batería/encendido.")
-            return None
-            
-        logger.info(f"[{node_address}] Ping OK. RSSI Base: {ping_resp.baseRssi()} dBm")
-
-        # B. FORZAR IDLE
-        logger.info(f"[{node_address}] Forzando estado IDLE...")
-        result = node.setToIdle()
-        if not result.success():
-             logger.warning(f"[{node_address}] SetToIdle devolvió fallo (puede que ya estuviera idle).")
-        
-        # C. VERIFICACIÓN CONFIGURACIÓN
-        logger.info(f"[{node_address}] Leyendo config actual...")
+        # ESTRATEGIA: "Stop Ciego". 
+        # Intentamos parar el nodo aunque no sepamos si está ahí.
         try:
-            config = mscl.WirelessNodeConfig(node)
-            current_rate = config.sampleRate()
-            target_rate = mscl.SampleRate.Hertz(TARGET_RATE_HZ)
+            node.setToIdle()
+        except: 
+            pass 
+
+        # Ahora probamos si responde
+        try:
+            res = node.ping()
+            if res.success():
+                logger.info(f"[{node_id}] >>> CONTACTO EXITOSO <<<")
+                # Asegurar una vez más
+                node.setToIdle()
+                return node
+        except:
+            pass
+        
+        # Feedback visual cada 5 intentos
+        if attempts % 5 == 0:
+            print(f"   ... buscando [{node_id}] ...")
             
-            logger.info(f"[{node_address}] Frecuencia actual: {current_rate.prettyStr()}")
+        time.sleep(0.5)
 
-            if current_rate.samples() != target_rate.samples():
-                logger.warning(f"[{node_address}] Configurando a {target_rate.prettyStr()}...")
-                config.sampleRate(target_rate)
-                config.apply()
-                logger.info(f"[{node_address}] Configuración aplicada.")
-            else:
-                logger.info(f"[{node_address}] Configuración correcta. Saltando escritura.")
-                
-        except Exception as e:
-            logger.error(f"[{node_address}] Error leyendo/escribiendo config: {e}")
-            
-        return node
+    logger.error(f"[{node_id}] FALLO: No se pudo contactar.")
+    return None
 
-    except mscl.Error as e:
-        logger.error(f"[{node_address}] Error MSCL Crítico: {e}")
-        return None
-
-def run_test():
-    global COM_PORT
+def run_system():
+    logger.info(f"=== INICIANDO DRIVER V8 (RECUPERACION) ===")
     connection = None
     base_station = None
     
-    logger.info("="*50)
-    logger.info("   TEST DRIVER MICROSTRAIN (UNIFICADO)")
-    logger.info("="*50)
-
-    user_port = input(f"Puerto COM [{COM_PORT}] (Enter para confirmar): ").strip()
-    if user_port: COM_PORT = user_port
-
     try:
-        # 1. CONEXIÓN BASE STATION
-        logger.info(f"Conectando a BaseStation en {COM_PORT}...")
-        connection = mscl.Connection.Serial(COM_PORT)
+        # 1. CONEXIÓN
+        logger.info(f"Abriendo {COM_PORT} @ {BAUD_RATE}...")
+        connection = mscl.Connection.Serial(COM_PORT, BAUD_RATE)
         base_station = mscl.BaseStation(connection)
         
-        if not base_station.ping():
-            logger.error("La BaseStation no responde (Ping fallido).")
-            return
-
-        # 2. LIMPIEZA
-        logger.info("Desactivando Beacon previo...")
+        # 2. SILENCIO RADIAL (CRÍTICO)
+        logger.info("Apagando Beacon...")
         try:
             base_station.disableBeacon()
-        except:
-            pass 
-
-        # 3. DESCUBRIMIENTO (ROBUSTO)
-        logger.info("Iniciando escaneo de nodos...")
-        node_list = []
+        except: pass
         
-        try:
-            # Intentamos usar el NodeDiscovery estándar
-            discovery = mscl.NodeDiscovery(base_station)
-            logger.info("Escuchando (5 segundos)... ENCIENDA LOS SENSORES.")
-            discovery.start()
-            time.sleep(5)
-            discovery.stop()
-            
-            nodes_found = discovery.foundNodes()
-            for n in nodes_found:
-                addr = n.nodeAddress()
-                rssi = n.radioStrength()
-                logger.info(f"-> Detectado: {addr} [RSSI: {rssi}]")
-                node_list.append(addr)
-                
-        except TypeError:
-            logger.warning("ADVERTENCIA: La función de Auto-Descubrimiento falló (incompatibilidad de versión).")
-            logger.warning("Pasando a modo manual.")
-        except Exception as e:
-            logger.error(f"Error en descubrimiento: {e}")
+        # Esperamos 6 segundos para garantizar que los nodos detecten la pérdida del beacon
+        # y salgan del modo de muestreo sincronizado.
+        logger.info("Esperando 6 segundos para limpiar la red...")
+        time.sleep(6)
 
-        # SI NO ENCONTRAMOS NODOS (O FALLÓ EL DISCOVERY), PEDIMOS MANUALMENTE
-        if len(node_list) == 0:
-            print("\n" + "!"*40)
-            print(" No se detectaron nodos automáticamente.")
-            print(" Por favor ingrese el ID del sensor (ej: 31849)")
-            print("!"*40)
-            manual = input(">> ID del Nodo: ").strip()
-            if manual.isdigit():
-                node_list.append(int(manual))
-            else:
-                logger.info("No se ingresó ID válido. Saliendo.")
-                return
-
-        # 4. PREPARACIÓN Y RED
-        logger.info(f"Preparando red con {len(node_list)} nodos...")
+        # 3. GESTIÓN DE NODOS
         network = mscl.SyncSamplingNetwork(base_station)
-        ready_count = 0
+        nodos_ok = 0
 
-        for address in node_list:
-            node_obj = preparar_nodo(base_station, address)
+        for nid in NODE_IDS:
+            node_obj = esperar_y_detener_nodo(base_station, nid)
+            
             if node_obj:
-                logger.info(f"[{address}] Agregando a red...")
+                # CONFIGURACIÓN (Bypass si falla librería)
+                try:
+                    logger.info(f"[{nid}] Validando config...")
+                    config = mscl.WirelessNodeConfig(node_obj)
+                    target = mscl.SampleRate.Seconds(2) # 0.5 Hz
+                    
+                    if config.sampleRate().prettyStr() != target.prettyStr():
+                        logger.info(f"[{nid}] Ajustando a 0.5Hz...")
+                        config.sampleRate(target)
+                        config.apply()
+                except TypeError:
+                    logger.warning(f"[{nid}] Libreria MSCL bug config. Saltando.")
+                except Exception as e:
+                    logger.error(f"[{nid}] Error menor config: {e}")
+                
+                # AÑADIR A RED
                 network.addNode(node_obj)
-                ready_count += 1
-        
-        if ready_count == 0:
-            logger.error("Ningún nodo listo para iniciar.")
+                nodos_ok += 1
+
+        if nodos_ok == 0:
+            logger.error("SIN NODOS. Intente desconectar/conectar el Gateway USB.")
             return
 
-        # 5. INICIO
-        logger.info(f"Iniciando muestreo sincronizado...")
+        # 4. APLICAR Y ARRANCAR
+        logger.info("Aplicando config de red al Gateway...")
         try:
+            network.applyConfiguration()
+            logger.info("Iniciando Muestreo...")
             network.startSampling()
-            logger.info(">>> RED INICIADA. Beacon ACTIVO. <<<")
-        except mscl.Error as e:
+            logger.info(">>> RED OPERATIVA (Beacon ON) <<<")
+        except Exception as e:
             logger.critical(f"Fallo al iniciar red: {e}")
             return
 
-        # 6. BUCLE DE LECTURA
-        logger.info("Leyendo datos... (CTRL+C para detener)")
-        start_time = time.time()
-        packet_count = 0
+        # 5. BUCLE DE DATOS SEGURO
+        logger.info("Esperando datos (0.5 Hz)... CTRL+C para salir.")
+        last_t = time.time()
         
         while True:
             sweeps = base_station.getData(500)
             
             for sweep in sweeps:
-                packet_count += 1
+                last_t = time.time()
                 nid = sweep.nodeAddress()
                 
-                vals = []
+                data_str = ""
+                # Iteramos sobre los puntos
                 for d in sweep.data():
-                    if d.valid():
-                        try:
-                            v = d.as_float()
-                            vals.append(f"{d.channelName()}:{v:.4f}")
-                        except:
-                            vals.append(f"{d.channelName()}:raw")
+                    # Usamos .as_string() para MAXIMA seguridad contra crashes
+                    try:
+                        channel = d.channelName()
+                        # Solo mostrar canales útiles (evitar mostrar timestamps internos si molestan)
+                        if "ch" in channel.lower() or "val" in channel.lower():
+                            val = d.as_string() 
+                            data_str += f"[{channel}: {val}] "
+                    except:
+                        pass
                 
-                print(f"RX [{nid}] | {', '.join(vals)}")
+                if data_str:
+                    print(f"RX [{nid}] | {data_str}")
 
-            if packet_count == 0 and (time.time() - start_time > 5):
-                print("... Esperando datos (Verifique LED verde en nodo) ...")
-                start_time = time.time()
+            if time.time() - last_t > 10:
+                print("... Esperando datos ...")
+                last_t = time.time()
 
     except KeyboardInterrupt:
-        logger.info("\nDetenido por usuario.")
+        print("\nDetenido.")
     except Exception as e:
-        logger.critical(f"Error general: {e}")
+        logger.critical(f"Error General: {e}")
         traceback.print_exc()
     finally:
-        logger.info("Cerrando recursos...")
+        logger.info("Cerrando...")
         if base_station:
-            try:
-                base_station.disableBeacon()
-                logger.info("Beacon apagado.")
-            except:
-                pass
+            try: base_station.disableBeacon()
+            except: pass
         if connection:
-            connection.disconnect()
+            try: connection.disconnect()
+            except: pass
         input("Presiona ENTER para salir.")
 
 if __name__ == "__main__":
-    run_test()
+    run_system()
