@@ -371,35 +371,51 @@ def main():
     )
     backend_thread.start()
     # Solo modo tablet: sin barra superior
+    # Asegurar AppUserModelID en Windows antes de crear la ventana (influyó en el icono del taskbar)
+    try:
+        if sys.platform == 'win32':
+            import ctypes
+            myappid = 'com.labse.balanza'
+            try:
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+            except Exception:
+                # No crítico si falla (sistemas sin shell32 expuesto)
+                pass
+    except Exception:
+        pass
+
     app = BalanzaGUI(data_queue, command_queue, procesador)
-    # Establecer icono de la ventana usando assets/icon.ico (fallback a icon.png)
+
+    # Establecer icono de la aplicación usando assets/icon.ico (fallback a icon.png).
+    # Usar iconbitmap + iconphoto(True, ...) y mantener referencia PhotoImage para evitar GC.
     try:
         base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
         assets_dir = os.path.join(base_path, 'assets')
         ico_path = os.path.join(assets_dir, 'icon.ico')
         png_path = os.path.join(assets_dir, 'icon.png')
-        if os.path.exists(ico_path):
+        from PIL import Image, ImageTk
+
+        # Preferir PNG (mejor soporte para transparencias y platforma moderna)
+        if os.path.exists(png_path):
             try:
-                app.iconbitmap(ico_path)
-            except Exception:
-                # En algunas plataformas/tk versiones puede fallar; intentar iconphoto
-                try:
-                    img = None
-                    from PIL import Image, ImageTk
-                    img = ImageTk.PhotoImage(Image.open(ico_path))
-                    app.iconphoto(False, img)
-                    # Mantener referencia para evitar GC
-                    app._icon_img = img
-                except Exception:
-                    pass
-        elif os.path.exists(png_path):
-            try:
-                from PIL import Image, ImageTk
                 img = ImageTk.PhotoImage(Image.open(png_path))
-                app.iconphoto(False, img)
+                app.iconphoto(True, img)
                 app._icon_img = img
             except Exception:
                 pass
+        elif os.path.exists(ico_path):
+            try:
+                # Intentar usar el .ico nativo primero
+                app.iconbitmap(ico_path)
+            except Exception:
+                try:
+                    img = ImageTk.PhotoImage(Image.open(ico_path))
+                    app.iconphoto(True, img)
+                    app._icon_img = img
+                except Exception:
+                    pass
+    except Exception:
+        pass
     except Exception:
         pass
     app.mainloop()

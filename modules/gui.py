@@ -282,6 +282,11 @@ class BalanzaGUI(ttk.Window):
         # --- Header (Barra personalizada para reemplazar barra de Windows) ---
         header_frame = ttk.Frame(main_container, style='Header.TFrame', padding=self.scaled(8))
         header_frame.pack(fill=X, pady=(0, self.scaled(10)))
+        # Exponer header para que el proceso de arranque pueda inyectar un icono nativo
+        try:
+            self.header_frame = header_frame
+        except Exception:
+            pass
         
         # Permitir arrastrar la ventana desde el header
         header_frame.bind("<Button-1>", self._start_drag)
@@ -290,6 +295,10 @@ class BalanzaGUI(ttk.Window):
         # Brand Area
         brand_frame = ttk.Frame(header_frame, style='Header.TFrame')
         brand_frame.pack(side=LEFT)
+        try:
+            self.brand_frame = brand_frame
+        except Exception:
+            pass
         brand_frame.bind("<Button-1>", self._start_drag)
         brand_frame.bind("<B1-Motion>", self._on_drag)
         
@@ -367,6 +376,57 @@ class BalanzaGUI(ttk.Window):
                 self.log_message("Logo widget creado y empaquetado en header.")
             except Exception:
                 pass
+
+    def add_header_icon_from_pil(self, pil_img):
+        """Inserta un pequeño icono (PIL Image) al inicio de la cabecera.
+
+        Esto es útil cuando el icono nativo no aparece en la barra de título.
+        """
+        try:
+            if pil_img is None:
+                return
+            if Image is None or ImageTk is None:
+                return
+            # Determinar tamaño objetivo (no demasiado grande)
+            try:
+                h = self.scaled(20)
+            except Exception:
+                h = 20
+            try:
+                w_percent = (h / float(pil_img.size[1]))
+                w_size = int((float(pil_img.size[0]) * float(w_percent)))
+            except Exception:
+                w_size, h = h, h
+            try:
+                resample = getattr(Image, 'Resampling', Image).LANCZOS
+            except Exception:
+                try:
+                    resample = Image.LANCZOS
+                except Exception:
+                    resample = None
+
+            try:
+                if resample is not None:
+                    pil_resized = pil_img.resize((w_size, h), resample)
+                else:
+                    pil_resized = pil_img.resize((w_size, h))
+                imgobj = ImageTk.PhotoImage(pil_resized)
+            except Exception:
+                return
+
+            try:
+                # Insertar antes del logo si existe
+                target = getattr(self, 'brand_frame', None) or getattr(self, 'header_frame', None)
+                if target is not None:
+                    icon_lbl = ttk.Label(target, image=imgobj)
+                    # colocar a la izquierda, antes de cualquier otro widget
+                    icon_lbl.pack(side=LEFT, padx=(0, 8))
+                    # Mantener referencia para evitar GC
+                    self._title_icon_img = imgobj
+            except Exception:
+                pass
+        except Exception:
+            pass
         
         # Header Actions - Botones uniformes y grandes para tablet
         actions_frame = ttk.Frame(header_frame, style='Header.TFrame')
