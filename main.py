@@ -1,22 +1,14 @@
-"""
-Balanza-Py - Sistema de Pesagem Industrial
-Ponto de entrada principal da aplicacao.
-
-Arquitetura: Producer-Consumer com threads
-- Thread Principal: GUI (Tkinter)
-- Thread Backend: Aquisicao de dados e processamento
-"""
-
 import sys
 import os
 import time
 import threading
 import queue
-import random
 from typing import Dict
 
-# Garantir que os modulos podem ser importados
-current_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Usar la lógica de rutas de config.py para máxima compatibilidad (EXE/script)
+import config
+current_dir = config.get_writable_dir()
 sys.path.append(current_dir)
 
 from config import MODO_EJECUCION, PUERTO_COM as DEFAULT_COM, NODOS_CONFIG as DEFAULT_NODOS
@@ -24,15 +16,16 @@ from modules.data_processor import DataProcessor
 from modules.gui import BalanzaGUI
 from modules.factory import criar_sistema_pesaje, check_mscl_installation
 
-# Variaveis globais de configuracao (podem ser sobrescritas por settings.json)
+
 ACTIVE_COM = DEFAULT_COM
 ACTIVE_NODOS = DEFAULT_NODOS
 ACTIVE_MODE = MODO_EJECUCION
+USE_SENSOR_CONFIG = True
 
 
 def load_custom_settings():
     """Carrega configuracao de settings.json se existir."""
-    global ACTIVE_COM, ACTIVE_NODOS, ACTIVE_MODE
+    global ACTIVE_COM, ACTIVE_NODOS, ACTIVE_MODE, USE_SENSOR_CONFIG
     import json
     
     settings_path = os.path.join(current_dir, "settings.json")
@@ -40,19 +33,15 @@ def load_custom_settings():
         try:
             with open(settings_path, 'r', encoding='utf-8') as f:
                 settings = json.load(f)
-            
+
+            # Leer si se debe usar la configuración cargada en el nodo
+            USE_SENSOR_CONFIG = settings.get("use_sensor_config", True)
+
             # Configurar Modo de Execucao
             if "execution_mode" in settings:
                 ACTIVE_MODE = settings["execution_mode"]
-                
-            # Configurar Porta / Conexao
-            conn_type = settings.get("connection_type", "SERIAL")
-            if conn_type == "TCP":
-                ip = settings.get("tcp_ip", "127.0.0.1")
-                port = settings.get("tcp_port", "8000")
-                ACTIVE_COM = f"{ip}:{port}"
-            else:
-                ACTIVE_COM = settings.get("serial_port", DEFAULT_COM)
+
+            ACTIVE_COM = settings.get("serial_port", DEFAULT_COM)
                 
             # Configurar Nos
             if "nodes" in settings:
@@ -69,21 +58,17 @@ def load_custom_settings():
 
 def show_startup_info():
     """Mostra informacoes de inicializacao."""
-    print("=" * 60)
-    print("  BALANZA-PY - Sistema de Pesagem Industrial")
-    print("=" * 60)
-    print(f"  Modo de Execucao: {ACTIVE_MODE}")
-    
-    # Verificar MSCL
-    mscl_info = check_mscl_installation()
-    if mscl_info["installed"]:
-        print(f"  MSCL: Instalado")
-        if mscl_info["version"]:
-            print(f"  MSCL Versao: {mscl_info['version']}")
-    else:
-        print(f"  MSCL: Nao encontrado")
-    
-    print("=" * 60)
+    # Usar logger central para mensajes de inicio (conciso)
+    try:
+        from modules import logger
+        logger.step('startup', f"Modo={ACTIVE_MODE} | use_sensor_config={USE_SENSOR_CONFIG}")
+        mscl_info = check_mscl_installation()
+        if mscl_info.get('installed'):
+            logger.info(f"MSCL instalado | version={mscl_info.get('version')}")
+        else:
+            logger.warning("MSCL no encontrado")
+    except Exception:
+        pass
 
 
 def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
@@ -98,6 +83,10 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
     MAX_AUTO_RECONNECT = 5          # Máximo intentos automáticos
     reconnect_check_counter = {}    # Contador para espaciar notificaciones
     
+    # Variables para conexión asíncrona
+    connection_thread = None
+    connection_in_progress = False
+    
     while running:
         # 1. Processar Comandos da GUI
         try:
@@ -106,19 +95,47 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
                 cmd = cmd_msg['cmd']
                 
                 if cmd == 'CONNECT':
-                    try:
-                        # Usar a configuracao ativa
-                        connected = sistema_pesaje.conectar(ACTIVE_COM)
-                        data_queue.put({'type': 'STATUS', 'payload': connected})
-                        if connected:
-                            data_queue.put({'type': 'LOG', 'payload': f"Conectado com sucesso a {ACTIVE_COM}"})
-                            acquisition_paused = False
-                            reconnecting_nodes.clear()
-                            reconnect_attempts.clear()
-                        else:
-                            data_queue.put({'type': 'LOG', 'payload': f"Falha ao conectar a {ACTIVE_COM}"})
-                    except Exception as e:
-                        data_queue.put({'type': 'ERROR', 'payload': str(e)})
+                    if not connection_in_progress:
+                        connection_in_progress = True
+                        
+                        def do_connect():
+                            nonlocal connection_in_progress, acquisition_paused
+                            try:
+                                # Registrar callback de progreso si el driver lo soporta
+                                try:
+                                    if hasattr(sistema_pesaje, 'set_progress_callback'):
+                                        sistema_pesaje.set_progress_callback(lambda msg: data_queue.put({'type': 'LOG', 'payload': msg}))
+                                except Exception:
+                                    pass
+
+                                connected = sistema_pesaje.conectar(ACTIVE_COM)
+                                data_queue.put({'type': 'STATUS', 'payload': connected})
+                                if connected:
+                                    data_queue.put({'type': 'LOG', 'payload': f"Conectado com sucesso a {ACTIVE_COM}"})
+                                    acquisition_paused = False
+                                    reconnecting_nodes.clear()
+                                    reconnect_attempts.clear()
+                                else:
+                                    data_queue.put({'type': 'LOG', 'payload': f"Falha ao conectar a {ACTIVE_COM}"})
+                            except Exception as e:
+                                data_queue.put({'type': 'STATUS', 'payload': False})
+                                data_queue.put({'type': 'LOG', 'payload': f"Erro: {str(e)}"})
+                            finally:
+                                try:
+                                    if hasattr(sistema_pesaje, 'set_progress_callback'):
+                                        sistema_pesaje.set_progress_callback(None)
+                                except Exception:
+                                    pass
+                                connection_in_progress = False
+                        
+                        connection_thread = threading.Thread(target=do_connect, daemon=True)
+                        connection_thread.start()
+                
+                elif cmd == 'CONNECT_WITH_PROGRESS':
+                    pass
+                
+                elif cmd == 'CANCEL_CONNECT':
+                    pass
                     
                 elif cmd == 'DISCONNECT':
                     sistema_pesaje.desconectar()
@@ -144,114 +161,62 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
                     acquisition_paused = False
                     
                 elif cmd == 'TARE':
-                    procesador.set_tara()
-                    data_queue.put({'type': 'LOG', 'payload': "Tara aplicada."})
+                    try:
+                        new_tare = procesador.set_tara()
+                        # Enviar actualización inmediata a la GUI para refrescar labels
+                        data_queue.put({'type': 'DATA', 'payload': {'total_tare': new_tare}})
+                        data_queue.put({'type': 'LOG', 'payload': "Tara aplicada."})
+                    except Exception:
+                        data_queue.put({'type': 'LOG', 'payload': "Erro aplicando tara."})
                     
                 elif cmd == 'RESET_TARE':
-                    procesador.reset_tara()
-                    data_queue.put({'type': 'LOG', 'payload': "Tara reiniciada para 0."})
+                    try:
+                        procesador.reset_tara()
+                        # Notificar GUI inmediatamente
+                        data_queue.put({'type': 'DATA', 'payload': {'total_tare': 0.0}})
+                        data_queue.put({'type': 'LOG', 'payload': "Tara reiniciada para 0."})
+                    except Exception:
+                        data_queue.put({'type': 'LOG', 'payload': "Erro reiniciando tara."})
                     
                 elif cmd == 'DISCOVER_NODES':
-                    # Descobrir nos usando MSCL
+                    # Descobrir nos usando MSCL (WSDA-USB-200 Gateway)
                     if hasattr(sistema_pesaje, 'descubrir_nodos'):
                         try:
-                            nodos = sistema_pesaje.descubrir_nodos()
+                            data_queue.put({'type': 'LOG', 'payload': "Buscando nós SG-Link via WSDA-USB-200..."})
+                            nodos = sistema_pesaje.descubrir_nodos(timeout_ms=5000)
+                            
                             if nodos:
-                                data_queue.put({'type': 'LOG', 'payload': f"Nos encontrados: {nodos}"})
+                                # Enviar datos estructurados a la GUI
+                                data_queue.put({
+                                    'type': 'DISCOVERED_NODES',
+                                    'payload': nodos
+                                })
+                                
+                                # También log resumen
+                                total_channels = sum(len(n.get('channels', [])) for n in nodos)
+                                data_queue.put({
+                                    'type': 'LOG', 
+                                    'payload': f"✓ Encontrados {len(nodos)} nodo(s) com {total_channels} canal(is) total"
+                                })
                             else:
-                                data_queue.put({'type': 'LOG', 'payload': "Nenhum no encontrado. Verifique a conexao."})
+                                data_queue.put({
+                                    'type': 'DISCOVERED_NODES',
+                                    'payload': []
+                                })
+                                data_queue.put({
+                                    'type': 'LOG', 
+                                    'payload': "⚠️ Nenhum nó encontrado. Verifique se os nós estão transmitindo."
+                                })
                         except Exception as e:
-                            data_queue.put({'type': 'LOG', 'payload': f"Erro buscando nos: {e}"})
+                            data_queue.put({'type': 'LOG', 'payload': f"Erro buscando nós: {e}"})
+                            data_queue.put({'type': 'DISCOVERED_NODES', 'payload': []})
                     else:
-                        data_queue.put({'type': 'LOG', 'payload': "Descoberta nao disponivel em modo simulacao."})
+                        data_queue.put({'type': 'LOG', 'payload': "Descoberta não disponível em modo simulação."})
+                        data_queue.put({'type': 'DISCOVERED_NODES', 'payload': []})
                     
                 elif cmd == 'EXIT':
                     running = False
                     sistema_pesaje.desconectar()
-                
-                # === Comandos de TEST (solo en modo MOCK) ===
-                elif cmd == 'TEST_SENSOR_OFFLINE':
-                    node_id = cmd_msg.get('node_id')
-                    if hasattr(sistema_pesaje, 'simular_desconexao_no'):
-                        sistema_pesaje.simular_desconexao_no(node_id)
-                        data_queue.put({'type': 'LOG', 'payload': f"[TEST] Sensor {node_id} marcado como offline"})
-                    else:
-                        data_queue.put({'type': 'LOG', 'payload': "[TEST] Comando não disponível neste modo"})
-                
-                elif cmd == 'TEST_SENSOR_ONLINE':
-                    node_id = cmd_msg.get('node_id')
-                    if hasattr(sistema_pesaje, 'simular_reconexao_no'):
-                        sistema_pesaje.simular_reconexao_no(node_id)
-                        data_queue.put({'type': 'LOG', 'payload': f"[TEST] Sensor {node_id} reconectado"})
-                
-                elif cmd == 'TEST_RAMP_UP':
-                    weight = cmd_msg.get('weight', 50.0)
-                    # Soportar MSCL_MOCK con _mock_nodes
-                    if hasattr(sistema_pesaje, '_mock_nodes'):
-                        per_node = weight / len(sistema_pesaje._mock_nodes)
-                        for node in sistema_pesaje._mock_nodes.values():
-                            if hasattr(node, 'apply_load'):
-                                node.apply_load(per_node)
-                        data_queue.put({'type': 'LOG', 'payload': f"[TEST] Rampa de carga: +{weight}t distribuídos"})
-                    # Soportar MOCK simple con _base_values
-                    elif hasattr(sistema_pesaje, '_base_values'):
-                        per_node = weight / len(sistema_pesaje._base_values)
-                        for node_id in sistema_pesaje._base_values:
-                            sistema_pesaje._base_values[node_id] += per_node
-                        data_queue.put({'type': 'LOG', 'payload': f"[TEST] Rampa de carga: +{weight}t distribuídos"})
-                
-                elif cmd == 'TEST_RAMP_DOWN':
-                    if hasattr(sistema_pesaje, '_mock_nodes'):
-                        for node in sistema_pesaje._mock_nodes.values():
-                            if hasattr(node, 'reset_to_base'):
-                                node.reset_to_base(5.0)
-                        data_queue.put({'type': 'LOG', 'payload': "[TEST] Descarga simulada"})
-                    elif hasattr(sistema_pesaje, '_base_values'):
-                        for node_id in sistema_pesaje._base_values:
-                            sistema_pesaje._base_values[node_id] = random.uniform(5.0, 8.0)
-                        data_queue.put({'type': 'LOG', 'payload': "[TEST] Descarga simulada"})
-                
-                elif cmd == 'TEST_SPIKE':
-                    magnitude = cmd_msg.get('magnitude', 10.0)
-                    if hasattr(sistema_pesaje, '_mock_nodes'):
-                        per_node = magnitude / len(sistema_pesaje._mock_nodes)
-                        for node in sistema_pesaje._mock_nodes.values():
-                            if hasattr(node, 'apply_modifiers'):
-                                node.apply_modifiers({'spike': per_node})
-                        data_queue.put({'type': 'LOG', 'payload': f"[TEST] Impacto: +{magnitude}t"})
-                    elif hasattr(sistema_pesaje, '_base_values'):
-                        # Para MOCK simple, solo incrementar temporalmente
-                        per_node = magnitude / len(sistema_pesaje._base_values)
-                        for node_id in sistema_pesaje._base_values:
-                            sistema_pesaje._base_values[node_id] += per_node
-                        data_queue.put({'type': 'LOG', 'payload': f"[TEST] Impacto: +{magnitude}t"})
-                
-                elif cmd == 'TEST_NOISE':
-                    if hasattr(sistema_pesaje, '_mock_nodes'):
-                        for node in sistema_pesaje._mock_nodes.values():
-                            if hasattr(node, 'apply_modifiers'):
-                                node.apply_modifiers({'noise': 0.5})
-                        data_queue.put({'type': 'LOG', 'payload': "[TEST] Alto ruído activado"})
-                    elif hasattr(sistema_pesaje, '_test_modifiers') or hasattr(sistema_pesaje, '_base_values'):
-                        sistema_pesaje._test_modifiers = {nid: {'noise': 0.5} for nid in sistema_pesaje._base_values}
-                        data_queue.put({'type': 'LOG', 'payload': "[TEST] Alto ruído activado"})
-                
-                elif cmd == 'TEST_RESET_ALL':
-                    if hasattr(sistema_pesaje, '_mock_nodes'):
-                        for node in sistema_pesaje._mock_nodes.values():
-                            if hasattr(node, 'set_offline'):
-                                node.set_offline(False)
-                            if hasattr(node, 'apply_modifiers'):
-                                node.apply_modifiers({})
-                            if hasattr(node, 'reset_to_base'):
-                                node.reset_to_base()
-                        data_queue.put({'type': 'LOG', 'payload': "[TEST] Todos os testes resetados"})
-                    elif hasattr(sistema_pesaje, '_base_values'):
-                        sistema_pesaje._offline_nodes = set()
-                        sistema_pesaje._test_modifiers = {}
-                        for node_id in sistema_pesaje._base_values:
-                            sistema_pesaje._base_values[node_id] = random.uniform(5.0, 15.0)
-                        data_queue.put({'type': 'LOG', 'payload': "[TEST] Todos os testes resetados"})
                     
         except queue.Empty:
             pass
@@ -263,6 +228,13 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
                 
                 # Sempre processamos para verificar timeouts
                 datos_procesados = procesador.procesar(raw_data)
+
+                # Debug: registrar resumen rápido de lo que devolvió el procesador
+                try:
+                    sensor_keys = list(datos_procesados.get('sensores', {}).keys())
+                    data_queue.put({'type': 'LOG', 'payload': f"Procesador: sensores={sensor_keys} total={datos_procesados.get('total')} any_disconnected={datos_procesados.get('any_disconnected', False)}"})
+                except Exception:
+                    pass
                 
                 # Extrair logs do processador e enviar
                 if 'logs' in datos_procesados:
@@ -359,33 +331,77 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
 
 def main():
     """Funcao principal da aplicacao."""
-    # Carregar configuracao personalizada primeiro (para ter ACTIVE_MODE)
-    load_custom_settings()
+    # El modo de pantalla se determina por configuración
+    # Si el modo es 'tablet', se usará pantalla completa sin barra
+    # Si no, se usará ventana normal
     
-    # Mostrar informacoes de inicializacao
+    load_custom_settings()
     show_startup_info()
-
-    # Filas de comunicacao thread-safe
     data_queue = queue.Queue()
     command_queue = queue.Queue()
-    
-    # Inicializar Logica de Negocio
     procesador = DataProcessor(ACTIVE_NODOS)
-    
-    # Inicializar Hardware (Mock ou Real) usando a factory e modo configurado
-    print(f"[INFO] Criando sistema de pesagem no modo: {ACTIVE_MODE}")
-    sistema_pesaje = criar_sistema_pesaje(ACTIVE_MODE, ACTIVE_NODOS)
-    
-    # Iniciar Thread de Backend
+    if procesador.load_tara_state():
+        import datetime, os
+        try:
+            from modules import logger
+            logger.info('Estado de tara cargado de settings.json')
+        except Exception:
+            pass
+    try:
+        from modules import logger
+        logger.step('init', f'Creando sistema de pesaje | modo={ACTIVE_MODE}')
+    except Exception:
+        pass
+    # Crear el driver en modo normal (permitir configuración de la red)
+    # para intentar iniciar muestreo sincronizado y ver datos en tiempo real.
+    sistema_pesaje = criar_sistema_pesaje(ACTIVE_MODE, ACTIVE_NODOS, use_sensor_config=USE_SENSOR_CONFIG, avoid_eeprom=False)
+    try:
+        from modules import logger
+        # Log mapping lógico -> físico para diagnóstico rápido
+        mapping_lines = []
+        for name, cfg in ACTIVE_NODOS.items():
+            mapping_lines.append(f"{name} -> id={cfg.get('id')} ch={cfg.get('ch')} serial={cfg.get('serial')}")
+        logger.info('Mapping lógico→físico: ' + '; '.join(mapping_lines))
+    except Exception:
+        pass
     backend_thread = threading.Thread(
         target=hilo_adquisicion,
         args=(data_queue, command_queue, sistema_pesaje, procesador),
         daemon=True
     )
     backend_thread.start()
-    
-    # Iniciar GUI (Thread Principal)
-    app = BalanzaGUI(data_queue, command_queue)
+    # Solo modo tablet: sin barra superior
+    app = BalanzaGUI(data_queue, command_queue, procesador)
+    # Establecer icono de la ventana usando assets/icon.ico (fallback a icon.png)
+    try:
+        base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+        assets_dir = os.path.join(base_path, 'assets')
+        ico_path = os.path.join(assets_dir, 'icon.ico')
+        png_path = os.path.join(assets_dir, 'icon.png')
+        if os.path.exists(ico_path):
+            try:
+                app.iconbitmap(ico_path)
+            except Exception:
+                # En algunas plataformas/tk versiones puede fallar; intentar iconphoto
+                try:
+                    img = None
+                    from PIL import Image, ImageTk
+                    img = ImageTk.PhotoImage(Image.open(ico_path))
+                    app.iconphoto(False, img)
+                    # Mantener referencia para evitar GC
+                    app._icon_img = img
+                except Exception:
+                    pass
+        elif os.path.exists(png_path):
+            try:
+                from PIL import Image, ImageTk
+                img = ImageTk.PhotoImage(Image.open(png_path))
+                app.iconphoto(False, img)
+                app._icon_img = img
+            except Exception:
+                pass
+    except Exception:
+        pass
     app.mainloop()
 
 

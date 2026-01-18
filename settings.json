@@ -1,25 +1,30 @@
 {
-    "execution_mode": "MSCL_MOCK",
-    "connection_type": "TCP",
-    "serial_port": "COM3",
-    "tcp_ip": "192.168.0.100",
-    "tcp_port": "5000",
-    "nodes": {
-        "celda_sup_izq": {
-            "id": 11111,
-            "ch": "ch1"
-        },
-        "celda_sup_der": {
-            "id": 22222,
-            "ch": "ch1"
-        },
-        "celda_inf_izq": {
-            "id": 67890,
-            "ch": "ch1"
-        },
-        "celda_inf_der": {
-            "id": 12345,
-            "ch": "ch1"
-        }
+  "execution_mode": "REAL",
+  "connection_type": "SERIAL",
+  "serial_port": "COM3",
+  "tcp_ip": "",
+  "tcp_port": "",
+  "nodes": {
+    "celda_1": {
+      "id": 4248,
+      "ch": "ch1",
+      "serial": "3012"
+    },
+    "celda_2": {
+      "id": 4249,
+      "ch": "ch2",
+      "serial": "3013"
+    },
+    "celda_3": {
+      "id": 4248,
+      "ch": "ch2",
+      "serial": "3011"
+    },
+    "celda_4": {
+      "id": 4249,
+      "ch": "ch1",
+      "serial": "3010"
     }
+  },
+  "tara_global": 0.0
 }
