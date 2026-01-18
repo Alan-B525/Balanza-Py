@@ -2,7 +2,7 @@
 sensor_driver.py - Driver Industrial "Acorazado" (V8)
 Basado en pruebas de campo exitosas.
 
-ESTRATEGIA V8 (Recuperación y Robustez):
+ESTRATEGIA (Recuperación y Robustez):
 1. Silencio Radial: Apagar Beacon y esperar 6s para que los nodos "zombies" despierten.
 2. Persistencia Agresiva: Bombardear con 'SetToIdle' antes de hacer Ping.
 3. Tolerancia a Fallos: Si la librería MSCL falla al configurar (bug v67), se salta el paso.
@@ -71,7 +71,7 @@ class MSCLDriver(ISistemaPesaje):
     FRAME_TIMEOUT_S = 0.05   # Ventana de agregación
     TIMESTAMP_TOLERANCE_NS = 20_000_000 # 20ms tolerancia de sincronización
     
-    # Configuración V8
+    # Configuración
     RECOVERY_TIMEOUT_S = 30  # Tiempo máx intentando despertar un nodo
     SAMPLE_RATE_HZ = 0.5     # 1 muestra cada 2 segundos
 
@@ -144,12 +144,12 @@ class MSCLDriver(ISistemaPesaje):
         """Wrapper de log para integrarse con el sistema o imprimir."""
         try:
             from . import logger
-            logger.info(f"[MSCL V8] {msg}")
+            logger.info(f"[MSCL] {msg}")
         except:
-            print(f"[MSCL V8] {msg}")
+            print(f"[MSCL] {msg}")
 
     # =========================================================================
-    # LÓGICA DE CONEXIÓN ROBUSTA (V8)
+    # LÓGICA DE CONEXIÓN
     # =========================================================================
 
     def conectar(self, puerto: str) -> bool:
@@ -158,7 +158,7 @@ class MSCLDriver(ISistemaPesaje):
                 return True
 
             self._state = ConnectionState.CONNECTING
-            self._emit_progress(f"Iniciando protocolo V8 em {puerto} @ {self.BAUD_RATE}...")
+            self._emit_progress(f"Iniciando Conexão em {puerto} @ {self.BAUD_RATE}...")
 
             try:
                 # 1. Conexión Física
@@ -174,7 +174,7 @@ class MSCLDriver(ISistemaPesaje):
                 except: 
                     pass
                 
-                # Pausa táctica obligatoria
+                # Pausa obligatoria
                 time.sleep(6)
 
                 # 3. GESTIÓN Y RECUPERACIÓN DE NODOS
@@ -197,7 +197,7 @@ class MSCLDriver(ISistemaPesaje):
                     self.desconectar()
                     return False
 
-                # 4. APLICAR CONFIGURACIÓN A LA RED (Fix V6)
+                # 4. APLICAR CONFIGURACIÓN A LA RED
                 # Este paso envía la tabla de slots TDMA al Gateway
                 self._emit_progress("Passo 3: Aplicando configuração de rede ao Gateway...")
                 try:
@@ -226,7 +226,7 @@ class MSCLDriver(ISistemaPesaje):
 
     def _recuperar_y_preparar_nodo(self, node_id: int) -> bool:
         """
-        Estrategia 'Francotirador': Busca, detiene y agrega el nodo a la red.
+        Busca, detiene y agrega el nodo a la red.
         Maneja nodos dormidos y bugs de librería.
         """
         self._log(f"[{node_id}] Tentando recuperar controle...")
@@ -238,7 +238,7 @@ class MSCLDriver(ISistemaPesaje):
         # Bucle de persistencia para despertar nodos dormidos
         while (time.time() - start_time) < self.RECOVERY_TIMEOUT_S:
             try:
-                # Estrategia "Stop Ciego": Mandar Idle aunque no responda ping
+                #Mandar Idle aunque no responda ping
                 try: node.setToIdle()
                 except: pass
 
@@ -256,7 +256,7 @@ class MSCLDriver(ISistemaPesaje):
             self._log(f"[{node_id}] ERROR: No respondió tras {self.RECOVERY_TIMEOUT_S}s.")
             return False
 
-        # Configuración con Bypass de errores (Fix V5)
+        # Configuración
         try:
             self._log(f"[{node_id}] Verificando configuração...")
             config = mscl.WirelessNodeConfig(node)
@@ -277,7 +277,7 @@ class MSCLDriver(ISistemaPesaje):
             self._log(f"[{node_id}] Aviso: Falha leitura/gravação de config (Bug MSCL?). Pulando passo.")
             # Continuamos, asumiendo que la configuración previa sirve o que es mejor medir mal que no medir.
 
-        # Agregar a la red de software (Vital para el startSampling)
+        # Agregar a la red
         try:
             self._network.addNode(node)
             self._active_node_ids.add(node_id)
@@ -288,11 +288,11 @@ class MSCLDriver(ISistemaPesaje):
             return False
 
     # =========================================================================
-    # CIERRE LIMPIO
+    # DESCONEXIÓN
     # =========================================================================
 
     def desconectar(self):
-        """Cierra conexión intentando dejar los nodos en IDLE (ahorro batería)."""
+        """Cierra conexión intentando dejar los nodos en IDLE."""
         with self._lock:
             self._log("Iniciando desconexão...")
             
@@ -342,7 +342,7 @@ class MSCLDriver(ISistemaPesaje):
         if not self._base_station or self._state != ConnectionState.SAMPLING:
             return []
 
-        # Leer del buffer interno del Gateway (MSCL C++)
+        # Leer del buffer interno del Gateway
         try:
             sweeps = self._base_station.getData(self.DATA_TIMEOUT_MS)
         except Exception:
@@ -374,7 +374,6 @@ class MSCLDriver(ISistemaPesaje):
             for dp in sweep.data():
                 try:
                     # Mapeo de nombre de canal (ej: "Channel 1" -> "ch1")
-                    # Usamos una lógica simple basada en strings
                     ch_str = str(dp.channelName()).lower()
                     ch_key = None
                     
@@ -388,7 +387,6 @@ class MSCLDriver(ISistemaPesaje):
                         
                         # Si este dato nos interesa
                         if full_key in self._config_data_keys:
-                            # Intento de conversión segura (Fix V7)
                             val = 0.0
                             try:
                                 if dp.storedAs() == mscl.valueType_float:
@@ -442,7 +440,7 @@ class MSCLDriver(ISistemaPesaje):
 
         with self._lock:
             # Determinar qué claves esperamos recibir (solo de nodos activos configurados)
-            # Como en V8 forzamos los nodos, esperamos todos los configurados
+            # Como en forzamos los nodos, esperamos todos los configurados
             expected_keys = self._config_data_keys
 
             for ts, frame in list(self._frame_buffer.items()):

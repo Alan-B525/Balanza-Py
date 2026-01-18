@@ -36,7 +36,7 @@ class DataProcessor:
     Procesador de datos para sistema de pesaje industrial.
     
     Implementa:
-    - Filtro hibrido: Mediana (elimina picos) + EMA (suavizado)
+    - Filtro hibrido: Mediana (elimina picos) + EMA (suavizado) ¡¡¡DESACTIVADO!!!
     - Tara matematica de sesion
     - Mapeo de nodos a posiciones logicas
     - Deteccion de desconexion de sensores con eventos
