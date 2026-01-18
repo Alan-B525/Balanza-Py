@@ -37,6 +37,10 @@ args = [
     '--icon=assets/icon.ico', # Icono del ejecutable
 ] + add_data_args
 
+# Directorio de salida deseado
+dist_out = os.path.join('dist', 'alternative')
+args.append(f'--distpath={dist_out}')
+
 # Imports ocultos que a veces PyInstaller no detecta
 hidden_imports = [
     'ttkbootstrap',
@@ -55,4 +59,11 @@ print(args)
 PyInstaller.__main__.run(args)
 
 print("\nCompilación finalizada.")
-print("El ejecutable se encuentra en la carpeta 'dist'.")
+print(f"El ejecutable se encuentra en: {os.path.abspath(dist_out)}")
+
+# Asegurarse de que la carpeta de salida exista (PyInstaller la crea, pero
+# hacemos este paso para casos donde se quiera inspeccionar antes)
+try:
+    os.makedirs(dist_out, exist_ok=True)
+except Exception:
+    pass

@@ -177,8 +177,10 @@ class DataProcessor:
         active_sensors_count = 0
         sum_contrib_connected = 0.0
         any_calibrated = False
-        # Guarda valores filtrados por nodo (clave compuesta) para distribución posterior
+        # Guarda valores filtrados por nodo (clave compuesta) y contribuciones calibradas
+        # para uso posterior en la UI (evita repartir proporcionalmente el total).
         _valor_filtrado_por_nodo: Dict[str, float] = {}
+        _contrib_por_nodo: Dict[str, float] = {}
 
         for nombre_logico, cfg in self.nodos_config.items():
             node_id = cfg["id"]
@@ -249,6 +251,11 @@ class DataProcessor:
                 contrib = valor_filtrado
 
             _valor_filtrado_por_nodo[composite] = valor_filtrado
+            # Guardar la contribución en unidades de peso (calibrada si existe)
+            try:
+                _contrib_por_nodo[composite] = float(contrib)
+            except Exception:
+                _contrib_por_nodo[composite] = 0.0
             if is_connected:
                 sum_raw_connected += valor_filtrado
                 # sum_contrib acumula la suma ya calibrada cuando corresponda
@@ -288,13 +295,21 @@ class DataProcessor:
         else:
             peso_bruto = (sum_raw_connected * self.system_slope) + self.system_offset
         
-        # Aplicar Tara Global
-        # La tara ahora se aplica sobre el peso calculado (no sobre raw)
-        # O se puede manejar 'b' como (Offset_Zero - Tara).
-        # Implementaremos tara simple: Peso_Neto = Peso_Bruto - Tara_Global
-        
-        tara_global = self._tares.get("global", 0.0)
-        peso_neto = peso_bruto - tara_global
+        # Aplicar taras por celda
+        # La tara total se calcula como la suma de todas las taras individuales
+        # almacenadas en `self._tares`. Esto permite tarar por composite (id:ch).
+        tara_total = 0.0
+        try:
+            for k, v in self._tares.items():
+                # Ignorar claves no numéricas si existen
+                try:
+                    tara_total += float(v)
+                except Exception:
+                    continue
+        except Exception:
+            tara_total = 0.0
+
+        peso_neto = peso_bruto - tara_total
         
         # Si no hay sensores aportando raw (suma == 0), devolvemos el último
         # peso calculado para evitar saltos a 0 en la UI entre frames.
@@ -303,7 +318,7 @@ class DataProcessor:
         else:
             resultado["total"] = round(peso_neto, 3)
         resultado["total_raw"] = sum_raw_connected
-        resultado["total_tare"] = round(tara_global, 3)
+        resultado["total_tare"] = round(tara_total, 3)
         # Actualizar timestamp del total solo si hay datos conectados (evita zeros intermedios)
         if sum_raw_connected != 0:
             self._last_total_seen = current_time
@@ -319,37 +334,30 @@ class DataProcessor:
                 for e in disconnect_events
             ]
 
-        # 4. Asignar valor individual por sensor proporcional al total calculado
+        # 4. Asignar valor individual por sensor: usar su propia contribución (calibrada
+        # o convertida por sistema) y restar la tara aplicada a esa celda. Esto evita
+        # repartir el total entre celdas y muestra el valor real por celda.
         try:
-            # Distribuir el peso neto proporcionalmente al aporte raw.
-            # Soportamos sums negativas: la proporción preservará el signo.
-            if sum_raw_connected != 0:
-                for nombre_logico, cfg in self.nodos_config.items():
-                    node_id = cfg["id"]
-                    channel = cfg.get("ch", "ch1")
-                    composite = f"{node_id}:{channel}"
-                    sensor_entry = resultado["sensores"].get(nombre_logico)
-                    if not sensor_entry:
-                        continue
-                    if sensor_entry.get("connected"):
-                        vf = _valor_filtrado_por_nodo.get(composite, 0.0)
-                        # Si existe calibracion por sensor, utilizar el valor calibrado directo
-                        calib_v = None
-                        try:
-                            calib_v = self._map_raw_to_weight(composite, vf)
-                        except Exception:
-                            calib_v = None
-                        if calib_v is not None:
-                            sensor_entry["valor"] = round(float(calib_v), 3)
-                        else:
-                            # Distribuir el peso neto proporcionalmente al aporte raw
-                            sensor_val = (vf / sum_raw_connected) * peso_neto
-                            sensor_entry["valor"] = round(sensor_val, 3)
-                    else:
-                        sensor_entry["valor"] = 0.0
-            else:
-                # No hay datos conectados; dejar en 0
-                pass
+            for nombre_logico, cfg in self.nodos_config.items():
+                node_id = cfg["id"]
+                channel = cfg.get("ch", "ch1")
+                composite = f"{node_id}:{channel}"
+                sensor_entry = resultado["sensores"].get(nombre_logico)
+                if not sensor_entry:
+                    continue
+                if sensor_entry.get("connected"):
+                    contrib = _contrib_por_nodo.get(composite, 0.0)
+                    tare_val = 0.0
+                    try:
+                        tare_val = float(self._tares.get(composite, 0.0))
+                    except Exception:
+                        tare_val = 0.0
+
+                    # Valor neto por sensor = contribución - tara de la celda
+                    sensor_val = contrib - tare_val
+                    sensor_entry["valor"] = round(sensor_val, 3)
+                else:
+                    sensor_entry["valor"] = 0.0
         except Exception as e:
             self._log_to_file(f"Error asignando valores individuales: {e}")
         
@@ -432,23 +440,62 @@ class DataProcessor:
         por sensor.
         """
         try:
-            tara_actual = self._tares.get("global", 0.0)
-            # peso_bruto_actual = peso_neto_visible + tara_actual
-            peso_bruto_actual = float(self._last_total_weight or 0.0) + float(tara_actual)
-            self._tares["global"] = peso_bruto_actual
-            # opcional: guardar estado de taras
+            # Tarar por celda: para cada composite conocido, calculamos su contribución
+            # actual (preferir calibración por sensor si existe) y guardamos esa
+            # cantidad como tara para que cada celda pase a 0 individualmente.
+            for composite in list(self._last_stable_values.keys()):
+                try:
+                    last_val = float(self._last_stable_values.get(composite, 0.0))
+                except Exception:
+                    last_val = 0.0
+
+                # Intentar usar calibración por sensor si existe
+                contrib = None
+                try:
+                    contrib = self._map_raw_to_weight(composite, last_val)
+                except Exception:
+                    contrib = None
+
+                if contrib is None:
+                    # Sin calibración por sensor, aplicar slope del sistema sobre el raw
+                    try:
+                        contrib = float(last_val) * float(self.system_slope)
+                    except Exception:
+                        contrib = 0.0
+
+                # Guardar la tara de la celda (sobrescribe la existente para que la
+                # operación represente un 'poner a cero' de las celdas actuales)
+                try:
+                    self._tares[composite] = float(contrib)
+                except Exception:
+                    self._tares[composite] = 0.0
+
+            # Quitar tara global previa para evitar solapamientos
+            if 'global' in self._tares:
+                try:
+                    del self._tares['global']
+                except Exception:
+                    pass
+
             try:
                 self._save_tara_state()
             except Exception:
                 pass
-            return peso_bruto_actual
+
+            # Retornar la suma de taras aplicadas
+            return sum([float(v) for v in self._tares.values() if isinstance(v, (int, float))])
         except Exception:
             return 0.0
 
     def reset_tara(self) -> None:
-        self._tares["global"] = 0.0
+        # Resetear todas las taras por celda y la tara global si existiera
         try:
-            self._save_tara_state()
+            self._tares.clear()
+            # Guardar estado
+            try:
+                self._save_tara_state()
+            except Exception:
+                pass
         except Exception:
             pass
     
@@ -466,9 +513,23 @@ class DataProcessor:
                 return False
             with open(path, 'r', encoding='utf-8') as f:
                 settings = json.load(f)
+            # Cargar mapa completo de taras si existe ('tares' expected as dict)
+            if 'tares' in settings and isinstance(settings.get('tares'), dict):
+                try:
+                    loaded = {}
+                    for k, v in settings.get('tares', {}).items():
+                        try:
+                            loaded[k] = float(v)
+                        except Exception:
+                            loaded[k] = 0.0
+                    self._tares = loaded
+                    return True
+                except Exception:
+                    return False
+            # Mantenemos compatibilidad con la clave antigua 'tara_global'
             if 'tara_global' in settings:
                 try:
-                    self._tares['global'] = float(settings.get('tara_global', 0.0))
+                    self._tares = {'global': float(settings.get('tara_global', 0.0))}
                     return True
                 except Exception:
                     return False
@@ -497,8 +558,12 @@ class DataProcessor:
                 except Exception:
                     settings = {}
 
-            # Guardar sólo la tara global
-            settings['tara_global'] = float(self._tares.get('global', 0.0))
+            # Guardar mapa completo de taras bajo la clave 'tares'
+            try:
+                settings['tares'] = {k: float(v) for k, v in self._tares.items()}
+            except Exception:
+                # En caso de fallo, intentar guardar solo la tara global por compatibilidad
+                settings['tara_global'] = float(self._tares.get('global', 0.0))
             with open(path, 'w', encoding='utf-8') as f:
                 json.dump(settings, f, indent=2, ensure_ascii=False)
             return True
@@ -580,7 +645,7 @@ class DataProcessor:
             "nodes_connected": connected_count,
             "median_window_size": self.median_window,
             "ema_alpha": self.ema_alpha,
-            "total_tare": sum(self._tares.values()),
+            "total_tare": sum([float(v) for v in self._tares.values()]) if self._tares else 0.0,
             "sensor_timeout_s": self.SENSOR_TIMEOUT_S
         }
     

@@ -100,6 +100,8 @@ class MSCLDriver(ISistemaPesaje):
         self._progress_cb = None
 
         self._parse_config()
+        # Último recuento de nodos recuperados tras intentar conectar
+        self._last_recovered_count = 0
 
     def set_progress_callback(self, cb):
         """Registra un callback callable(msg: str) para progreso de conexión."""
@@ -187,15 +189,71 @@ class MSCLDriver(ISistemaPesaje):
                 for nid in self._config_node_ids:
                     self._emit_progress(f"Tentando recuperar nó {nid}...")
                     if self._recuperar_y_preparar_nodo(nid):
-                        self._emit_progress(f"Nodo {nid} recuperado.")
+                        self._emit_progress(f"Nó {nid} recuperado.")
                         nodos_recuperados += 1
                     else:
-                        self._emit_progress(f"Nodo {nid} NO recuperado.")
+                        self._emit_progress(f"Nó {nid} NÃO recuperado.")
                 
                 if nodos_recuperados == 0 and self._config_node_ids:
-                    self._log("ERROR: No se pudo conectar con ningún nodo configurado.")
+                    self._log("ERRO: Não foi possível conectar a nenhum nó configurado.")
                     self.desconectar()
                     return False
+
+                # Si la recuperación fue parcial, intentar reset del beacon/base station y reintentar nodos faltantes
+                total_expected = len(self._config_node_ids) if self._config_node_ids else 0
+                if total_expected and nodos_recuperados < total_expected:
+                    missing = set(self._config_node_ids) - set(self._active_node_ids)
+                    if missing:
+                        self._emit_progress(f"Conexão parcial ({nodos_recuperados}/{total_expected}). Tentando reset do beacon e reintentar {len(missing)} nó(s)...")
+                        # Intentar desactivar beacon -> esperar -> reactivar
+                        try:
+                            try:
+                                self._base_station.disableBeacon()
+                            except Exception:
+                                pass
+                            time.sleep(1.0)
+                            if hasattr(self._base_station, 'enableBeacon'):
+                                try:
+                                    self._base_station.enableBeacon()
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+
+                        # Si la base station no responde, intentar recrear la conexión física
+                        try:
+                            try:
+                                if self._connection:
+                                    try:
+                                        self._connection.disconnect()
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
+                            try:
+                                self._connection = mscl.Connection.Serial(puerto, self.BAUD_RATE)
+                                self._base_station = mscl.BaseStation(self._connection)
+                                self._network = mscl.SyncSamplingNetwork(self._base_station)
+                            except Exception:
+                                pass
+                        except Exception:
+                            pass
+
+                        # Reintentar nodos faltantes
+                        for nid in list(missing):
+                            try:
+                                self._emit_progress(f"Tentando novamente o nó {nid} após reset do beacon...")
+                                if self._recuperar_y_preparar_nodo(nid):
+                                    self._emit_progress(f"Nó {nid} recuperado após reset.")
+                                    nodos_recuperados += 1
+                            except Exception:
+                                continue
+
+                        # Estado final tras reintentos
+                        try:
+                            self._emit_progress(f"Tentativas concluídas. Nós recuperados agora: {nodos_recuperados}/{total_expected}")
+                        except Exception:
+                            pass
 
                 # 4. APLICAR CONFIGURACIÓN A LA RED
                 # Este paso envía la tabla de slots TDMA al Gateway
@@ -203,26 +261,54 @@ class MSCLDriver(ISistemaPesaje):
                 try:
                     self._network.applyConfiguration()
                 except Exception as e:
-                    self._log(f"Advertencia al aplicar config de red: {e}")
+                    self._log(f"Aviso: falha ao aplicar configuração de rede: {e}")
 
                 # 5. INICIAR MUESTREO (Fix V5/V6)
                 self._emit_progress(f"Passo 4: Iniciando amostragem ({nodos_recuperados} nós)...")
                 try:
                     self._network.startSampling()
-                    self._emit_progress(">>> RED OPERATIVA (Beacon Activo) <<<")
+                    self._emit_progress(">>> REDE OPERACIONAL (Beacon Ativo) <<<")
                 except Exception as e:
-                    self._log(f"Error crítico al iniciar red: {e}")
+                    self._log(f"Erro crítico ao iniciar rede: {e}")
                     self.desconectar()
                     return False
 
+                # Informar cuántos nodos se recuperaron
+                try:
+                    total_configured = len(self._config_node_ids) if self._config_node_ids else 0
+                    self._emit_progress(f"Nós recuperados: {nodos_recuperados}/{total_configured}")
+                except Exception:
+                    pass
+
                 self._state = ConnectionState.SAMPLING
-                return True
+                # Guardar el recuento para consultas externas
+                try:
+                    self._last_recovered_count = nodos_recuperados
+                except Exception:
+                    self._last_recovered_count = 0
+                # Considerar conexión exitosa sólo si recuperamos todos los nodos configurados
+                if self._config_node_ids:
+                    if nodos_recuperados == len(self._config_node_ids):
+                        return True
+                    else:
+                        # Recuperación parcial: iniciamos muestreo pero devolvemos False
+                        return False
+                else:
+                    # Si no hay nodos configurados, tratamos como éxito
+                    return True
 
             except Exception as e:
                 self._emit_progress(f"Falha geral na conexão: {e}")
                 self._emit_progress(traceback.format_exc())
                 self.desconectar()
                 return False
+
+    def get_recovered_count(self) -> int:
+        """Devuelve el último recuento de nodos recuperados tras conectar()."""
+        try:
+            return int(getattr(self, '_last_recovered_count', 0) or 0)
+        except Exception:
+            return 0
 
     def _recuperar_y_preparar_nodo(self, node_id: int) -> bool:
         """
@@ -236,24 +322,58 @@ class MSCLDriver(ISistemaPesaje):
         encontrado = False
 
         # Bucle de persistencia para despertar nodos dormidos
+        attempts = 0
         while (time.time() - start_time) < self.RECOVERY_TIMEOUT_S:
+            attempts += 1
             try:
-                #Mandar Idle aunque no responda ping
-                try: node.setToIdle()
-                except: pass
+                # Mandar Idle aunque no responda ping
+                try:
+                    node.setToIdle()
+                except Exception:
+                    pass
 
-                # Verificar si está vivo
-                if node.ping().success():
-                    self._log(f"[{node_id}] CONTATO! Nó parado.")
-                    node.setToIdle() # Asegurar estado Idle
-                    encontrado = True
-                    break
-            except:
+                # Verificar si está vivo mediante ping
+                try:
+                    if node.ping().success():
+                        self._log(f"[{node_id}] CONTATO! Nó parado.")
+                        try:
+                            node.setToIdle() # Asegurar estado Idle
+                        except Exception:
+                            pass
+                        encontrado = True
+                        break
+                except Exception:
+                    # ping falló; seguiremos intentando y usaremos fallback discovery cada cierto número de intentos
+                    pass
+
+                # Fallback: cada 8 intentos ejecutar NodeDiscovery breve
+                if attempts % 8 == 0:
+                    try:
+                        self._log(f"[{node_id}] Ping falló; intentando NodeDiscovery como fallback...")
+                        discovery = mscl.NodeDiscovery(self._base_station)
+                        discovery.start()
+                        time.sleep(0.5)
+                        discovery.stop()
+                        for n in discovery.foundNodes():
+                            try:
+                                if n.nodeAddress() == node_id:
+                                    self._log(f"[{node_id}] NodeDiscovery encontrou o nó (fallback).")
+                                    encontrado = True
+                                    break
+                            except Exception:
+                                continue
+                        if encontrado:
+                            break
+                    except Exception:
+                        pass
+
+            except Exception:
                 pass
+
             time.sleep(0.2) # Pequeña pausa para no saturar puerto
 
         if not encontrado:
-            self._log(f"[{node_id}] ERROR: No respondió tras {self.RECOVERY_TIMEOUT_S}s.")
+            self._log(f"[{node_id}] ERRO: Não respondeu após {self.RECOVERY_TIMEOUT_S}s.")
             return False
 
         # Configuración
@@ -477,7 +597,7 @@ class MSCLDriver(ISistemaPesaje):
         if not self._base_station: 
             return []
 
-        self._log(f"Escaneando nodos ({timeout_ms}ms)...")
+        self._log(f"Procurando nós ({timeout_ms}ms)...")
         found = {}
         start = time.time()
         

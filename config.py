@@ -118,9 +118,11 @@ NODOS_CONFIG = {
 RECONNECT_ATTEMPTS = 3
 NODE_TIMEOUT_SECONDS = 5.0
 DATA_TIMEOUT_MS = 100
+# Tiempo (segundos) por intento mostrado en el diálogo de conexión
+CONNECTION_ATTEMPT_TIMEOUT_S = 12
 
 # Especificaciones del Display
-APP_TITLE = "Sistema de Pesagem Industrial"
+APP_TITLE = "Sistema de Pesagem"
 APP_SIZE = "1280x800"
 THEME_NAME = "litera"
 

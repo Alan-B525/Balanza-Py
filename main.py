@@ -104,19 +104,40 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
                                 # Registrar callback de progreso si el driver lo soporta
                                 try:
                                     if hasattr(sistema_pesaje, 'set_progress_callback'):
-                                        sistema_pesaje.set_progress_callback(lambda msg: data_queue.put({'type': 'LOG', 'payload': msg}))
+                                        # Forward driver progress messages to GUI as CONNECTION_PROGRESS
+                                        sistema_pesaje.set_progress_callback(lambda msg: data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'message': msg}}))
                                 except Exception:
                                     pass
 
                                 connected = sistema_pesaje.conectar(ACTIVE_COM)
+                                # Obtener recuento de nodos recuperados, si está disponible
+                                recovered = 0
+                                try:
+                                    if hasattr(sistema_pesaje, 'get_recovered_count'):
+                                        recovered = int(sistema_pesaje.get_recovered_count() or 0)
+                                except Exception:
+                                    recovered = 0
+
                                 data_queue.put({'type': 'STATUS', 'payload': connected})
                                 if connected:
                                     data_queue.put({'type': 'LOG', 'payload': f"Conectado com sucesso a {ACTIVE_COM}"})
+                                    # Notify GUI progress finished
+                                    data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'success', 'message': 'Conexión establecida'}})
                                     acquisition_paused = False
                                     reconnecting_nodes.clear()
                                     reconnect_attempts.clear()
                                 else:
-                                    data_queue.put({'type': 'LOG', 'payload': f"Falha ao conectar a {ACTIVE_COM}"})
+                                    # Si hubo recuperación parcial, reportar 'partial' en lugar de 'failed'
+                                    if recovered > 0:
+                                        try:
+                                            expected = len(ACTIVE_NODOS) if ACTIVE_NODOS else 0
+                                        except Exception:
+                                            expected = 0
+                                        data_queue.put({'type': 'LOG', 'payload': f"Conexión parcial: {recovered}/{expected} nodos"})
+                                        data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'partial', 'message': f'Conexión parcial: {recovered}/{expected} nodos', 'recovered': recovered, 'expected': expected}})
+                                    else:
+                                        data_queue.put({'type': 'LOG', 'payload': f"Falha ao conectar a {ACTIVE_COM}"})
+                                        data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'failed', 'message': 'Falha ao conectar'}})
                             except Exception as e:
                                 data_queue.put({'type': 'STATUS', 'payload': False})
                                 data_queue.put({'type': 'LOG', 'payload': f"Erro: {str(e)}"})

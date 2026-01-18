@@ -1,4 +1,4 @@
-from config import APP_TITLE, APP_SIZE, THEME_NAME, NODOS_CONFIG
+from config import APP_TITLE, APP_SIZE, THEME_NAME, NODOS_CONFIG, RECONNECT_ATTEMPTS, CONNECTION_ATTEMPT_TIMEOUT_S
 import os
 import json
 import tkinter as tk
@@ -93,6 +93,9 @@ class BalanzaGUI(ttk.Window):
         # Variables para conexin asncrona
         self._connection_thread = None
         self._cancel_connection = False
+        # Grace period after successful connection (seconds) to wait for sensors to send data
+        self._post_connect_grace_s = 3.0
+        self._conn_success_time = 0.0
         
         # Handle window close event
         self.protocol("WM_DELETE_WINDOW", self.quit_app)
@@ -103,8 +106,12 @@ class BalanzaGUI(ttk.Window):
         # Start update loop
         self.after(50, self.actualizar_gui)
         
-        # Iniciar conexo automaticamente removida para evitar travamento na inicializacao
-        # self.after(500, self._auto_connect_on_startup)
+        # Iniciar conexión automática al arrancar (mostrar diálogo de conexión)
+        try:
+            # Lanzar tras breve retardo para permitir que la UI termine de inicializar
+            self.after(500, self._auto_connect_on_startup)
+        except Exception:
+            pass
     
     def _calculate_scale_factors(self, screen_width, screen_height):
         """Calcula factores de escala basados en la resolución de pantalla."""
@@ -294,8 +301,9 @@ class BalanzaGUI(ttk.Window):
         brand_frame.bind("<B1-Motion>", self._on_drag)
         
         # Intentar cargar un solo logo principal junto al título
-        import os
-        assets_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets")
+        import os, sys
+        base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        assets_path = os.path.join(base_path, "assets")
 
         self.logo_img = None
         # Tamaño de logo (escalado)
@@ -367,6 +375,38 @@ class BalanzaGUI(ttk.Window):
                 self.log_message("Logo widget creado y empaquetado en header.")
             except Exception:
                 pass
+
+        # Establecer icono de la aplicación (barra de tareas + título)
+        try:
+            ico_path = os.path.join(assets_path, "icon.ico")
+            png_path = os.path.join(assets_path, "icon.png")
+            # Preferir .ico en Windows (se ve mejor en la barra de tareas)
+            if os.path.exists(ico_path):
+                try:
+                    # iconbitmap suele funcionar bien en Windows
+                    self.iconbitmap(ico_path)
+                except Exception:
+                    try:
+                        # Alternativa: usar wm_iconbitmap
+                        self.wm_iconbitmap(ico_path)
+                    except Exception:
+                        pass
+            elif os.path.exists(png_path) and Image is not None and ImageTk is not None:
+                try:
+                    pil = Image.open(png_path)
+                    # Crear un iconphoto; mantener referencia para evitar GC
+                    self._icon_img = ImageTk.PhotoImage(pil)
+                    try:
+                        self.iconphoto(True, self._icon_img)
+                    except Exception:
+                        try:
+                            self.wm_iconphoto(True, self._icon_img)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
         
         # Header Actions - Botones uniformes y grandes para tablet
         actions_frame = ttk.Frame(header_frame, style='Header.TFrame')
@@ -806,6 +846,19 @@ class BalanzaGUI(ttk.Window):
                 if not sensor_info.get('connected', True):
                     any_disconnected = True
                     break
+
+        # Si acabamos de conectarnos, dar un pequeño periodo de gracia antes de
+        # mostrar error de comunicación para que los sensores tengan tiempo de
+        # enviar sus primeras muestras.
+        try:
+            import time
+            if any_disconnected and getattr(self, 'connected', False):
+                conn_time = getattr(self, '_conn_success_time', 0.0) or 0.0
+                grace = getattr(self, '_post_connect_grace_s', 0.0) or 0.0
+                if conn_time and (time.time() - conn_time) < float(grace):
+                    any_disconnected = False
+        except Exception:
+            pass
         
         # Mudar cor do painel TOTAL segundo estado de sensores - FAIL-SAFE
         if any_disconnected:
@@ -1074,6 +1127,12 @@ class BalanzaGUI(ttk.Window):
                 self._apply_saved_calibrations_on_connect()
             except Exception:
                 pass
+            # Registrar timestamp de conexión exitosa para periodo de gracia
+            try:
+                import time
+                self._conn_success_time = time.time()
+            except Exception:
+                self._conn_success_time = 0.0
         else:
             self.lbl_status.configure(text=" Desconectado", foreground="#64748b")
             # Manter dimenses ao mudar estilo
@@ -1092,6 +1151,47 @@ class BalanzaGUI(ttk.Window):
                             self.btn_connect_dialog.configure(font=self.style.configure('Header.TButton').get('font'))
                         except Exception:
                             pass
+                    except Exception:
+                        pass
+                    # Si hay un diálogo de conexión activo, interpretar este STATUS=False
+                    # como el resultado de una tentativa finalizada. Lanzar nueva tentativa
+                    # sólo si el usuario no canceló y aún quedan intentos disponibles.
+                    try:
+                        if getattr(self, '_connection_dialog_active', False) and not getattr(self, '_cancel_connection', False):
+                            # Si aún podemos intentar más veces
+                            try:
+                                attempts = int(getattr(self, '_conn_attempt', 1))
+                            except Exception:
+                                attempts = 1
+
+                            if attempts < RECONNECT_ATTEMPTS:
+                                attempts += 1
+                                self._conn_attempt = attempts
+                                # Actualizar texto y solicitar nueva tentativa al backend
+                                try:
+                                    self._conn_status.configure(text=f"Tentativa {self._conn_attempt}...")
+                                    self._conn_info.configure(text=f"Tentativa {self._conn_attempt}")
+                                except Exception:
+                                    pass
+                                try:
+                                    self.command_queue.put({'cmd': 'CONNECT'})
+                                except Exception:
+                                    pass
+                            else:
+                                # Agotar intentos: mostrar fallo en el diálogo
+                                try:
+                                    if hasattr(self, '_conn_progress') and self._conn_progress.winfo_exists():
+                                        self._conn_progress.stop()
+                                except Exception:
+                                    pass
+                                try:
+                                    self._conn_status.configure(text=" Sensor não encontrado", foreground="#ef4444")
+                                    self._conn_info.configure(text="Verifique a conexão e tente novamente")
+                                    self._conn_btn.configure(text="FECHAR", bootstyle="secondary",
+                                                              command=self._safe_close_conn_dialog)
+                                except Exception:
+                                    pass
+                                self._connection_dialog_active = False
                     except Exception:
                         pass
             except Exception:
@@ -2326,10 +2426,10 @@ class BalanzaGUI(ttk.Window):
         dialog.update_idletasks()  # Forzar renderizado inmediato
         dialog.after(20, lambda: dialog.grab_set())
         
-        # Enviar comando y empezar a monitorear
-        self.command_queue.put({'cmd': 'CONNECT'})
-        self._conn_start_time = time.time()
+        # Enviar primer intento de conexión (cada llamada es una tentativa)
         self._conn_attempt = 1
+        self._conn_start_time = time.time()
+        self.command_queue.put({'cmd': 'CONNECT'})
         dialog.after(100, self._check_connection_status)
     
     def _check_connection_status(self):
@@ -2357,31 +2457,17 @@ class BalanzaGUI(ttk.Window):
         if self._cancel_connection:
             return
         
-        # Calcular tiempo
-        elapsed = time.time() - self._conn_start_time
-        
-        # Actualizar info cada 100ms
-        self._conn_info.configure(text=f"Tentativa {self._conn_attempt}  {int(elapsed)}s")
-        
-        # Timeout por intento (6 segundos)
-        if elapsed > 6 * self._conn_attempt:
-            if self._conn_attempt < 3:
-                self._conn_attempt += 1
-                self._conn_status.configure(text=f"Tentativa {self._conn_attempt}...")
-                self.command_queue.put({'cmd': 'CONNECT'})
-            else:
-                # Fall despus de 3 intentos
-                self._conn_progress.stop()
-                self._conn_status.configure(
-                    text=" Sensor não encontrado", foreground="#ef4444")
-                self._conn_info.configure(text="Verifique a conexão e tente novamente")
-                self._conn_btn.configure(text="FECHAR", bootstyle="secondary",
-                                          command=self._safe_close_conn_dialog)
-                self._connection_dialog_active = False
-                return
-        
-        # Continuar verificando (nunca bloquea)
-        self._conn_dialog.after(100, self._check_connection_status)
+        # Actualizar información visual del diálogo (sin reintentos automáticos por tiempo).
+        # El backend notifica el fin de cada tentativa con un mensaje 'STATUS' y
+        # la GUI decidirá si lanzar otra tentativa allí.
+        try:
+            self._conn_info.configure(text=f"Tentativa {self._conn_attempt}")
+        except Exception:
+            pass
+
+        # Continuar verificando estado visual
+        if getattr(self, '_connection_dialog_active', False):
+            self._conn_dialog.after(100, self._check_connection_status)
     
     def _cancel_connection_dialog(self):
         """Cancela conexin inmediatamente."""
@@ -2454,21 +2540,44 @@ class BalanzaGUI(ttk.Window):
                 if self._conn_dialog.winfo_exists():
                     self._conn_dialog.after(1000, self._conn_dialog.destroy)
                 
+            elif status == 'partial':
+                # Recuperación parcial: mostrar mensaje de advertencia y permitir reintento
+                if hasattr(self, '_conn_progress') and self._conn_progress.winfo_exists():
+                    try:
+                        self._conn_progress.stop()
+                    except Exception:
+                        pass
+
+                if hasattr(self, '_conn_status') and self._conn_status.winfo_exists():
+                    self._conn_status.configure(
+                        text=" " + message,
+                        foreground="#f59e0b"
+                    )
+
+                if hasattr(self, '_conn_btn') and self._conn_btn.winfo_exists():
+                    # Permitir que el usuario reintente manualmente
+                    try:
+                        self._conn_btn.configure(text="REINTENTAR", state='normal')
+                    except Exception:
+                        pass
+
+                # Mantener el diálogo abierto para que el usuario decida
+
             elif status == 'failed':
                 if hasattr(self, '_conn_progress') and self._conn_progress.winfo_exists():
                     self._conn_progress.stop()
-                
+
                 if hasattr(self, '_conn_status') and self._conn_status.winfo_exists():
                     self._conn_status.configure(
                         text=" " + message,
                         foreground="#ef4444"
                     )
-                
+
                 if hasattr(self, '_conn_btn') and self._conn_btn.winfo_exists():
-                    self._conn_btn.configure(text="FECHAR", state='normal')
-                
-                self._connection_dialog_active = False
-                
+                    # Permitir que el usuario cierre o cancele; no cerrar automáticamente
+                    self._conn_btn.configure(text="CANCELAR", state='normal')
+
+                # No cerrar el diálogo automáticamente: la GUI controlará reintentos
             elif status == 'cancelled':
                 if hasattr(self, '_conn_progress') and self._conn_progress.winfo_exists():
                     self._conn_progress.stop()
