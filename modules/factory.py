@@ -25,7 +25,7 @@ def criar_sistema_pesaje(modo: str, nodos_config: Dict[str, Any], use_sensor_con
     from .sensor_driver import MSCLDriver
     from .sensor_mock import MockDriver
     import datetime, os
-    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'balanza.log')
+    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'log.log')
     timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     # Log inicial indicando el modo solicitado
     try:

@@ -2,7 +2,7 @@
 """
 Logger simple y centralizado para la aplicación.
 
-Escribe en DATA_DIR/balanza.log y expone funciones:
+Escribe en DATA_DIR/log.log y expone funciones:
 - info(message)
 - warning(message)
 - error(message)
@@ -20,9 +20,9 @@ _lock = threading.RLock()
 def _get_log_path():
     try:
         from config import DATA_DIR
-        return os.path.join(DATA_DIR, 'balanza.log')
+        return os.path.join(DATA_DIR, 'log.log')
     except Exception:
-        return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'balanza.log')
+        return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'log.log')
 
 def _write(level: str, message: str) -> None:
     timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')

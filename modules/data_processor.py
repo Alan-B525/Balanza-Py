@@ -50,7 +50,7 @@ class DataProcessor:
             try:
                 # Fallback silente
                 import datetime, os
-                log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'balanza.log')
+                log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'log.log')
                 timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 with open(log_path, 'a', encoding='utf-8') as f:
                     f.write(f"[{timestamp}] [DATA_PROCESSOR] {message}\n")

@@ -49,6 +49,8 @@ Para cambiar el logo de la empresa:
 *   **Logs**: Registro de eventos y errores en pantalla.
 *   **Interfaz Táctil**: Botones grandes optimizados para tablets.
 
+*   **Archivo de log**: Los registros se guardan en `log.log` dentro del directorio de datos (`DATA_DIR`).
+
 ## Estructura del Proyecto
 
 *   `main.py`: Punto de entrada y orquestación de hilos.

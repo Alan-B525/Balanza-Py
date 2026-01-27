@@ -122,7 +122,7 @@ DATA_TIMEOUT_MS = 100
 CONNECTION_ATTEMPT_TIMEOUT_S = 12
 
 # Especificaciones del Display
-APP_TITLE = "Sistema de Pesagem"
+APP_TITLE = "Sistema de Pesagem ARBRA"
 APP_SIZE = "1280x800"
 THEME_NAME = "litera"
 

@@ -29,7 +29,7 @@ for src, dest in add_data:
 # Argumentos para PyInstaller
 args = [
     script_name,
-    '--name=BalanzaSystem',
+    '--name=Sistema de Pesagem ARBRA',
     '--onefile',        # Crear un solo archivo ejecutable
     '--windowed',       # No mostrar consola (GUI app)
     '--clean',          # Limpiar caché antes de construir
@@ -38,7 +38,7 @@ args = [
 ] + add_data_args
 
 # Directorio de salida deseado
-dist_out = os.path.join('dist', 'alternative')
+dist_out = os.path.join('dist')
 args.append(f'--distpath={dist_out}')
 
 # Imports ocultos que a veces PyInstaller no detecta
