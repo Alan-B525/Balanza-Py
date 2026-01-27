@@ -517,17 +517,7 @@ class BalanzaGUI(ttk.Window):
                 except Exception:
                     footer_logo_h = 48
 
-                # Cargar logos en el footer en el orden deseado: logo.png antes que logo2.png
-                try:
-                    # Primero logo2 (se empaqueta a la derecha primero, luego logo se colocará a su izquierda)
-                    logo2_path = os.path.join(assets_path, "logo2.png")
-                    self.footer_logo2_img = load_logo(logo2_path, footer_logo_h)
-                    if self.footer_logo2_img:
-                        logo2_lbl = ttk.Label(footer_frame, image=self.footer_logo2_img, style='Logo.TLabel')
-                        logo2_lbl.pack(side=RIGHT, padx=(0, 12), pady=(6, 6))
-                except Exception:
-                    pass
-
+                # Cargar solo el logo principal (logo.png) en el footer
                 try:
                     logo_path = os.path.join(assets_path, "logo.png")
                     self.footer_logo_img = load_logo(logo_path, footer_logo_h)
@@ -2878,11 +2868,19 @@ class BalanzaGUI(ttk.Window):
         # Distribuir los botones: izquierda (conectar + decimales) y derecha (salvar/cancelar/fechar)
         btn_container.pack(fill=X)
 
+        # Usar grid en btn_container para alinear correctamente
         left_frame = ttk.Frame(btn_container)
-        left_frame.pack(side=LEFT, anchor='w')
+        left_frame.grid(row=0, column=0, sticky='w')
+
+        spacer = ttk.Frame(btn_container)
+        spacer.grid(row=0, column=1, sticky='nsew')
+        try:
+            btn_container.columnconfigure(1, weight=1)
+        except Exception:
+            pass
 
         right_frame = ttk.Frame(btn_container)
-        right_frame.pack(side=RIGHT, anchor='e')
+        right_frame.grid(row=0, column=2, sticky='e')
 
         # Buttons size adjustments for small screens (más compactos)
         if small_screen:
@@ -2929,7 +2927,10 @@ class BalanzaGUI(ttk.Window):
                        width=btn_width,
                        padding=btn_padding)
         btn_salvar.configure(style='Large.success.TButton')
-        btn_salvar.pack(side=LEFT, padx=6)
+        try:
+            btn_salvar.grid(row=0, column=0, padx=6, pady=0)
+        except Exception:
+            btn_salvar.pack(side=LEFT, padx=6)
 
         btn_cancelar = ttk.Button(right_frame, text="CANCELAR",
                        bootstyle="secondary",
@@ -2937,10 +2938,20 @@ class BalanzaGUI(ttk.Window):
                        width=btn_width,
                        padding=btn_padding)
         btn_cancelar.configure(style='Large.warning.TButton')
-        btn_cancelar.pack(side=LEFT, padx=6)
+        try:
+            btn_cancelar.grid(row=0, column=1, padx=6, pady=0)
+        except Exception:
+            btn_cancelar.pack(side=LEFT, padx=6)
 
-        # Separador visual
-        ttk.Frame(right_frame, width=self.scaled(20)).pack(side=LEFT)
+        # Separador visual (espacio entre botones y FECHAR)
+        try:
+            sep = ttk.Frame(right_frame, width=self.scaled(20))
+            sep.grid(row=0, column=2)
+        except Exception:
+            try:
+                ttk.Frame(right_frame, width=self.scaled(20)).pack(side=LEFT)
+            except Exception:
+                pass
 
         btn_fechar = ttk.Button(right_frame, text="FECHAR",
                        bootstyle="danger-outline",
@@ -2948,13 +2959,58 @@ class BalanzaGUI(ttk.Window):
                        width=btn_width,
                        padding=btn_padding)
         btn_fechar.configure(style='Large.danger.TButton')
-        btn_fechar.pack(side=LEFT, padx=6)
+        try:
+            btn_fechar.grid(row=0, column=3, padx=6, pady=0)
+        except Exception:
+            btn_fechar.pack(side=LEFT, padx=6)
+        # Añadir logo2 junto al botón FECHAR (a la derecha)
+        try:
+            import os, sys
+            base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            assets_path = os.path.join(base_path, "assets")
+            logo2_path = os.path.join(assets_path, "logo2.png")
+            logo2_h = self.scaled(40)
+            if Image is not None and ImageTk is not None and os.path.exists(logo2_path):
+                try:
+                    pil = Image.open(logo2_path)
+                    w_percent = (logo2_h / float(pil.size[1]))
+                    w_size = int((float(pil.size[0]) * float(w_percent)))
+                    try:
+                        resample = getattr(Image, 'Resampling', Image).LANCZOS
+                        pil_resized = pil.resize((w_size, logo2_h), resample)
+                    except Exception:
+                        pil_resized = pil.resize((w_size, logo2_h))
+                    self.config_logo2_img = ImageTk.PhotoImage(pil_resized)
+                    # Empaquetar en el frame derecho a la derecha
+                    try:
+                        logo2_btn_lbl = ttk.Label(right_frame, image=self.config_logo2_img, style='Logo.TLabel')
+                        logo2_btn_lbl.grid(row=0, column=4, padx=(8, 0), pady=(6, 6))
+                        try:
+                            import webbrowser
+                            logo2_btn_lbl.configure(cursor='hand2')
+                            logo2_btn_lbl.bind("<Button-1>", lambda e: webbrowser.open('https://baristecno.com/'))
+                        except Exception:
+                            pass
+                    except Exception:
+                        logo2_btn_lbl = ttk.Label(right_frame, image=self.config_logo2_img, style='Logo.TLabel')
+                        logo2_btn_lbl.pack(side=RIGHT, padx=(8, 0), pady=(6, 6))
+                        try:
+                            import webbrowser
+                            logo2_btn_lbl.configure(cursor='hand2')
+                            logo2_btn_lbl.bind("<Button-1>", lambda e: webbrowser.open('https://baristecno.com/'))
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
         # ==================== FIN BOTONES ABAJO (COMPACTOS) ====================
         
         # Header: Solo Tabs (ocupa solo el ancho, no debe expandir verticalmente)
         header_frame = ttk.Frame(main_frame)
         # Permitir que el header y el notebook se expandan para rellenar verticalmente
         header_frame.pack(fill=BOTH, expand=True, pady=(0, 5))
+        # Nota: el logo2 se mostrará junto al botón FECHAR en la esquina inferior derecha.
 
         # Notebook/Tabs (compacto en alto)
         notebook = ttk.Notebook(header_frame, style='BigTab.TNotebook')
