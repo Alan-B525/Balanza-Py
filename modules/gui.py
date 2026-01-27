@@ -94,8 +94,10 @@ class BalanzaGUI(ttk.Window):
         self._connection_thread = None
         self._cancel_connection = False
         # Grace period after successful connection (seconds) to wait for sensors to send data
-        self._post_connect_grace_s = 3.0
+        self._post_connect_grace_s = 6.0
         self._conn_success_time = 0.0
+        # Indica si ya recibimos la primera muestra tras conectar
+        self._first_sample_received = False
         
         # Handle window close event
         self.protocol("WM_DELETE_WINDOW", self.quit_app)
@@ -366,15 +368,7 @@ class BalanzaGUI(ttk.Window):
         logo_path = os.path.join(assets_path, "logo.png")
         self.logo_img = load_logo(logo_path, logo_height)
         
-        # Logo junto al título (si existe) - mantener solo el logo en la barra superior
-        if self.logo_img:
-            # Do not use a Frame style for a Label (some themes may override image rendering).
-            logo_lbl = ttk.Label(brand_frame, image=self.logo_img)
-            logo_lbl.pack(side=LEFT, padx=(0, 12))
-            try:
-                self.log_message("Logo widget creado y empaquetado en header.")
-            except Exception:
-                pass
+        # Header: mantener área de marca pero sin título (el título se muestra en el footer)
 
         # Establecer icono de la aplicación (barra de tareas + título)
         try:
@@ -425,7 +419,7 @@ class BalanzaGUI(ttk.Window):
             width=8,
             padding=(15, 12)
         )
-        self.btn_decimals.pack(side=LEFT, padx=5)
+        # Ocultar el botón de decimales en todas las resoluciones: no hacer pack()
 
         # (Export/Import moved to Config -> CALIBRACAO tab)
         
@@ -482,8 +476,18 @@ class BalanzaGUI(ttk.Window):
             footer_left = ttk.Frame(footer_frame, style='CardNoBorder.TFrame')
             footer_left.pack(side=LEFT, anchor='w', padx=(12, 6), pady=(6, 4))
 
-            # Título del sistema (ahora en el pie)
-            ttk.Label(footer_left, text="Sistema de Pesagem", style='HeaderTitle.TLabel').pack(side=LEFT)
+            # Título del sistema (mostrar en el pie)
+            try:
+                from config import APP_TITLE
+            except Exception:
+                APP_TITLE = "Sistema de Pesagem"
+            try:
+                ttk.Label(footer_left, text=APP_TITLE, style='HeaderTitle.TLabel').pack(side=LEFT)
+            except Exception:
+                try:
+                    ttk.Label(footer_left, text=APP_TITLE).pack(side=LEFT)
+                except Exception:
+                    pass
 
             # Estado del sistema junto al título (reusar nombre self.lbl_status para compatibilidad)
             # Si existe un lbl_status previo, reusar, sino crear.
@@ -506,18 +510,32 @@ class BalanzaGUI(ttk.Window):
                 except Exception:
                     pass
 
-            # Intentar cargar logo2 (escala reducida) y colocarlo a la derecha
+            # Cargar ambos logos en el footer con el mismo tamaño
             try:
-                logo2_path = os.path.join(assets_path, "logo2.png")
                 try:
-                    max_h = self.scaled(48)
+                    footer_logo_h = self.scaled(48)
                 except Exception:
-                    max_h = 48
-                logo2_height = min(int(logo_height * 0.5), max_h)
-                self.logo2_img = load_logo(logo2_path, logo2_height)
-                if self.logo2_img:
-                    logo2_lbl = ttk.Label(footer_frame, image=self.logo2_img, style='Logo.TLabel')
-                    logo2_lbl.pack(side=RIGHT, padx=(0, 12), pady=(6, 6))
+                    footer_logo_h = 48
+
+                # Cargar logos en el footer en el orden deseado: logo.png antes que logo2.png
+                try:
+                    # Primero logo2 (se empaqueta a la derecha primero, luego logo se colocará a su izquierda)
+                    logo2_path = os.path.join(assets_path, "logo2.png")
+                    self.footer_logo2_img = load_logo(logo2_path, footer_logo_h)
+                    if self.footer_logo2_img:
+                        logo2_lbl = ttk.Label(footer_frame, image=self.footer_logo2_img, style='Logo.TLabel')
+                        logo2_lbl.pack(side=RIGHT, padx=(0, 12), pady=(6, 6))
+                except Exception:
+                    pass
+
+                try:
+                    logo_path = os.path.join(assets_path, "logo.png")
+                    self.footer_logo_img = load_logo(logo_path, footer_logo_h)
+                    if self.footer_logo_img:
+                        logo_lbl = ttk.Label(footer_frame, image=self.footer_logo_img, style='Logo.TLabel')
+                        logo_lbl.pack(side=RIGHT, padx=(0, 12), pady=(6, 6))
+                except Exception:
+                    pass
             except Exception:
                 pass
         except Exception:
@@ -660,7 +678,8 @@ class BalanzaGUI(ttk.Window):
                 )
             except Exception:
                 btn_tare = ttk.Button(tare_inner, text="TARA", command=self.do_tare)
-            btn_tare.grid(row=0, column=0, sticky='nsew', padx=(0,4), pady=0)
+            # Colocar el botón TARA en la columna central para centrarlo
+            btn_tare.grid(row=0, column=1, sticky='nsew', padx=0, pady=0)
             self.btn_tare_main = btn_tare
 
             # Botón derecho: RESET (rojo), consistente en tamaño y padding
@@ -675,29 +694,16 @@ class BalanzaGUI(ttk.Window):
                 )
             except Exception:
                 btn_reset = ttk.Button(tare_inner, text="RESET", command=self.reset_tare)
-            btn_reset.grid(row=0, column=2, sticky='nsew', padx=(4,0), pady=0)
+            # Ocultar el botón RESET en la vista principal (se crea pero no se muestra)
             self.btn_reset_tare_main = btn_reset
 
             # Centro: volver a añadir título pequeño de estado y 'Tara Aplicada' + valor
             # Usar fondo blanco y texto negro
+            # Centro: se elimina la etiqueta 'Tara Aplicada' y se mantiene
+            # un contenedor oculto para compatibilidad con el widget de valor.
             center_frame = ttk.Frame(tare_inner, style='CardNoBorder.TFrame')
-            center_frame.grid(row=0, column=1, sticky='nsew')
+            # No gridear center_frame para mantenerlo oculto; usamos la columna central
             center_frame.columnconfigure(0, weight=1)
-
-            # Etiqueta pequeña que indica 'Tara Aplicada'
-            try:
-                small_font = ("Segoe UI", self.scaled_font(14))
-            except Exception:
-                small_font = ("Segoe UI", 14)
-            lbl_tare_applied = ttk.Label(center_frame, text="Tara Aplicada", style='TareMaint.TLabel', font=small_font)
-            # Menos espacio arriba/abajo en laptop
-            try:
-                if is_laptop:
-                    lbl_tare_applied.grid(row=0, column=0, sticky='s', pady=(6,1))
-                else:
-                    lbl_tare_applied.grid(row=0, column=0, sticky='s', pady=(10,2))
-            except Exception:
-                lbl_tare_applied.grid(row=0, column=0, sticky='s', pady=(10,2))
 
             # Valor de tara aplicado más compacto (visibilidad asegurada)
             try:
@@ -705,13 +711,12 @@ class BalanzaGUI(ttk.Window):
             except Exception:
                 val_font = ("Consolas", 32, 'bold')
             self.lbl_tare_value_main = ttk.Label(center_frame, text="0 t", style='TareMaintValue.TLabel', font=val_font, anchor='center')
+            # Ocultar el valor de la tara en la vista principal (se mantiene el widget para compatibilidad)
             try:
-                if is_laptop:
-                    self.lbl_tare_value_main.grid(row=1, column=0, sticky='n', pady=(1,6))
-                else:
-                    self.lbl_tare_value_main.grid(row=1, column=0, sticky='n', pady=(2,10))
+                # No grid() para mantener oculto en la vista principal
+                pass
             except Exception:
-                self.lbl_tare_value_main.grid(row=1, column=0, sticky='n', pady=(2,10))
+                pass
             try:
                 self.lbl_tare_value_main.target_width = self.scaled(300)
             except Exception:
@@ -797,6 +802,21 @@ class BalanzaGUI(ttk.Window):
     def _update_display(self, data):
         # Guardar datos para actualización cuando cambie modo decimales
         self._last_sensor_data = data
+        # Marcar que recibimos la primera muestra si hay datos útiles
+        try:
+            if not getattr(self, '_first_sample_received', False):
+                has_total = bool(data.get('total_last_seen')) or ('total' in data and data.get('total') is not None)
+                sensores = data.get('sensores', {})
+                has_sensor_values = False
+                if sensores:
+                    for s in sensores.values():
+                        if s and (s.get('connected', False) or s.get('values')):
+                            has_sensor_values = True
+                            break
+                if has_total or has_sensor_values:
+                    self._first_sample_received = True
+        except Exception:
+            pass
         # Tamaños de fuente base para vigas y total (usados en ajuste estático)
         try:
             normal_beam = self.scaled_font(60)
@@ -855,7 +875,10 @@ class BalanzaGUI(ttk.Window):
             if any_disconnected and getattr(self, 'connected', False):
                 conn_time = getattr(self, '_conn_success_time', 0.0) or 0.0
                 grace = getattr(self, '_post_connect_grace_s', 0.0) or 0.0
-                if conn_time and (time.time() - conn_time) < float(grace):
+                # No mostrar error si aún estamos dentro del periodo de gracia
+                # o si aun no hemos recibido la primera muestra útil.
+                first_received = getattr(self, '_first_sample_received', False)
+                if conn_time and ((time.time() - conn_time) < float(grace) or not first_received):
                     any_disconnected = False
         except Exception:
             pass
@@ -1194,6 +1217,11 @@ class BalanzaGUI(ttk.Window):
                                 self._connection_dialog_active = False
                     except Exception:
                         pass
+            except Exception:
+                pass
+            # Al desconectarse, resetear flag de primera muestra
+            try:
+                self._first_sample_received = False
             except Exception:
                 pass
 
