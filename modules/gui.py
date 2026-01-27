@@ -2645,6 +2645,40 @@ class BalanzaGUI(ttk.Window):
             dialog.geometry(f"{w_dlg}x{h_dlg}+{x}+{y}")
             dialog.attributes('-topmost', True)
 
+            # Fix Z-order: bind a la ventana principal para forzar lift si recupera foco
+            def force_top(event=None):
+                try:
+                    dialog.lift()
+                    dialog.attributes('-topmost', True)
+                except Exception:
+                    pass
+            try:
+                self.bind('<FocusIn>', force_top)
+            except Exception:
+                pass
+
+            # Watchdog para mantener el diálogo encima en caso de Alt+Tab u otros cambios de z-order
+            def _watch_pwd():
+                try:
+                    if dialog.winfo_exists():
+                        try:
+                            dialog.lift()
+                            dialog.attributes('-topmost', True)
+                        except Exception:
+                            pass
+                        dialog.after(1000, _watch_pwd)
+                    else:
+                        try:
+                            self.unbind('<FocusIn>')
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            try:
+                dialog.after(1000, _watch_pwd)
+            except Exception:
+                pass
+
             outer_frame = ttk.Frame(dialog, bootstyle="dark", padding=3)
             outer_frame.pack(fill=BOTH, expand=YES)
             frame = ttk.Frame(outer_frame, padding=20)
@@ -2678,9 +2712,17 @@ class BalanzaGUI(ttk.Window):
 
             def on_ok():
                 result['ok'] = True
+                try:
+                    self.unbind('<FocusIn>')
+                except Exception:
+                    pass
                 dialog.destroy()
 
             def on_cancel():
+                try:
+                    self.unbind('<FocusIn>')
+                except Exception:
+                    pass
                 dialog.destroy()
 
             btn_ok = ttk.Button(btn_frame, text="OK", bootstyle="success", command=on_ok)
@@ -2704,6 +2746,10 @@ class BalanzaGUI(ttk.Window):
                     break
                 if not dialog.winfo_exists():
                     break
+            try:
+                self.unbind('<FocusIn>')
+            except Exception:
+                pass
             try:
                 if result.get('ok'):
                     pwd = pwd_var.get()
@@ -2766,6 +2812,39 @@ class BalanzaGUI(ttk.Window):
         small_screen = (screen_w == 1280 and screen_h == 800)
         dialog.lift()
         dialog.focus_force()
+        # Fix Z-order para el diálogo de configuración completo
+        def force_top(event=None):
+            try:
+                dialog.lift()
+                dialog.attributes('-topmost', True)
+            except Exception:
+                pass
+        try:
+            self.bind('<FocusIn>', force_top)
+        except Exception:
+            pass
+
+        # Watchdog para mantener el diálogo encima si pierde z-order
+        def _watch_cfg():
+            try:
+                if dialog.winfo_exists():
+                    try:
+                        dialog.lift()
+                        dialog.attributes('-topmost', True)
+                    except Exception:
+                        pass
+                    dialog.after(1000, _watch_cfg)
+                else:
+                    try:
+                        self.unbind('<FocusIn>')
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        try:
+            dialog.after(1000, _watch_cfg)
+        except Exception:
+            pass
         # Ocupar toda la pantalla (Tkinter fullscreen)
         try:
             dialog.attributes('-fullscreen', True)
@@ -2796,6 +2875,10 @@ class BalanzaGUI(ttk.Window):
             try:
                 dialog.destroy()
             except:
+                pass
+            try:
+                self.unbind('<FocusIn>')
+            except Exception:
                 pass
             # Limpiar referencias a botones del diálogo para evitar referencias muertas
             try:
