@@ -1220,6 +1220,11 @@ class BalanzaGUI(ttk.Window):
         # Cerrar teclado anterior si existe
         if hasattr(self, '_active_keypad') and self._active_keypad:
             try:
+                try:
+                    # Limpiar bandera si existía
+                    self._suppress_cfg_watch = False
+                except Exception:
+                    pass
                 self._active_keypad.destroy()
             except:
                 pass
@@ -1239,6 +1244,11 @@ class BalanzaGUI(ttk.Window):
         
         # Obtener la ventana padre (puede ser un diálogo)
         parent = entry_widget.winfo_toplevel()
+        try:
+            # Indicar al watchdog que no eleve el diálogo principal mientras exista el keypad
+            self._suppress_cfg_watch = True
+        except Exception:
+            pass
         
         # Crear ventana del teclado como hija del padre del entry
         keypad = tk.Toplevel(parent)
@@ -1247,6 +1257,14 @@ class BalanzaGUI(ttk.Window):
         keypad.resizable(False, False)
         keypad.transient(parent)  # Asociado al padre
         keypad.attributes('-topmost', True)
+        try:
+            keypad.focus_force()
+        except Exception:
+            pass
+        try:
+            keypad.grab_set()
+        except Exception:
+            pass
         keypad.configure(bg="#222222")
         self._active_keypad = keypad
         
@@ -1346,15 +1364,28 @@ class BalanzaGUI(ttk.Window):
         pad_num = (18, 18)
         pad_act = (18, 22)
 
+        def _close_keypad():
+            try:
+                keypad.grab_release()
+            except Exception:
+                pass
+            try:
+                keypad.destroy()
+            except Exception:
+                pass
+            try:
+                self._suppress_cfg_watch = False
+            except Exception:
+                pass
+            try:
+                self._active_keypad = None
+            except Exception:
+                pass
+
         def confirm_and_close():
             entry_widget.delete(0, tk.END)
             entry_widget.insert(0, kp_value.get())
-            try:
-                keypad.grab_release()
-            except:
-                pass
-            keypad.destroy()
-            self._active_keypad = None
+            _close_keypad()
 
         # Fila 0: 7 8 9
         ttk.Button(all_btns, text="7", command=lambda: press_digit("7"), bootstyle="light", padding=pad_num).grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
@@ -1970,6 +2001,10 @@ class BalanzaGUI(ttk.Window):
         dialog.grab_set()
         dialog.lift()
         dialog.focus_force()
+        try:
+            dialog.attributes('-topmost', True)
+        except Exception:
+            pass
         
         # Esperar respuesta con loop manual
         while not result['done']:
@@ -2648,6 +2683,15 @@ class BalanzaGUI(ttk.Window):
             # Fix Z-order: bind a la ventana principal para forzar lift si recupera foco
             def force_top(event=None):
                 try:
+                    # Si el foco está en una toplevel hija del diálogo (p.ej. keypad), no forzar lift
+                    focus_widget = self.focus_get()
+                    if focus_widget:
+                        try:
+                            top = focus_widget.winfo_toplevel()
+                        except Exception:
+                            top = None
+                        if top is not None and getattr(top, 'master', None) is dialog:
+                            return
                     dialog.lift()
                     dialog.attributes('-topmost', True)
                 except Exception:
@@ -2661,9 +2705,38 @@ class BalanzaGUI(ttk.Window):
             def _watch_pwd():
                 try:
                     if dialog.winfo_exists():
+                        # Si hay una bandera que suprime el watchdog (un diálogo hijo abierto), no forzar lift
+                        if getattr(self, '_suppress_cfg_watch', False):
+                            dialog.after(1000, _watch_pwd)
+                            return
                         try:
-                            dialog.lift()
-                            dialog.attributes('-topmost', True)
+                            # Si el foco está en otra toplevel, respetarlo.
+                            focus_widget = self.focus_get()
+                            if focus_widget:
+                                try:
+                                    top = focus_widget.winfo_toplevel()
+                                except Exception:
+                                    top = None
+                                # Si la ventana con foco es una ventana hija del diálogo,
+                                # asegurar que ella esté topmost y liftearla.
+                                if top is not None and getattr(top, 'master', None) is dialog:
+                                    try:
+                                        top.attributes('-topmost', True)
+                                        top.lift()
+                                    except Exception:
+                                        pass
+                                    dialog.after(1000, _watch_pwd)
+                                    return
+                                # Si el foco está en otra ventana distinta, no forzar el lift.
+                                if top is not None and top is not dialog:
+                                    dialog.after(1000, _watch_pwd)
+                                    return
+                            # Caso por defecto: levantar el diálogo
+                            try:
+                                dialog.lift()
+                                dialog.attributes('-topmost', True)
+                            except Exception:
+                                pass
                         except Exception:
                             pass
                         dialog.after(1000, _watch_pwd)
@@ -2815,6 +2888,15 @@ class BalanzaGUI(ttk.Window):
         # Fix Z-order para el diálogo de configuración completo
         def force_top(event=None):
             try:
+                # Evitar elevar el diálogo si el foco actual pertenece a una ventana hija (p.ej. keypad)
+                focus_widget = self.focus_get()
+                if focus_widget:
+                    try:
+                        top = focus_widget.winfo_toplevel()
+                    except Exception:
+                        top = None
+                    if top is not None and getattr(top, 'master', None) is dialog:
+                        return
                 dialog.lift()
                 dialog.attributes('-topmost', True)
             except Exception:
@@ -2828,9 +2910,37 @@ class BalanzaGUI(ttk.Window):
         def _watch_cfg():
             try:
                 if dialog.winfo_exists():
+                    # Si hay una bandera que suprime el watchdog (un diálogo hijo abierto), no forzar lift
+                    if getattr(self, '_suppress_cfg_watch', False):
+                        dialog.after(1000, _watch_cfg)
+                        return
                     try:
-                        dialog.lift()
-                        dialog.attributes('-topmost', True)
+                        # Comprueba si el foco está en otro Toplevel (p.ej. keypad).
+                        focus_widget = self.focus_get()
+                        if focus_widget:
+                            try:
+                                top = focus_widget.winfo_toplevel()
+                            except Exception:
+                                top = None
+                            # Si el toplevel con foco es hijo del diálogo, darle topmost y lift
+                            if top is not None and getattr(top, 'master', None) is dialog:
+                                try:
+                                    top.attributes('-topmost', True)
+                                    top.lift()
+                                except Exception:
+                                    pass
+                                dialog.after(1000, _watch_cfg)
+                                return
+                            # Si el foco está en otra ventana distinta, no forzar lift del diálogo
+                            if top is not None and top is not dialog:
+                                dialog.after(1000, _watch_cfg)
+                                return
+                        # Si no hay otro foco relevante, asegurar topmost del diálogo
+                        try:
+                            dialog.lift()
+                            dialog.attributes('-topmost', True)
+                        except Exception:
+                            pass
                     except Exception:
                         pass
                     dialog.after(1000, _watch_cfg)
