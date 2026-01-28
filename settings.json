@@ -1,36 +1,29 @@
 {
-  "execution_mode": "MOCK",
-  "connection_type": "SERIAL",
-  "serial_port": "COM3",
-  "tcp_ip": "",
-  "tcp_port": "",
-  "nodes": {
-    "celda_1": {
-      "id": 4248,
-      "ch": "ch1",
-      "serial": "3012"
-    },
-    "celda_2": {
-      "id": 4249,
-      "ch": "ch2",
-      "serial": "3013"
-    },
-    "celda_3": {
-      "id": 4248,
-      "ch": "ch2",
-      "serial": "3011"
-    },
-    "celda_4": {
-      "id": 4249,
-      "ch": "ch1",
-      "serial": "3010"
+    "execution_mode": "REAL",
+    "connection_type": "SERIAL",
+    "serial_port": "COM4",
+    "tcp_ip": "",
+    "tcp_port": "",
+    "nodes": {
+        "celda_1": {
+            "id": 4248,
+            "ch": "ch1",
+            "serial": "3012"
+        },
+        "celda_2": {
+            "id": 4249,
+            "ch": "ch2",
+            "serial": "3013"
+        },
+        "celda_3": {
+            "id": 4248,
+            "ch": "ch2",
+            "serial": "3011"
+        },
+        "celda_4": {
+            "id": 4249,
+            "ch": "ch1",
+            "serial": "3010"
+        }
     }
-  },
-  "tara_global": 0.0,
-  "tares": {
-    "4248:ch1": 1880.5887147715603,
-    "4249:ch2": 1201.8780297418814,
-    "4248:ch2": 1723.5047078341981,
-    "4249:ch1": 1416.625378801708
-  }
 }

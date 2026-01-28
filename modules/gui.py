@@ -3120,6 +3120,15 @@ class BalanzaGUI(ttk.Window):
                        width=btn_width,
                        padding=btn_padding)
         btn_salvar.configure(style='Large.success.TButton')
+        # Guardar propiedades originales para restaurar (evitar cambios de tamaño)
+        try:
+            btn_salvar._orig_style = btn_salvar.cget('style')
+        except Exception:
+            btn_salvar._orig_style = 'Large.success.TButton'
+        try:
+            btn_salvar._orig_width = btn_width
+        except Exception:
+            btn_salvar._orig_width = None
         try:
             btn_salvar.grid(row=0, column=0, padx=6, pady=0)
         except Exception:
@@ -3287,10 +3296,37 @@ class BalanzaGUI(ttk.Window):
             main_content.pack(fill=BOTH, expand=True, pady=(15, self.scaled(30)))
         else:
             main_content.pack(fill=BOTH, expand=True, pady=(15, 0))
-        # Tres columnas: Descoberta más ancha, Viga 1 y Viga 2 iguales
-        main_content.columnconfigure(0, weight=12)
-        main_content.columnconfigure(1, weight=10)
-        main_content.columnconfigure(2, weight=10)
+        # Tres columnas: Descoberta (40%), Viga 1 (30%), Viga 2 (30%)
+        # Usar proporciones de peso para asegurar reparto estable del espacio
+        main_content.columnconfigure(0, weight=50)
+        main_content.columnconfigure(1, weight=25)
+        main_content.columnconfigure(2, weight=25)
+
+        # Enforce stable column sizes as percentages of available width to avoid
+        # reflow when dialog buttons change size (e.g., al pulsar SALVAR).
+        def _enforce_col_sizes(event=None):
+            try:
+                total_w = main_content.winfo_width()
+                if not total_w or total_w < 100:
+                    return
+                col0 = int(total_w * 0.50)
+                col1 = int(total_w * 0.25)
+                col2 = total_w - col0 - col1
+                main_content.columnconfigure(0, minsize=col0)
+                main_content.columnconfigure(1, minsize=col1)
+                main_content.columnconfigure(2, minsize=col2)
+            except Exception:
+                pass
+
+        try:
+            main_content.bind('<Configure>', _enforce_col_sizes)
+            # Run once after layout to set initial sizes
+            try:
+                self.after(100, _enforce_col_sizes)
+            except Exception:
+                _enforce_col_sizes()
+        except Exception:
+            pass
         # Fila 0: headers; Fila 1: contenido principal
         main_content.rowconfigure(0, weight=0)
         main_content.rowconfigure(1, weight=1)
@@ -3786,19 +3822,117 @@ class BalanzaGUI(ttk.Window):
                     except Exception as e:
                         print(f"[GUI] Aviso: No se pudo actualizar driver: {e}")
 
+                # Recargar configuración en el DataProcessor para no requerir reinicio
+                try:
+                    if hasattr(self, 'data_processor') and self.data_processor:
+                        try:
+                            self.data_processor.nodos_config = new_config["nodes"]
+                            # Re-inicializar estructuras internas (buffers, mapeos)
+                            if hasattr(self.data_processor, '_initialize_structures'):
+                                try:
+                                    self.data_processor._initialize_structures()
+                                except Exception:
+                                    pass
+                            # Reaplicar calibraciones disponibles para las nuevas claves
+                            try:
+                                self._apply_saved_calibrations_on_connect()
+                            except Exception:
+                                pass
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                # Informar al backend para que aplique la nueva config (puerto/nodos) en caliente
+                try:
+                    if hasattr(self, 'command_queue') and self.command_queue:
+                        try:
+                            self.command_queue.put({'cmd': 'APPLY_CONFIG', 'payload': new_config})
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
                 
                 # Mostrar el mensaje de éxito anclado a la ventana de configuración
-                from tkinter import messagebox
-                messagebox.showinfo("Salvo", "Configuração salva e aplicada.", parent=dialog)
-                # Asegurar que la ventana de configuración permanezca al frente y con foco
-                dialog.lift()
-                dialog.focus_force()
+                # Registrar y devolver el foco al diálogo de configuración sin mostrar aviso
+                try:
+                    self.log_message("Configuración guardada y aplicada.")
+                except Exception:
+                    pass
+                try:
+                    dialog.lift()
+                    dialog.focus_force()
+                except Exception:
+                    pass
+                # Refrescar la vista de calibración para que muestre los nuevos N° de Série
+                try:
+                    self._refresh_calibration_sensor_serials()
+                    try:
+                        # También actualizar estilos/selección visual si la pestaña está abierta
+                        if hasattr(self, '_cal_select_inner') and getattr(self, '_cal_select_inner', None):
+                            self._update_sensor_buttons_visuals(self._cal_select_inner)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+
+                # Feedback visual: deshabilitar el botón SALVAR durante 5 segundos
+                try:
+                    # btn_salvar está en el scope exterior; cambiar estado y estilo
+                    try:
+                        btn_salvar.configure(state='disabled')
+                    except Exception:
+                        try:
+                            btn_salvar.state(['disabled'])
+                        except Exception:
+                            pass
+
+                    def _restore_salvar():
+                        try:
+                            btn_salvar.configure(state='normal')
+                        except Exception:
+                            try:
+                                btn_salvar.state(['!disabled'])
+                            except Exception:
+                                pass
+                        try:
+                            # Restaurar estilo y ancho originales para evitar shrink
+                            if getattr(btn_salvar, '_orig_style', None):
+                                btn_salvar.configure(style=btn_salvar._orig_style)
+                        except Exception:
+                            pass
+                        try:
+                            if getattr(btn_salvar, '_orig_width', None) is not None:
+                                btn_salvar.configure(width=btn_salvar._orig_width)
+                        except Exception:
+                            pass
+
+                    # Restaurar tras ~5000 ms
+                    try:
+                        self.after(5000, _restore_salvar)
+                    except Exception:
+                        # como fallback usar timer en thread si after fallara
+                        import threading
+                        threading.Timer(5.0, _restore_salvar).start()
+                except Exception:
+                    pass
             except Exception as e:
                 try:
                     dialog.grab_release()
                 except:
                     pass
-                self.show_alert("Erro", f"Não foi possível salvar: {e}", "error", parent=self)
+                try:
+                    self._suppress_cfg_watch = True
+                except Exception:
+                    pass
+                try:
+                    # Mostrar error anclado al diálogo de configuración
+                    self.show_alert("Erro", f"Não foi possível salvar: {e}", "error", parent=dialog)
+                finally:
+                    try:
+                        self._suppress_cfg_watch = False
+                    except Exception:
+                        pass
         
         # Asignar la función a la referencia del header
         save_config_ref[0] = save_config
@@ -3848,6 +3982,11 @@ class BalanzaGUI(ttk.Window):
         # Container interior con borde para diferenciar visualmente la zona
         inner_container = ttk.Frame(select_frame, style='CardNoBorder.TFrame') 
         inner_container.pack(fill=X)
+        # Guardar referencia para poder refrescar los números de serie cuando cambien
+        try:
+            self._cal_select_inner = inner_container
+        except Exception:
+            pass
         
         sensor_names = list(current_config.get("nodes", {}).keys())
         if not sensor_names:
@@ -4251,35 +4390,74 @@ class BalanzaGUI(ttk.Window):
                     lbl_status.configure(text="SELECIONADO")
             else:
                 # == NORMAL / NO SELECCIONADO ==
-                try: widget.configure(style='Card.TFrame')
-                except: pass
+                try:
+                    widget.configure(style='Card.TFrame')
+                except Exception:
+                    pass
                 if content_frame:
-                    try: content_frame.configure(style='Card.TFrame')
-                    except: pass
-                # Restaurar fondo y aplicar borde leve para delimitar la tarjeta
-                try:
-                    widget.configure(background=BG_CARD, relief='solid', borderwidth=1,
-                                     highlightthickness=1, highlightbackground="#e2e8f0")
-                except Exception:
-                    pass
-                try:
-                    content_frame.configure(background=BG_CARD)
-                except Exception:
-                    pass
-                for sub in content_frame.winfo_children():
-                    if isinstance(sub, ttk.Label):
-                        # Aplica estilos normales (evitar configurar 'background' en ttk.Label)
-                        try:
-                            if hasattr(sub, 'tag') and sub.tag == "name":
-                                sub.configure(foreground=TEXT_MAIN, font=("Segoe UI", self.scaled_font(26), "bold"), background=BG_CARD)
-                            elif hasattr(sub, 'tag') and sub.tag == "serial":
-                                sub.configure(foreground=TEXT_MUTED, font=("Segoe UI", self.scaled_font(14)), background=BG_CARD)
-                            elif hasattr(sub, 'tag') and sub.tag == "status":
-                                sub.configure(foreground=TEXT_MUTED, font=("Segoe UI", self.scaled_font(12)), background=BG_CARD)
-                        except Exception:
-                            pass
+                    try:
+                        content_frame.configure(background=BG_CARD)
+                    except Exception:
+                        pass
+                    for sub in content_frame.winfo_children():
+                        if isinstance(sub, ttk.Label):
+                            try:
+                                if hasattr(sub, 'tag') and sub.tag == 'name':
+                                    sub.configure(foreground=COLOR_NORMAL_FG, font=("Segoe UI", self.scaled_font(26), 'bold'), background=BG_CARD)
+                                elif hasattr(sub, 'tag') and sub.tag == 'serial':
+                                    sub.configure(foreground=COLOR_NORMAL_SUB, font=("Segoe UI", self.scaled_font(14)), background=BG_CARD)
+                                elif hasattr(sub, 'tag') and sub.tag == 'status':
+                                    sub.configure(foreground=COLOR_NORMAL_FG, font=("Segoe UI", self.scaled_font(12)), background=BG_CARD)
+                            except Exception:
+                                pass
                 if lbl_status:
-                    lbl_status.configure(text="Clicar para selecionar")
+                    try:
+                        lbl_status.configure(text="Clicar para selecionar")
+                    except Exception:
+                        pass
+
+    def _refresh_calibration_sensor_serials(self):
+        """Refresca los labels de Nº Serie mostrados en la pestaña de calibración
+        a partir de `self.data_processor.nodos_config`. Esto asegura que si el
+        usuario cambia el serial en el diálogo de configuración, la vista de
+        calibración lo muestre inmediatamente.
+        """
+        try:
+            container = getattr(self, '_cal_select_inner', None)
+            if container is None or not container.winfo_exists():
+                return
+            # Obtener mapping actual
+            mapping = {}
+            try:
+                if hasattr(self, 'data_processor') and getattr(self.data_processor, 'nodos_config', None):
+                    mapping = self.data_processor.nodos_config
+            except Exception:
+                mapping = {}
+
+            for btn_frame in container.winfo_children():
+                s_name = getattr(btn_frame, 'sensor_name', None)
+                if not s_name:
+                    continue
+                # Buscar label con tag 'serial' dentro del content frame
+                for child in btn_frame.winfo_children():
+                    if isinstance(child, ttk.Frame):
+                        for sub in child.winfo_children():
+                            tag = getattr(sub, 'tag', None)
+                            if tag == 'serial' and isinstance(sub, ttk.Label):
+                                # Actualizar texto según mapping
+                                try:
+                                    serial_val = ''
+                                    cfg = mapping.get(s_name, {}) if isinstance(mapping, dict) else {}
+                                    serial_val = cfg.get('serial', '') if isinstance(cfg, dict) else ''
+                                    if serial_val:
+                                        sub.configure(text=f"Nº Serie: {serial_val}")
+                                    else:
+                                        sub.configure(text="")
+                                except Exception:
+                                    pass
+                        break
+        except Exception:
+            pass
     
     def _open_calibration_wizard(self, current_config, sensor_name_override=None, config_dialog=None):
         """
@@ -4361,10 +4539,38 @@ class BalanzaGUI(ttk.Window):
         wizard.title(f"Curva da Célula {celda_num} (Nº Série {serial_num})")
         w, h = self.winfo_screenwidth(), self.winfo_screenheight()
         wizard.geometry(f"{w}x{h}+0+0")
-        wizard.attributes('-fullscreen', True)  # Fullscreen nativo de Windows
-        wizard.grab_set()  # Capturar eventos para el wizard
-        wizard.lift()
-        wizard.focus_force()
+        try:
+            wizard.attributes('-fullscreen', True)  # Fullscreen nativo de Windows
+        except Exception:
+            pass
+        # Si venimos de un diálogo de configuración, hacemos transient con él
+        try:
+            if config_dialog is not None and config_dialog.winfo_exists():
+                try:
+                    wizard.transient(config_dialog)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # Marcar topmost para asegurar stack correcto respecto al diálogo de config
+        try:
+            wizard.attributes('-topmost', True)
+        except Exception:
+            pass
+        try:
+            wizard.grab_set()  # Capturar eventos para el wizard
+        except Exception:
+            pass
+        try:
+            wizard.lift()
+            wizard.focus_force()
+        except Exception:
+            pass
+        # Suprimir el watchdog de config mientras el wizard esté activo
+        try:
+            self._suppress_cfg_watch = True
+        except Exception:
+            pass
         self._cal_wizard = wizard
 
         # === HELPERS ===
@@ -4381,6 +4587,11 @@ class BalanzaGUI(ttk.Window):
             try:
                 wizard.destroy()
             except:
+                pass
+            try:
+                # Limpiar bandera que suprime el watchdog
+                self._suppress_cfg_watch = False
+            except Exception:
                 pass
             # Restaurar grab del diálogo de configuración
             if self._config_dialog_ref:

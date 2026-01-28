@@ -235,6 +235,78 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
                         data_queue.put({'type': 'LOG', 'payload': "Descoberta não disponível em modo simulação."})
                         data_queue.put({'type': 'DISCOVERED_NODES', 'payload': []})
                     
+                elif cmd == 'APPLY_CONFIG':
+                    # Aplicar nueva configuración en caliente: puerto serial y asignación de nodos
+                    payload = cmd_msg.get('payload', {}) or {}
+                    new_port = payload.get('serial_port')
+                    new_nodes = payload.get('nodes')
+                    try:
+                        global ACTIVE_COM, ACTIVE_NODOS
+                        if new_port:
+                            ACTIVE_COM = new_port
+                            data_queue.put({'type': 'LOG', 'payload': f"Puerto serial actualizado a {ACTIVE_COM}"})
+                        if new_nodes:
+                            ACTIVE_NODOS = new_nodes
+                            data_queue.put({'type': 'LOG', 'payload': f"Asignación de nodos actualizada ({len(ACTIVE_NODOS)} nodos)"})
+
+                        # Si ya estamos conectados, desconectar y reconectar usando la nueva configuración
+                        def do_reconnect():
+                            nonlocal connection_in_progress, acquisition_paused
+                            try:
+                                try:
+                                    if hasattr(sistema_pesaje, 'set_progress_callback'):
+                                        sistema_pesaje.set_progress_callback(lambda msg: data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'message': msg}}))
+                                except Exception:
+                                    pass
+
+                                # Forzar desconexión limpia
+                                try:
+                                    sistema_pesaje.desconectar()
+                                except Exception:
+                                    pass
+
+                                connected = sistema_pesaje.conectar(ACTIVE_COM)
+                                recovered = 0
+                                try:
+                                    if hasattr(sistema_pesaje, 'get_recovered_count'):
+                                        recovered = int(sistema_pesaje.get_recovered_count() or 0)
+                                except Exception:
+                                    recovered = 0
+
+                                data_queue.put({'type': 'STATUS', 'payload': connected})
+                                if connected:
+                                    data_queue.put({'type': 'LOG', 'payload': f"Re-conectado con éxito en {ACTIVE_COM}"})
+                                    data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'success', 'message': 'Re-conexión establecida'}})
+                                    acquisition_paused = False
+                                else:
+                                    if recovered > 0:
+                                        try:
+                                            expected = len(ACTIVE_NODOS) if ACTIVE_NODOS else 0
+                                        except Exception:
+                                            expected = 0
+                                        data_queue.put({'type': 'LOG', 'payload': f"Conexión parcial tras aplicar config: {recovered}/{expected} nodos"})
+                                        data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'partial', 'message': f'Conexión parcial: {recovered}/{expected} nodos', 'recovered': recovered, 'expected': expected}})
+                                    else:
+                                        data_queue.put({'type': 'LOG', 'payload': f"Fallo al reconectar en {ACTIVE_COM}"})
+                                        data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'failed', 'message': 'Fallo al reconectar'}})
+                            except Exception as e:
+                                data_queue.put({'type': 'LOG', 'payload': f"Error durante reconexión: {e}"})
+                            finally:
+                                try:
+                                    if hasattr(sistema_pesaje, 'set_progress_callback'):
+                                        sistema_pesaje.set_progress_callback(None)
+                                except Exception:
+                                    pass
+                                connection_in_progress = False
+
+                        # Lanzar reconexión en hilo si ya conectado o intentar conectar si estaba desconectado
+                        if not connection_in_progress:
+                            connection_in_progress = True
+                            connection_thread = threading.Thread(target=do_reconnect, daemon=True)
+                            connection_thread.start()
+
+                    except Exception as e:
+                        data_queue.put({'type': 'LOG', 'payload': f"Error aplicando configuración: {e}"})
                 elif cmd == 'EXIT':
                     running = False
                     sistema_pesaje.desconectar()
