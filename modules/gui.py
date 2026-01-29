@@ -55,18 +55,39 @@ class BalanzaGUI(ttk.Window):
         real_screen_width = self.winfo_screenwidth()
         real_screen_height = self.winfo_screenheight()
 
-        # Si la resolución es 1280x800, quitar barra superior
-        if real_screen_width == 1280 and real_screen_height == 800:
-            self.overrideredirect(True)
-            self.geometry(f"{real_screen_width}x{real_screen_height}+0+0")
-        else:
-            # En otras resoluciones: ventana maximizada con barra
+        # Mostrar la ventana ocupando 50% del ancho (centrada) y 100% del alto (barra superior visible)
+        try:
+            # 50% del ancho y 90% de la altura (reducido 10%) centrado verticalmente
+            desired_w = max(300, int(real_screen_width * 0.5))
+            desired_h = max(200, int(real_screen_height * 0.9))
+            x = (real_screen_width - desired_w) // 2
+            y = (real_screen_height - desired_h) // 2
+            # Asegurar decorations visibles (no overredirect)
             try:
-                self.state("zoomed")  # Solo en Windows
+                if getattr(self, 'overrideredirect', None):
+                    self.overrideredirect(False)
+            except Exception:
+                pass
+            self.geometry(f"{desired_w}x{desired_h}+{x}+{y}")
+        except Exception:
+            try:
+                self.state("zoomed")
+            except Exception:
+                self.geometry(f"{real_screen_width}x{real_screen_height}+0+0")
+        except Exception:
+            try:
+                self.state("zoomed")
             except Exception:
                 self.geometry(f"{real_screen_width}x{real_screen_height}+0+0")
 
         self._calculate_scale_factors(real_screen_width, real_screen_height)
+        # Si la app corre en una PC normal (no tablet), reducir ligeramente las fuentes
+        try:
+            if real_screen_width >= 1024 and not (real_screen_width == 1280 and real_screen_height == 800):
+                # Comprimir la escala de fuentes un 10% para evitar tamaños excesivos
+                self.font_scale = max(0.7, self.font_scale * 0.9)
+        except Exception:
+            pass
         
         # Guardar referencia para mover ventana (drag)
         self._drag_data = {"x": 0, "y": 0}
@@ -214,9 +235,13 @@ class BalanzaGUI(ttk.Window):
         
         # Total Panel - MUY PROMINENTE para nfasis mximo
         self.style.configure('TotalPanel.TFrame', background=PRIMARY)
-        self.style.configure('TotalLabel.TLabel', background=PRIMARY, foreground="white", font=(FONT_MAIN, sf(28), "bold"))
-        self.style.configure('TotalValue.TLabel', background=PRIMARY, foreground="white", font=(FONT_MONO, sf(72), "bold"))
-        self.style.configure('TotalUnit.TLabel', background=PRIMARY, foreground="white", font=(FONT_MAIN, sf(36)))
+        # Ajustes para mostrar un único valor grande (modo single-node)
+        # Reducir ligeramente las fuentes para un PC normal (no tablet)
+        self.style.configure('TotalLabel.TLabel', background=PRIMARY, foreground="white", font=(FONT_MAIN, sf(30), "bold"))
+        # Valor principal: fuente grande pero comprimida
+        self.style.configure('TotalValue.TLabel', background=PRIMARY, foreground="white", font=(FONT_MONO, sf(96), "bold"))
+        # Unidad: tamaño grande pero menor que el valor
+        self.style.configure('TotalUnit.TLabel', background=PRIMARY, foreground="white", font=(FONT_MAIN, sf(40)))
         
         # Total Panel DANGER - Cuando hay sensor desconectado (ROJO)
         self.style.configure('TotalPanelDanger.TFrame', background=DANGER)
@@ -549,7 +574,15 @@ class BalanzaGUI(ttk.Window):
             is_tablet = (sw == 1280 and sh == 800)
         except Exception:
             is_tablet = False
-        tare_min = self.scaled(140) if is_tablet else self.scaled(100)
+        # Reducir ligeramente la altura mínima de la sección TARA para mayor compacidad
+        tare_min = self.scaled(120) if is_tablet else self.scaled(80)
+        # Si estamos en modo single-node, reservar algo más pero más compacto que antes
+        try:
+            if hasattr(self, 'data_processor') and getattr(self.data_processor, 'single_node_mode', False):
+                # Dar espacio razonable a TARA en modo single-node, pero más compacto
+                tare_min = max(tare_min, self.scaled(140))
+        except Exception:
+            pass
         grid_area.rowconfigure(1, weight=0, minsize=tare_min)
 
         def create_static_beam_card(parent, title, col):
@@ -578,27 +611,50 @@ class BalanzaGUI(ttk.Window):
         except Exception:
             pass
 
-        self.total_section = ttk.Frame(total_card, style='TotalPanel.TFrame', padding=self.scaled(20))
+        # Añadir margin extra para que el valor no quede tan estirado (reducido para evitar recorte de la unidad)
+        self.total_section = ttk.Frame(total_card, style='TotalPanel.TFrame', padding=self.scaled(40))
         self.total_section.pack(fill=BOTH, expand=YES)
         try:
             self.total_section.pack_propagate(False)
         except Exception:
             pass
 
-        self.lbl_total_title = ttk.Label(self.total_section, text="PESO TOTAL", style='TotalLabel.TLabel')
-        self.lbl_total_title.pack(pady=(30, 10))
+        self.lbl_total_title = ttk.Label(self.total_section, text="Peso", style='TotalLabel.TLabel')
+        self.lbl_total_title.pack(pady=(20, 8))
         self.lbl_total = ttk.Label(self.total_section, text="0", style='TotalValue.TLabel', anchor="center")
         self.lbl_total.pack(expand=YES, fill=X)
         try:
             self.lbl_total.target_width = self.scaled(400)
         except Exception:
             self.lbl_total.target_width = None
-        self.lbl_total_unit = ttk.Label(self.total_section, text="t", style='TotalUnit.TLabel')
-        self.lbl_total_unit.pack(pady=(0, 30))
+        self.lbl_total_unit = ttk.Label(self.total_section, text="Kg", style='TotalUnit.TLabel')
+        # Reducir padding inferior para evitar que la unidad se corte en pantallas estrechas
+        self.lbl_total_unit.pack(pady=(0, 12))
 
         # 3. TARJETA DERECHA (oculta en single-node)
         self.lbl_right_sum = create_static_beam_card(grid_area, "", 2)
         self.lbl_right_total = self.lbl_right_sum
+
+        # Si estamos en modo single-node, ocultar las tarjetas de viga (izquierda/derecha)
+        try:
+            if hasattr(self, 'data_processor') and getattr(self.data_processor, 'single_node_mode', False):
+                try:
+                    self.lbl_left_sum.grid_remove()
+                except Exception:
+                    pass
+                try:
+                    self.lbl_right_sum.grid_remove()
+                except Exception:
+                    pass
+                # Expandir columna central para ocupar el espacio
+                try:
+                    grid_area.columnconfigure(0, weight=0, minsize=0)
+                    grid_area.columnconfigure(2, weight=0, minsize=0)
+                    grid_area.columnconfigure(1, weight=1)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
         # Inicializar diccionario vacío de widgets de sensores individuales
         self.sensor_widgets = {}
@@ -625,23 +681,24 @@ class BalanzaGUI(ttk.Window):
             except Exception:
                 is_laptop = False
 
-            inner_pad = self.scaled(8)
+            # Reducir padding interno para compactar verticalmente la sección de TARA
+            inner_pad = self.scaled(6)
             if is_laptop:
-                # Usar menos padding vertical en pantallas grandes
-                inner_pad = max(2, int(self.scaled(8) * 0.6))
+                # Usar aún menos padding vertical en pantallas grandes
+                inner_pad = max(1, int(self.scaled(6) * 0.7))
 
             tare_inner = ttk.Frame(tare_frame, style='CardNoBorder.TFrame', padding=inner_pad)
             tare_inner.pack(fill=BOTH, expand=YES)
 
             # Usar grid para controlar posiciones
-            tare_inner.columnconfigure(0, weight=0, minsize=self.scaled(328))  # columna fija izquierda (botón)
-            tare_inner.columnconfigure(1, weight=1)                             # columna central expansible
-            tare_inner.columnconfigure(2, weight=0, minsize=self.scaled(328))  # columna fija derecha (botón)
+            # Reducir los minsize laterales para que la columna central tenga más espacio
+            tare_inner.columnconfigure(0, weight=0, minsize=self.scaled(80))  # columna fija izquierda
+            tare_inner.columnconfigure(1, weight=1, minsize=self.scaled(220)) # columna central expansible
+            tare_inner.columnconfigure(2, weight=0, minsize=self.scaled(80))  # columna fija derecha
 
-            # Botones grandes integrados a los extremos; el centro se elimina
-            # Hacer que la fila ocupe todo el alto disponible para que los botones parezcan bloques
+            # Evitar que la fila se expanda verticalmente para que los botones no se estiren
             try:
-                tare_inner.rowconfigure(0, weight=1)
+                tare_inner.rowconfigure(0, weight=0)
             except Exception:
                 pass
 
@@ -652,14 +709,23 @@ class BalanzaGUI(ttk.Window):
                     text="TARA",
                     style="TareYellow.TButton",
                     command=self.do_tare,
-                    padding=(self.scaled(30), self.scaled(8)),
-                    width=4
+                    padding=(self.scaled(20), self.scaled(12)),
+                    width=12
                 )
             except Exception:
                 btn_tare = ttk.Button(tare_inner, text="TARA", command=self.do_tare)
             # Colocar el botón TARA en la columna central para centrarlo
-            btn_tare.grid(row=0, column=1, sticky='nsew', padx=0, pady=0)
-            self.btn_tare_main = btn_tare
+            try:
+                # Mostrar siempre el botón TARA (incluso en single-node)
+                # Reducir el padding vertical del botón para que la sección ocupe menos altura
+                btn_tare.grid(row=0, column=1, sticky='n', padx=self.scaled(10), pady=(self.scaled(8), self.scaled(8)))
+                self.btn_tare_main = btn_tare
+            except Exception:
+                try:
+                    btn_tare.grid(row=0, column=1, sticky='nsew', padx=0, pady=0)
+                    self.btn_tare_main = btn_tare
+                except Exception:
+                    self.btn_tare_main = None
 
             # Botón derecho: RESET (rojo), consistente en tamaño y padding
             try:
@@ -2890,8 +2956,10 @@ class BalanzaGUI(ttk.Window):
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
         try:
-            dlg_w = int(screen_w * 0.9)
-            dlg_h = int(screen_h * 0.9)
+            # Aplicar reducción adicional del 15% solicitada por el usuario
+            dlg_w = int(screen_w * 0.8 * 0.85)
+            # Reducir verticalmente el diálogo de CONFIG para hacerlo más compacto (15% menos)
+            dlg_h = int(screen_h * 0.83 * 0.85)
             x = (screen_w - dlg_w) // 2
             y = (screen_h - dlg_h) // 2
             dialog.geometry(f"{dlg_w}x{dlg_h}+{x}+{y}")
@@ -3098,42 +3166,18 @@ class BalanzaGUI(ttk.Window):
             btn_width = 15
             btn_padding = (20, 10)
 
-        # Left: CONECTAR and decimals (reuse dialog functions)
-        try:
-            connect_text = "CONECTAR" if not getattr(self, 'connected', False) else "DESCONECTAR"
-        except Exception:
-            connect_text = "CONECTAR"
+        # Left buttons (CONECTAR / 0.00) removed for config dialog to simplify UI
 
-        btn_connect_dialog = ttk.Button(left_frame, text=connect_text,
-                                        command=self.toggle_connection,
-                                        bootstyle="success",
-                                        width=12, padding=btn_padding)
-        btn_connect_dialog.configure(style='Large.success.TButton')
-        btn_connect_dialog.pack(side=LEFT, padx=(8, 12))
-        # Guardar referencia en self para poder sincronizar estado desde _update_status
-        try:
-            self.btn_connect_dialog = btn_connect_dialog
-        except Exception:
-            pass
+        # Center the main action buttons
+        center_holder = ttk.Frame(btn_container)
+        center_holder.grid(row=0, column=1)
 
-        # Decimals button mirrors main button behavior
-        try:
-            dec_text = self.btn_decimals.cget('text') if hasattr(self, 'btn_decimals') else '0.00'
-        except Exception:
-            dec_text = '0.00'
-        btn_dec_dialog = ttk.Button(left_frame, text=dec_text,
-                                    command=self.toggle_decimals,
-                                    bootstyle="primary",
-                                    width=8, padding=btn_padding)
-        btn_dec_dialog.configure(style='Large.info.TButton')
-        btn_dec_dialog.pack(side=LEFT, padx=(0, 8))
-
-        # Right: SALVAR, CANCELAR, FECHAR
-        btn_salvar = ttk.Button(right_frame, text="SALVAR",
-                       bootstyle="success",
-                       command=do_save,
-                       width=btn_width,
-                       padding=btn_padding)
+        # Right: SALVAR, CANCELAR, FECHAR (now centered)
+        btn_salvar = ttk.Button(center_holder, text="SALVAR",
+                   bootstyle="success",
+                   command=do_save,
+                   width=btn_width,
+                   padding=btn_padding)
         btn_salvar.configure(style='Large.success.TButton')
         # Guardar propiedades originales para restaurar (evitar cambios de tamaño)
         try:
@@ -3145,39 +3189,39 @@ class BalanzaGUI(ttk.Window):
         except Exception:
             btn_salvar._orig_width = None
         try:
-            btn_salvar.grid(row=0, column=0, padx=6, pady=0)
+            btn_salvar.pack(side=LEFT, padx=6)
         except Exception:
             btn_salvar.pack(side=LEFT, padx=6)
 
-        btn_cancelar = ttk.Button(right_frame, text="CANCELAR",
+        btn_cancelar = ttk.Button(center_holder, text="CANCELAR",
                        bootstyle="secondary",
                        command=safe_close_dialog,
                        width=btn_width,
                        padding=btn_padding)
         btn_cancelar.configure(style='Large.warning.TButton')
         try:
-            btn_cancelar.grid(row=0, column=1, padx=6, pady=0)
+            btn_cancelar.pack(side=LEFT, padx=6)
         except Exception:
             btn_cancelar.pack(side=LEFT, padx=6)
 
         # Separador visual (espacio entre botones y FECHAR)
         try:
-            sep = ttk.Frame(right_frame, width=self.scaled(20))
-            sep.grid(row=0, column=2)
+            sep = ttk.Frame(center_holder, width=self.scaled(20))
+            sep.pack(side=LEFT)
         except Exception:
             try:
-                ttk.Frame(right_frame, width=self.scaled(20)).pack(side=LEFT)
+                ttk.Frame(center_holder, width=self.scaled(20)).pack(side=LEFT)
             except Exception:
                 pass
 
-        btn_fechar = ttk.Button(right_frame, text="FECHAR",
+        btn_fechar = ttk.Button(center_holder, text="FECHAR",
                        bootstyle="danger-outline",
                        command=safe_close_dialog,
                        width=btn_width,
                        padding=btn_padding)
         btn_fechar.configure(style='Large.danger.TButton')
         try:
-            btn_fechar.grid(row=0, column=3, padx=6, pady=0)
+            btn_fechar.pack(side=LEFT, padx=6)
         except Exception:
             btn_fechar.pack(side=LEFT, padx=6)
         # Añadir logo2 junto al botón FECHAR (a la derecha)

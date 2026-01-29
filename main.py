@@ -15,6 +15,7 @@ from config import MODO_EJECUCION, PUERTO_COM as DEFAULT_COM, NODOS_CONFIG as DE
 from modules.data_processor import DataProcessor
 from modules.gui import BalanzaGUI
 from modules.factory import criar_sistema_pesaje, check_mscl_installation
+from modules.modbus_server import ModbusDataServer
 
 
 ACTIVE_COM = DEFAULT_COM
@@ -71,7 +72,21 @@ def show_startup_info():
         pass
 
 
-def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
+def _float_to_int32_registers(value: float, scale: int = 1000) -> list:
+    """Convierte un float a dos registros Modbus (int32) con escala."""
+    try:
+        ival = int(round(value * scale))
+    except Exception:
+        ival = 0
+    # convertir a signed 32
+    if ival < 0:
+        ival = (1 << 32) + ival
+    hi = (ival >> 16) & 0xFFFF
+    lo = ival & 0xFFFF
+    return [hi, lo]
+
+
+def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modbus_server=None):
     """
     Thread secundaria (Backend) que gerencia o hardware e o processamento.
     Incluye manejo de desconexión de sensores y reconexión automática.
@@ -414,6 +429,16 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador):
                 
                 # Enviar datos a GUI
                 data_queue.put({'type': 'DATA', 'payload': datos_procesados})
+
+                # Empujar datos al servidor Modbus (si está activo)
+                try:
+                    if modbus_server is not None:
+                        # Enviar el total neto como int32 (2 registros) escalado x1000
+                        total = float(datos_procesados.get('total', 0.0) or 0.0)
+                        regs = _float_to_int32_registers(total, scale=1000)
+                        modbus_server.push_data(regs)
+                except Exception:
+                    pass
                 
             except Exception as e:
                 data_queue.put({'type': 'LOG', 'payload': f"Erro na aquisicao: {e}"})
@@ -457,9 +482,41 @@ def main():
         logger.info('Mapping lógico→físico: ' + '; '.join(mapping_lines))
     except Exception:
         pass
+    # Iniciar servidor Modbus (si la configuracion indica uso de transmissao TCP esperamos puerto en config)
+    modbus_server = None
+    try:
+        settings = None
+        try:
+            import json
+            with open(config.SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+        except Exception:
+            settings = None
+
+        # Por defecto usamos host 0.0.0.0 y puerto 5020; si hay 'transmissao' y contiene 'porta' con valor numérico, asumir puerto TCP
+        host = '0.0.0.0'
+        port = 5020
+        if settings and isinstance(settings.get('transmissao'), dict):
+            t = settings.get('transmissao')
+            porta_conf = t.get('porta')
+            try:
+                # si porta es int o string numerico, usar como puerto TCP
+                if isinstance(porta_conf, int) or (isinstance(porta_conf, str) and porta_conf.isdigit()):
+                    port = int(porta_conf)
+                else:
+                    # si viene 'COM4' u otro, mantener puerto por defecto
+                    port = 5020
+            except Exception:
+                port = 5020
+
+        modbus_server = ModbusDataServer(host=host, port=port)
+        modbus_server.start()
+    except Exception:
+        modbus_server = None
+
     backend_thread = threading.Thread(
         target=hilo_adquisicion,
-        args=(data_queue, command_queue, sistema_pesaje, procesador),
+        args=(data_queue, command_queue, sistema_pesaje, procesador, modbus_server),
         daemon=True
     )
     backend_thread.start()

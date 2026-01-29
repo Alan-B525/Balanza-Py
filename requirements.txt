@@ -5,3 +5,6 @@ numpy
 matplotlib
 scipy
 # MSCL se incluye localmente en carpeta MSCL/
+
+# Modbus TCP server
+pymodbus>=2.5.0
