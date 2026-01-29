@@ -2874,6 +2874,15 @@ class BalanzaGUI(ttk.Window):
             except:
                 pass
 
+        # Forzar UI de configuración a modo 1 nodo/1 celda: conservar sólo la primera entrada
+        try:
+            nodes = current_config.get('nodes', {})
+            if isinstance(nodes, dict) and len(nodes) > 1:
+                first_key = next(iter(nodes))
+                current_config['nodes'] = {first_key: nodes[first_key]}
+        except Exception:
+            pass
+
         # Crear ventana modal - FULLSCREEN (sin barra de título)
         dialog = ttk.Toplevel(self)
         dialog.overrideredirect(True)
@@ -3410,11 +3419,9 @@ class BalanzaGUI(ttk.Window):
         viga2.rowconfigure(0, weight=1)
         viga2.rowconfigure(1, weight=1)
         
+        # Modo simplificado: sólo una célula (celda_1)
         positions = [
-            (0, 0, 1, "ATRÁS ESQUERDA"),
-            (0, 1, 2, "ATRÁS DIREITA"),
-            (1, 0, 3, "FRENTE ESQUERDA"),
-            (1, 1, 4, "FRENTE DIREITA"),
+            (0, 0, 1, "CÉLULA 1"),
         ]
         
         for row, col, celda_num, pos_name in positions:

@@ -66,7 +66,21 @@ class DataProcessor:
                  median_window: int = 5,
                  ema_alpha: float = 0.3,
                  input_unit: str = "t"):
+        # Forzar modo 1 nodo / 1 celda: mantener sólo la primera entrada
         self.nodos_config = nodos_config
+        try:
+            # Si se pasó un dict con múltiples entradas, conservar sólo la primera
+            if isinstance(self.nodos_config, dict) and len(self.nodos_config) > 1:
+                first_key = next(iter(self.nodos_config))
+                self.nodos_config = {first_key: self.nodos_config[first_key]}
+                try:
+                    self._log_to_file(f"Single-node mode enforced, using {first_key}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # Marca explícita para lógica de un sólo sensor en el resto del código
+        self.single_node_mode = True
         self.median_window = median_window
         self.ema_alpha = ema_alpha
         self.input_unit = input_unit  # "kg" o "t"
@@ -286,14 +300,31 @@ class DataProcessor:
         # IMPORTANTE: Si falta algun sensor, la suma es invalida para pesaje preciso
         # pero mostramos lo que hay.
         
-        # Si existen contribuciones calibradas (por sensor), preferimos usar
-        # la suma calibrada directa como peso bruto. Esto permite que curvas
-        # por-sensor (interpolación por segmentos) se reflejen directamente.
-        # Si existen contribuciones calibradas por sensor, usar esa suma directa
-        if any_calibrated:
-            peso_bruto = float(sum_contrib_connected)
+        # Si estamos en modo single-node, tomar únicamente la primera contribución
+        if getattr(self, 'single_node_mode', False):
+            first_comp = None
+            if _contrib_por_nodo:
+                first_comp = next(iter(_contrib_por_nodo))
+            elif _valor_filtrado_por_nodo:
+                first_comp = next(iter(_valor_filtrado_por_nodo))
+
+            if first_comp:
+                if any_calibrated and first_comp in _contrib_por_nodo:
+                    peso_bruto = float(_contrib_por_nodo.get(first_comp, 0.0))
+                else:
+                    raw_val = _valor_filtrado_por_nodo.get(first_comp, 0.0)
+                    peso_bruto = (raw_val * self.system_slope) + self.system_offset
+            else:
+                peso_bruto = 0.0
         else:
-            peso_bruto = (sum_raw_connected * self.system_slope) + self.system_offset
+            # Si existen contribuciones calibradas (por sensor), preferimos usar
+            # la suma calibrada directa como peso bruto. Esto permite que curvas
+            # por-sensor (interpolación por segmentos) se reflejen directamente.
+            # Si existen contribuciones calibradas por sensor, usar esa suma directa
+            if any_calibrated:
+                peso_bruto = float(sum_contrib_connected)
+            else:
+                peso_bruto = (sum_raw_connected * self.system_slope) + self.system_offset
         
         # Aplicar taras por celda
         # La tara total se calcula como la suma de todas las taras individuales

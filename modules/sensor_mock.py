@@ -43,6 +43,25 @@ class MockDriver(ISistemaPesaje):
                 self._node_channels.setdefault(fake_id, set()).add(cfg.get('ch', 'ch1'))
                 self._logical_to_id[logical] = fake_id
 
+        # Forzar modo single-node: si la configuración tenía múltiples nodos,
+        # conservar solo el primero para las pruebas mock.
+        try:
+            if isinstance(self.nodos_config, dict) and len(self.nodos_config) > 1:
+                first_logical = next(iter(self.nodos_config))
+                first_nid = self._logical_to_id.get(first_logical)
+                if first_nid is None and self._expected_node_ids:
+                    first_nid = next(iter(self._expected_node_ids))
+                if first_nid is not None:
+                    # Reducir estructuras a un único nodo
+                    self._expected_node_ids = {first_nid}
+                    # filtrar canales
+                    chs = self._node_channels.get(first_nid, set())
+                    self._node_channels = {first_nid: chs}
+                    # filtrar mapping lógico
+                    self._logical_to_id = {first_logical: first_nid}
+        except Exception:
+            pass
+
     def conectar(self, puerto: str) -> bool:
         self._running = True
         self._state = 'sampling' if self._expected_node_ids else 'connected'
