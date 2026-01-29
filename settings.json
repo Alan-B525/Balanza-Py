@@ -9,21 +9,13 @@
             "id": 4248,
             "ch": "ch1",
             "serial": "3012"
-        },
-        "celda_2": {
-            "id": 4249,
-            "ch": "ch2",
-            "serial": "3013"
-        },
-        "celda_3": {
-            "id": 4248,
-            "ch": "ch2",
-            "serial": "3011"
-        },
-        "celda_4": {
-            "id": 4249,
-            "ch": "ch1",
-            "serial": "3010"
         }
+    },
+    "transmissao": {
+        "puerto": "COM4",
+        "velocidad": 9600,
+        "paridad": "Nenhuma",
+        "id_esclavo_pc": 1,
+        "swap_words": false
     }
 }

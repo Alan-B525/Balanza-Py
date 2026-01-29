@@ -109,11 +109,68 @@ PUERTO_COM = "COM3"
 BAUDRATE = 3000000
 
 NODOS_CONFIG = {
-    "celda_1": {"id": 0, "ch": "ch1", "nombre": "Célula 1", "posicion": "1", "serial": ""},
-    "celda_2": {"id": 0, "ch": "ch2", "nombre": "Célula 2", "posicion": "2", "serial": ""},
-    "celda_3": {"id": 0, "ch": "ch1", "nombre": "Célula 3", "posicion": "3", "serial": ""},
-    "celda_4": {"id": 0, "ch": "ch2", "nombre": "Célula 4", "posicion": "4", "serial": ""},
+    "celda_1": {"id": 0, "ch": "ch1", "nombre": "Célula 1", "posicion": "1", "serial": "", "com_port": ""},
 }
+
+# =============================================================================
+# 4. TRANSMISSAO (Seção de transmissão de dados - Português)
+# =============================================================================
+# Esta seção substitui a antiga parte de descoberta de nós na UI.
+# Campos esperados pela aplicação e pela interface de CONFIG:
+# - puerto: Puerto COM (string), ex: 'COM4'
+# - velocidad: Baudrate (int), ex: 9600
+# - paridad: Paridad como texto ('Nenhuma','Par','Ímpar')
+# - id_esclavo_pc: ID del esclavo del PC (int)
+# - swap_words: Booleano para invertir bytes (Swap Words)
+
+TRANSMISSAO = {
+    "porta": "COM4",
+    "velocidade": 9600,
+    "paridade": "Nenhuma",
+    "id_escravo_pc": 1,
+    "swap_words": False,
+}
+
+# Default settings structure used for saving/initialization
+DEFAULT_SETTINGS = {
+    "execution_mode": "REAL",
+    "connection_type": "SERIAL",
+    "serial_port": PUERTO_COM,
+    "baudrate": BAUDRATE,
+    "paridade": TRANSMISSAO.get("paridade", "Nenhuma"),
+    "id_escravo_pc": TRANSMISSAO.get("id_escravo_pc", 1),
+    "swap_words": TRANSMISSAO.get("swap_words", False),
+    "nodes": NODOS_CONFIG,
+    "transmissao": TRANSMISSAO,
+}
+
+def load_settings():
+    """Carga settings desde `SETTINGS_FILE`. Devuelve dict con defaults si no existe o falla."""
+    try:
+        if os.path.exists(SETTINGS_FILE):
+            import json
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                # Merge with defaults to ensure keys exist
+                merged = DEFAULT_SETTINGS.copy()
+                merged.update(data)
+                # Ensure nodes key exists
+                if 'nodes' not in merged or not isinstance(merged['nodes'], dict):
+                    merged['nodes'] = DEFAULT_SETTINGS['nodes']
+                return merged
+    except Exception:
+        pass
+    return DEFAULT_SETTINGS.copy()
+
+def save_settings(settings_dict):
+    """Guarda el dict `settings_dict` en `SETTINGS_FILE` (JSON, UTF-8)."""
+    try:
+        import json
+        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(settings_dict, f, indent=4, ensure_ascii=False)
+        return True
+    except Exception:
+        return False
 
 RECONNECT_ATTEMPTS = 3
 NODE_TIMEOUT_SECONDS = 5.0

@@ -114,6 +114,24 @@ class DataProcessor:
         self._initialize_structures()
     
     def _initialize_structures(self) -> None:
+        # Asegurar modo single-node: si hay múltiples entradas, conservar solo la primera
+        try:
+            if isinstance(self.nodos_config, dict) and len(self.nodos_config) > 1:
+                first_key = next(iter(self.nodos_config))
+                self.nodos_config = {first_key: self.nodos_config[first_key]}
+        except Exception:
+            pass
+
+        # Limpiar estructuras previas antes de (re)inicializar
+        self._node_to_name.clear()
+        self._median_buffers.clear()
+        self._ema_values.clear()
+        self._tares.clear()
+        self._last_stable_values.clear()
+        self._last_seen.clear()
+        self._node_connected_state.clear()
+        self._composite_to_serial.clear()
+
         for nombre_logico, cfg in self.nodos_config.items():
             node_id = cfg["id"]
             channel = cfg.get("ch", "ch1")
@@ -728,108 +746,59 @@ class DataProcessor:
         except Exception as e:
             self._log_to_file(f"Error registrando calibración por segmentos: {e}")
 
-def _map_raw_to_weight(self, composite: str, raw_value: float) -> Optional[float]:
+    def _map_raw_to_weight(self, composite: str, raw_value: float) -> Optional[float]:
         """
         Mapea una lectura cruda a peso físico utilizando calibración por segmentos.
-        
+
         OPTIMIZACIONES:
         1. Calcula pendientes (m) y offsets (b) solo la primera vez.
-        2. Extrapolación: Proyecta la curva hacia el infinito para valores fuera de rango 
+        2. Extrapolación: Proyecta la curva hacia el infinito para valores fuera de rango
            (usa la primera pendiente para valores bajos y la última para altos).
         """
         try:
-            # -----------------------------------------------------------
-            # 1. Búsqueda del objeto de calibración (Lógica original)
-            # -----------------------------------------------------------
             calib = None
             if composite in self.sensor_calibrations:
                 calib = self.sensor_calibrations[composite]
             else:
-                # Intenta buscar por Num serial si no encuentra por composite
                 serial = self._composite_to_serial.get(composite)
                 if serial and serial in self.sensor_calibrations:
                     calib = self.sensor_calibrations[serial]
-            
-            # Si no hay calibración o el método no es 'segments', salir.
+
             if not calib or calib.get('method') != 'segments':
                 return None
 
-            # -----------------------------------------------------------
-            # 2. Generación de Tabla de Búsqueda (Se ejecuta SOLO UNA VEZ)
-            # -----------------------------------------------------------
-            # Verificamos si ya calculamos la tabla para no repetir el trabajo.
             if '_lookup_table' not in calib:
                 pts = calib.get('points', [])
                 if not pts:
                     return None
-                
-                # Se ordenan los puntos por valor crudo (eje X) de menor a mayor
                 pts = sorted(pts, key=lambda x: x[0])
-                
-                # Caso especial: Si solo hay 1 punto, actúa como un offset simple
                 if len(pts) == 1:
                     calib['_lookup_table'] = {'type': 'single', 'val': float(pts[0][1])}
                 else:
                     segments = []
-                    # Pre-calcular pendiente (m) y offset (b) para cada tramo
-                    # Fórmula: y = mx + b  ->  b = y - mx
                     for i in range(len(pts) - 1):
                         x0, y0 = pts[i]
                         x1, y1 = pts[i + 1]
-                        
-                        # Protección contra división por cero (si dos puntos tienen el mismo X)
                         if x1 == x0:
                             m = 0.0
                         else:
                             m = (y1 - y0) / (x1 - x0)
-                        
-                        b = y0 - (m * x0) # Despeje del offset
-                        
-                        # Guardar: límite superior del tramo, pendiente y offset
-                        segments.append({
-                            'limit': x1, # Hasta qué valor raw aplica este segmento
-                            'm': m,
-                            'b': b
-                        })
-                    
-                    # Guardar la tabla optimizada dentro del mismo objeto de calibración
+                        b = y0 - (m * x0)
+                        segments.append({'limit': x1, 'm': m, 'b': b})
                     calib['_lookup_table'] = {'type': 'multi', 'segments': segments}
 
-            # -----------------------------------------------------------
-            # 3. Cálculo Rápido (Se ejecuta en CADA lectura)
-            # -----------------------------------------------------------
             table = calib['_lookup_table']
             r = float(raw_value)
-
-            # Si es calibración de un solo punto
             if table['type'] == 'single':
                 return table['val']
-
             segments = table['segments']
-            
-            # --- Selección de Segmento y Extrapolación ---
-            
-            # Por defecto, seleccionamos el último segmento.
-            # Esto maneja automáticamente la "Extrapolación Alta":
-            # si r > todos los límites, el bucle for termina sin break y usamos el último.
             selected_seg = segments[-1]
-
-            # Buscamos si el valor cae dentro de un segmento anterior (Interpolación o Extrapolación Baja)
             for seg in segments:
                 if r <= seg['limit']:
                     selected_seg = seg
                     break
-            
-            # NOTA SOBRE EXTRAPOLACIÓN BAJA:
-            # Si 'r' es menor que el primer punto de calibración, la condición (r <= seg['limit'])
-            # se cumple inmediatamente en la primera iteración (index 0).
-            # Por tanto, se usa la pendiente y offset del primer tramo para proyectar hacia atrás.
-
-            # Aplicar la ecuación de la recta: y = mx + b
             return (selected_seg['m'] * r) + selected_seg['b']
-
         except Exception:
-            # En caso de error numérico, retornamos None para no romper el flujo
             return None
 
 
