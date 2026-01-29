@@ -32,16 +32,19 @@ from typing import List, Optional
 log = logging.getLogger(__name__)
 
 try:
-    from pymodbus.server.sync import StartTcpServer
+    from pymodbus.server.sync import StartTcpServer, StartSerialServer
     from pymodbus.datastore import ModbusSlaveContext, ModbusServerContext
     from pymodbus.datastore import ModbusSequentialDataBlock
     from pymodbus.device import ModbusDeviceIdentification
+    from pymodbus.transaction import ModbusRtuFramer
 except Exception:  # pragma: no cover - optional dependency
     StartTcpServer = None
+    StartSerialServer = None
     ModbusSlaveContext = None
     ModbusServerContext = None
     ModbusSequentialDataBlock = None
     ModbusDeviceIdentification = None
+    ModbusRtuFramer = None
 
 
 class ModbusDataServer:
@@ -49,11 +52,23 @@ class ModbusDataServer:
         self,
         host: str = "0.0.0.0",
         port: int = 5020,
+        serial_port: str = None,
+        baudrate: int = 9600,
+        parity: str = 'N',
+        stopbits: int = 1,
+        bytesize: int = 8,
+        timeout: float = 1.0,
         max_queue: int = 200,
         holding_start: int = 1000,
     ) -> None:
         self.host = host
         self.port = port
+        self.serial_port = serial_port
+        self.baudrate = baudrate
+        self.parity = parity
+        self.stopbits = stopbits
+        self.bytesize = bytesize
+        self.timeout = timeout
         self.max_queue = max_queue
         self.holding_start = holding_start
 
@@ -71,7 +86,7 @@ class ModbusDataServer:
         self.COIL_ACK = 1
 
     def start(self) -> None:
-        if StartTcpServer is None:
+        if StartTcpServer is None and StartSerialServer is None:
             raise RuntimeError("pymodbus no está instalado; instale pymodbus en requirements.txt")
 
         # preparar datastore
@@ -92,16 +107,28 @@ class ModbusDataServer:
 
         self._context = context
 
-        # start server in a thread (StartTcpServer blocks)
-        def _serve():
-            log.info("Arrancando servidor Modbus en %s:%s", self.host, self.port)
+        # start server in a thread (StartXServer blocks)
+        def _serve_tcp():
+            log.info("Arrancando servidor Modbus TCP en %s:%s", self.host, self.port)
             try:
                 StartTcpServer(context, identity=identity, address=(self.host, self.port))
             except Exception as e:
-                log.exception("Error en Modbus server: %s", e)
+                log.exception("Error en Modbus TCP server: %s", e)
+
+        def _serve_serial():
+            log.info("Arrancando servidor Modbus RTU en %s @%s,%s%s", self.serial_port, self.baudrate, self.parity, '')
+            try:
+                # StartSerialServer espera argumentos similares a pyserial: port, baudrate, parity, stopbits, bytesize, timeout
+                StartSerialServer(context, framer=ModbusRtuFramer, port=self.serial_port, baudrate=self.baudrate,
+                                  parity=self.parity, stopbits=self.stopbits, bytesize=self.bytesize, timeout=self.timeout)
+            except Exception as e:
+                log.exception("Error en Modbus Serial server: %s", e)
 
         self._running.set()
-        self._server_thread = threading.Thread(target=_serve, daemon=True)
+        if self.serial_port:
+            self._server_thread = threading.Thread(target=_serve_serial, daemon=True)
+        else:
+            self._server_thread = threading.Thread(target=_serve_tcp, daemon=True)
         self._server_thread.start()
 
         # monitor de ack para vaciar la cola
