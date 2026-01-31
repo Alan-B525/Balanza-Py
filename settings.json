@@ -1,21 +1,30 @@
 {
-    "execution_mode": "REAL",
-    "connection_type": "SERIAL",
-    "serial_port": "COM4",
-    "tcp_ip": "",
-    "tcp_port": "",
-    "nodes": {
-        "celda_1": {
-            "id": 4248,
-            "ch": "ch1",
-            "serial": "3012"
-        }
-    },
-    "transmissao": {
-        "puerto": "COM4",
-        "velocidad": 9600,
-        "paridad": "Nenhuma",
-        "id_esclavo_pc": 1,
-        "swap_words": false
+  "execution_mode": "REAL",
+  "connection_type": "SERIAL",
+  "serial_port": "COM4",
+  "baudrate": 3000000,
+  "paridade": "Nenhuma",
+  "id_escravo_pc": 1,
+  "swap_words": false,
+  "tcp_ip": "",
+  "tcp_port": "",
+  "nodes": {
+    "celda_1": {
+      "id": 4248,
+      "ch": "ch2",
+      "serial": "3012",
+      "com_port": "COM4"
     }
+  },
+  "transmissao": {
+    "porta": "COM4",
+    "velocidade": 3000000,
+    "paridade": "Nenhuma",
+    "id_escravo_pc": 1,
+    "swap_words": false
+  },
+  "tares": {
+    "4248:ch1": -10.170299564182821,
+    "4248:ch2": 0.0
+  }
 }

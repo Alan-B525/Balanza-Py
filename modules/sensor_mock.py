@@ -23,7 +23,7 @@ class MockDriver(ISistemaPesaje):
         for k, v in self.nodos_config.items():
             nid = v.get('id', 0)
             ch = v.get('ch', 'ch1')
-            if nid > 0:
+            if nid >= 0:
                 self._expected_node_ids.add(nid)
                 self._node_channels.setdefault(nid, set()).add(ch)
                 self._logical_to_id[k] = nid
@@ -54,9 +54,8 @@ class MockDriver(ISistemaPesaje):
                 if first_nid is not None:
                     # Reducir estructuras a un único nodo
                     self._expected_node_ids = {first_nid}
-                    # filtrar canales
-                    chs = self._node_channels.get(first_nid, set())
-                    self._node_channels = {first_nid: chs}
+                    # filtrar canales: Forzar ch1 y ch2 para pruebas
+                    self._node_channels = {first_nid: {'ch1', 'ch2'}}
                     # filtrar mapping lógico
                     self._logical_to_id = {first_logical: first_nid}
         except Exception:
@@ -81,8 +80,14 @@ class MockDriver(ISistemaPesaje):
             for nid in sorted(self._expected_node_ids):
                 channels = sorted(list(self._node_channels.get(nid, {'ch1'})))
                 for channel in channels:
-                    # Valores simulados en rango típico
-                    val = random.uniform(1000.0, 2000.0)
+                    # Valores simulados según canal
+                    if channel == 'ch2':
+                        # Ángulo: 0 a 10 grados
+                        val = random.uniform(0.0, 10.0)
+                    else:
+                        # Carga: -50 a 1250 (con margen para tare)
+                        val = random.uniform(-50.0, 1250.0)
+                    
                     key = f"{nid}:{channel}"
                     readings[key] = val
                     rssi[key] = random.randint(-80, -30)

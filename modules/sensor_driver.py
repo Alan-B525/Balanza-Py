@@ -134,13 +134,18 @@ class MSCLDriver(ISistemaPesaje):
             nid = cfg.get('id', 0)
             if nid <= 0: continue
             
-            # Normalizar nombre canal (ej: "Channel 1" -> "ch1")
-            ch_raw = cfg.get('ch', 'ch1').lower().replace("channel", "ch").replace(" ", "")
+            # Force register both Channel 1 (Load) and Channel 2 (Angle)
+            # regardless of what is in the config file, as we need both.
             
-            self._config_node_ids.add(nid)
-            key = f"{nid}:{ch_raw}"
-            self._config_data_keys.add(key)
-            self._value_cache[key] = deque(maxlen=10)
+            # Channel 1: Load
+            key_ch1 = f"{nid}:ch1"
+            self._config_data_keys.add(key_ch1)
+            self._value_cache[key_ch1] = deque(maxlen=10)
+            
+            # Channel 2: Angle
+            key_ch2 = f"{nid}:ch2"
+            self._config_data_keys.add(key_ch2)
+            self._value_cache[key_ch2] = deque(maxlen=10)
 
     def _log(self, msg):
         """Wrapper de log para integrarse con el sistema o imprimir."""

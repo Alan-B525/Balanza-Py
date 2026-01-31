@@ -80,10 +80,9 @@ class DataProcessor:
         except Exception:
             pass
         # Marca explícita para lógica de un sólo sensor en el resto del código
-        self.single_node_mode = True
         self.median_window = median_window
         self.ema_alpha = ema_alpha
-        self.input_unit = input_unit  # "kg" o "t"
+        self.input_unit = "kg"  # Force kg as per user request
         
         # Coeficientes de Calibración Global (Sistema Completo)
         # y = mx + b
@@ -134,18 +133,32 @@ class DataProcessor:
 
         for nombre_logico, cfg in self.nodos_config.items():
             node_id = cfg["id"]
-            channel = cfg.get("ch", "ch1")
-            composite = f"{node_id}:{channel}"
-            self._node_to_name[composite] = nombre_logico
-            self._median_buffers[composite] = deque(maxlen=self.median_window)
-            self._ema_values[composite] = None
-            self._tares[composite] = 0.0
-            self._last_stable_values[composite] = 0.0
-            self._last_seen[composite] = 0.0
-            self._node_connected_state[composite] = False
+            # Force creating structures for both channels
+            
+            # Channel 1: Load (Main)
+            comp_load = f"{node_id}:ch1"
+            self._node_to_name[comp_load] = nombre_logico # Primary name maps to load
+            self._median_buffers[comp_load] = deque(maxlen=self.median_window)
+            self._ema_values[comp_load] = None
+            self._tares[comp_load] = 0.0
+            self._last_stable_values[comp_load] = 0.0
+            self._last_seen[comp_load] = 0.0
+            self._node_connected_state[comp_load] = False
+            
+            # Channel 2: Angle (Aux)
+            comp_angle = f"{node_id}:ch2"
+            self._node_to_name[comp_angle] = f"{nombre_logico}_Angle"
+            self._median_buffers[comp_angle] = deque(maxlen=self.median_window)
+            self._ema_values[comp_angle] = None
+            self._tares[comp_angle] = 0.0 # Angle might not need taring but good to have
+            self._last_stable_values[comp_angle] = 0.0
+            self._last_seen[comp_angle] = 0.0
+            self._node_connected_state[comp_angle] = False
+
             # Guardar serial si existe en la configuración para mapping de calibración
             serial = cfg.get('serial') if isinstance(cfg, dict) else None
-            self._composite_to_serial[composite] = serial
+            # Map serial to both? Usually calibration applies to Load (ch1)
+            self._composite_to_serial[comp_load] = serial
             # evento de inicialización: no loguear para evitar ruido en el log
     
     def _apply_median_filter(self, node_key, value: float) -> float:
@@ -185,8 +198,9 @@ class DataProcessor:
         resultado = {
             "sensores": {},
             "total": 0.0,
-            "total_raw": 0.0, # Nuevo campo para debugging
+            "total_raw": 0.0,
             "total_tare": 0.0,
+            "angle_val": 0.0,   # Nuevo campo para el ángulo
             "logs": [],
             "disconnect_events": [],
             "any_disconnected": False
@@ -195,220 +209,171 @@ class DataProcessor:
         current_time = time.time()
         datos_por_nodo = self._extract_node_data(raw_data)
 
-        # 1. Detectar conexiones / desconexiones (datos indexados por clave compuesta)
-        for node_key, value in datos_por_nodo.items():
-            # node_key es algo como '4248:ch1'
-            self._last_seen[node_key] = current_time
-            if not self._node_connected_state.get(node_key, False):
-                self._node_connected_state[node_key] = True
-                nombre = self._node_to_name.get(node_key, f"Nodo {node_key}")
-                resultado["logs"].append(f"Sensor {nombre} (Key:{node_key}) conectado")
+        # 1. Detectar conexiones / desconexiones
+        # Iterar sobre las claves que esperamos (load y angle) para actualizar timestamps
+        for node_key in self._node_to_name.keys():
+             if node_key in datos_por_nodo:
+                self._last_seen[node_key] = current_time
+                if not self._node_connected_state.get(node_key, False):
+                    self._node_connected_state[node_key] = True
+                    nombre = self._node_to_name.get(node_key, f"Nodo {node_key}")
+                    # Loguear conexión solo para el canal principal (LOAD) para evitar spam doble
+                    if 'ch1' in node_key:
+                        resultado["logs"].append(f"Sensor {nombre} conectado")
         
-        # 2. Estrategia "Suma de Fuerzas": Sumar Raw PRIMERO
+        # 2. Estrategia "Suma de Fuerzas" (Solo Carga ch1)
         sum_raw_connected = 0.0
-        active_sensors_count = 0
         sum_contrib_connected = 0.0
         any_calibrated = False
-        # Guarda valores filtrados por nodo (clave compuesta) y contribuciones calibradas
-        # para uso posterior en la UI (evita repartir proporcionalmente el total).
-        _valor_filtrado_por_nodo: Dict[str, float] = {}
-        _contrib_por_nodo: Dict[str, float] = {}
+        
+        _valor_filtrado_por_key: Dict[str, float] = {}
+        _contrib_por_key: Dict[str, float] = {}
+
+        # Variables para el ángulo
+        total_angle_val = 0.0
+        angle_count = 0
 
         for nombre_logico, cfg in self.nodos_config.items():
             node_id = cfg["id"]
-            channel = cfg.get("ch", "ch1")
-            composite = f"{node_id}:{channel}"
-            is_connected = self._check_connection(composite, current_time, resultado)
-            # Si el paquete actual contiene dato para este composite, lo usamos
-            valor_crudo = 0.0
-            if composite in datos_por_nodo:
-                original_val = datos_por_nodo[composite]
+            
+            # --- PROCESAR CANAL 1: CARGA ---
+            comp_load = f"{node_id}:ch1"
+            is_connected_load = self._check_connection(comp_load, current_time, resultado)
+            
+            # Obtener Valor Crudo (Load)
+            val_load = 0.0
+            if comp_load in datos_por_nodo:
+                original = datos_por_nodo[comp_load]
                 try:
-                    self._last_raw_readings[composite] = float(original_val)
-                except Exception:
-                    try:
-                        self._last_raw_readings[composite] = float(str(original_val))
-                    except Exception:
-                        self._last_raw_readings[composite] = 0.0
-                # Mantener la lectura cruda original para auditoría/calibración
-                valor_crudo = original_val
-                # Convertir a float y aplicar multiplicador por sensor (signo/config)
-                try:
-                    raw_f = float(original_val)
-                except Exception:
-                    try:
-                        raw_f = float(str(original_val))
-                    except Exception:
-                        raw_f = 0.0
-
+                    val_load = float(original)
+                except: 
+                    val_load = 0.0
+                self._last_raw_readings[comp_load] = val_load
+                
+                # Multiplicador de signo (solo aplica a carga)
                 mult = 1.0
                 try:
-                    nombre_logico = self._node_to_name.get(composite)
-                    cfg_local = self.nodos_config.get(nombre_logico, {}) if nombre_logico else {}
-                    if 'sign' in cfg_local:
-                        mult = float(cfg_local.get('sign', 1.0))
-                    elif cfg_local.get('invert', False):
-                        mult = -1.0
-                except Exception:
-                    mult = 1.0
-
-                # El valor crudo es tomado directamente del sensor y se interpreta
-                # según `input_unit`. En configuración actual se usa 't' (toneladas),
-                # por lo que no realizamos conversión a kg aquí — todo el procesamiento
-                # usa la misma unidad de entrada para mantener consistencia.
-                valor_crudo = raw_f * mult
+                    if 'sign' in cfg: mult = float(cfg.get('sign', 1.0))
+                    elif cfg.get('invert', False): mult = -1.0
+                except: mult = 1.0
+                val_load = val_load * mult
             else:
-                # Si no llegaron datos en este ciclo, usamos el último valor estable
-                # (Sample & Hold) para evitar resetear a 0 y provocar parpadeos.
-                valor_crudo = self._last_raw_readings.get(composite, 0.0)
+                # Sample & Hold
+                val_load = self._last_raw_readings.get(comp_load, 0.0)
 
-            # Aplicar filtros (si están activados) sobre el valor actual o retenido
-            valor_filtrado = self._filter_value(composite, valor_crudo)
-
-            # Actualizar la memoria estable (hold) solo si hubo dato nuevo
-            if composite in datos_por_nodo:
-                self._last_stable_values[composite] = valor_filtrado
-            # Aplicar calibración por sensor (segments) si existe
-            calibrated_value = None
+            # Filtros (Load)
+            val_load_filt = self._filter_value(comp_load, val_load)
+            if comp_load in datos_por_nodo:
+                self._last_stable_values[comp_load] = val_load_filt
+            
+            # Calibración por sensor (Load)
+            calibrated_load = None
             try:
-                calibrated_value = self._map_raw_to_weight(composite, valor_filtrado)
-            except Exception:
-                calibrated_value = None
-
-            # Si hay calibración por sensor, su contribución usa el valor calibrado (peso)
-            if calibrated_value is not None:
-                contrib = float(calibrated_value)
+                calibrated_load = self._map_raw_to_weight(comp_load, val_load_filt)
+            except: pass
+            
+            if calibrated_load is not None:
+                contrib_load = float(calibrated_load)
                 any_calibrated = True
             else:
-                contrib = valor_filtrado
-
-            _valor_filtrado_por_nodo[composite] = valor_filtrado
-            # Guardar la contribución en unidades de peso (calibrada si existe)
-            try:
-                _contrib_por_nodo[composite] = float(contrib)
-            except Exception:
-                _contrib_por_nodo[composite] = 0.0
-            if is_connected:
-                sum_raw_connected += valor_filtrado
-                # sum_contrib acumula la suma ya calibrada cuando corresponda
-                sum_contrib_connected += contrib
-                active_sensors_count += 1
+                contrib_load = val_load_filt
+            
+            _valor_filtrado_por_key[comp_load] = val_load_filt
+            _contrib_por_key[comp_load] = contrib_load
+            
+            if is_connected_load:
+                sum_raw_connected += val_load_filt
+                sum_contrib_connected += contrib_load
             else:
                 resultado["any_disconnected"] = True
+
+            # --- PROCESAR CANAL 2: ANGULO ---
+            comp_angle = f"{node_id}:ch2"
+            self._check_connection(comp_angle, current_time, resultado) # Actualizar estado angle
+            
+            val_angle = 0.0
+            if comp_angle in datos_por_nodo:
+                try:
+                    val_angle = float(datos_por_nodo[comp_angle])
+                except: val_angle = 0.0
+                self._last_raw_readings[comp_angle] = val_angle
+            else:
+                val_angle = self._last_raw_readings.get(comp_angle, 0.0)
+            
+            # Guardamos el ángulo raw direct (o aplicar factor si fuese necesario)
+            # Asumimos que el canal 2 viene ya en grados o unidad deseada
+            # Si se desea promediar ángulos de múltiples sensores (raro), se suma
+            if comp_angle in datos_por_nodo or self._node_connected_state.get(comp_angle, False):
+                total_angle_val += val_angle
+                angle_count += 1
+            
+            # --- POPULAR RESULTADO INDIVIDUAL ---
+            # Usamos Load para visualizar en la lista de sensores
+            tare_val = self._tares.get(comp_load, 0.0)
+            sensor_net = contrib_load - tare_val
+            
             resultado["sensores"][nombre_logico] = {
-                "valor": 0.0,  # se calculará después para garantizar consistencia con el total
-                "raw": round(valor_filtrado, 3),
-                "crudo": round(valor_crudo, 3),
+                "valor": round(sensor_net, 3), # Peso Neto
+                "raw": round(val_load_filt, 3),
+                "crudo": round(val_load, 3), # Crudo con signo
+                "angle": round(val_angle, 2), # Dato Angulo
                 "id": node_id,
-                "key": composite,
-                "connected": is_connected,
-                "last_seen": self._last_seen.get(composite, 0.0)
+                "key": comp_load, # Key primaria (Load)
+                "connected": is_connected_load,
+                "last_seen": self._last_seen.get(comp_load, 0.0)
             }
 
-        # Guardar la última suma raw válida; NO sobrescribir con 0 para
-        # evitar que muestras intermedias borren el último valor crudo real.
-        # Ahora aceptamos sums negativas (signo) ya que las lecturas pueden ser
-        # negativas por configuración o por orientación de la celda.
+        # Guardar ultima suma raw valida
         if sum_raw_connected != 0:
             self._last_total_raw = sum_raw_connected
 
-        # 3. Aplicar Formula Lineal al Total: y = mx + b
-        # Peso = (Suma_Raw * m) + b
-        
-        # IMPORTANTE: Si falta algun sensor, la suma es invalida para pesaje preciso
-        # pero mostramos lo que hay.
-        
-        # Si estamos en modo single-node, tomar únicamente la primera contribución
-        if getattr(self, 'single_node_mode', False):
-            first_comp = None
-            if _contrib_por_nodo:
-                first_comp = next(iter(_contrib_por_nodo))
-            elif _valor_filtrado_por_nodo:
-                first_comp = next(iter(_valor_filtrado_por_nodo))
-
-            if first_comp:
-                if any_calibrated and first_comp in _contrib_por_nodo:
-                    peso_bruto = float(_contrib_por_nodo.get(first_comp, 0.0))
-                else:
-                    raw_val = _valor_filtrado_por_nodo.get(first_comp, 0.0)
-                    peso_bruto = (raw_val * self.system_slope) + self.system_offset
-            else:
-                peso_bruto = 0.0
+        # 3. Calcular Total (PESO)
+        # Si hay calibración por sensor, usar suma directa. Si no, sistema mx+b
+        if any_calibrated:
+            peso_bruto = float(sum_contrib_connected)
         else:
-            # Si existen contribuciones calibradas (por sensor), preferimos usar
-            # la suma calibrada directa como peso bruto. Esto permite que curvas
-            # por-sensor (interpolación por segmentos) se reflejen directamente.
-            # Si existen contribuciones calibradas por sensor, usar esa suma directa
-            if any_calibrated:
-                peso_bruto = float(sum_contrib_connected)
-            else:
-                peso_bruto = (sum_raw_connected * self.system_slope) + self.system_offset
+            peso_bruto = (sum_raw_connected * self.system_slope) + self.system_offset
         
-        # Aplicar taras por celda
-        # La tara total se calcula como la suma de todas las taras individuales
-        # almacenadas en `self._tares`. Esto permite tarar por composite (id:ch).
+        # Calcular tara total (suma de taras de los canales de carga activos o configurados)
         tara_total = 0.0
-        try:
-            for k, v in self._tares.items():
-                # Ignorar claves no numéricas si existen
-                try:
-                    tara_total += float(v)
-                except Exception:
-                    continue
-        except Exception:
-            tara_total = 0.0
-
-        peso_neto = peso_bruto - tara_total
+        for k, v in self._tares.items():
+            if ":ch1" in str(k): # Solo sumar taras de canales de carga
+                try: tara_total += float(v)
+                except: pass
         
-        # Si no hay sensores aportando raw (suma == 0), devolvemos el último
-        # peso calculado para evitar saltos a 0 en la UI entre frames.
-        if sum_raw_connected == 0:
-            resultado["total"] = round(self._last_total_weight, 3)
+        peso_neto = peso_bruto - tara_total
+
+        # Evitar saltos a 0
+        if sum_raw_connected == 0 and not resultado["any_disconnected"]:
+             # Si no hay nada conectado, 0. Si hay desconectados, flag.
+             # Pero si simplemente no llegó dato en este ciclo (pero conectado), mantener.
+             # La lógica original usaba sum_raw_connected == 0 como heurística de "nadie midió"
+             # Mejor usar active_sensors_count check o similar, pero por compatibilidad:
+             resultado["total"] = round(self._last_total_weight, 3)
         else:
-            resultado["total"] = round(peso_neto, 3)
+             resultado["total"] = round(peso_neto, 3)
+             if sum_raw_connected != 0:
+                 self._last_total_weight = peso_neto
+                 self._last_total_seen = current_time
+
         resultado["total_raw"] = sum_raw_connected
         resultado["total_tare"] = round(tara_total, 3)
-        # Actualizar timestamp del total solo si hay datos conectados (evita zeros intermedios)
-        if sum_raw_connected != 0:
-            self._last_total_seen = current_time
-            # Guardar el último peso neto visible para operaciones como tara
-            self._last_total_weight = peso_neto
         resultado["total_last_seen"] = self._last_total_seen
         
-        # Incluir eventos de desconexión pendientes
+        # Ángulo Final (Si hay 1 nodo, es ese ángulo. Si hay varios, promedio o suma?)
+        # Asumimos 1 nodo principal o promedio simple
+        if angle_count > 0:
+            resultado["angle_val"] = round(total_angle_val / angle_count, 2)
+        else:
+            resultado["angle_val"] = 0.0
+        
+        # Eventos
         disconnect_events = self.get_disconnect_events()
         if disconnect_events:
             resultado["disconnect_events"] = [
                 {"node_id": e.node_id, "nombre": e.nombre_logico, "timestamp": e.timestamp}
                 for e in disconnect_events
             ]
-
-        # 4. Asignar valor individual por sensor: usar su propia contribución (calibrada
-        # o convertida por sistema) y restar la tara aplicada a esa celda. Esto evita
-        # repartir el total entre celdas y muestra el valor real por celda.
-        try:
-            for nombre_logico, cfg in self.nodos_config.items():
-                node_id = cfg["id"]
-                channel = cfg.get("ch", "ch1")
-                composite = f"{node_id}:{channel}"
-                sensor_entry = resultado["sensores"].get(nombre_logico)
-                if not sensor_entry:
-                    continue
-                if sensor_entry.get("connected"):
-                    contrib = _contrib_por_nodo.get(composite, 0.0)
-                    tare_val = 0.0
-                    try:
-                        tare_val = float(self._tares.get(composite, 0.0))
-                    except Exception:
-                        tare_val = 0.0
-
-                    # Valor neto por sensor = contribución - tara de la celda
-                    sensor_val = contrib - tare_val
-                    sensor_entry["valor"] = round(sensor_val, 3)
-                else:
-                    sensor_entry["valor"] = 0.0
-        except Exception as e:
-            self._log_to_file(f"Error asignando valores individuales: {e}")
         
         return resultado
 
