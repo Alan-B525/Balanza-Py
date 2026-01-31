@@ -147,33 +147,39 @@ class BalanzaGUI(ttk.Window):
         """
         try:
             import tkinter.font as tkfont
-            # Forzar layout para obtener medidas reales
-            try:
-                self.update_idletasks()
-            except Exception:
-                pass
-
-            # Determinar ancho disponible: preferir explicit_width si hay
+            # --- CORRECCIÓN: NO LLAMAR A update_idletasks() ---
+            # Determinar ancho disponible
             if explicit_width and isinstance(explicit_width, int) and explicit_width > 0:
                 avail_w = explicit_width
             else:
                 avail_w = label.winfo_width()
-                if not avail_w or avail_w <= 1:
-                    parent = label.master
-                    avail_w = parent.winfo_width() or parent.winfo_reqwidth() or label.winfo_reqwidth()
+                # Si el widget aún no se pintó, usar el requerimiento o un default seguro
+                if avail_w <= 1:
+                    avail_w = label.winfo_reqwidth()
 
-            padding = 8  # margen de seguridad en píxeles
+            # Si aún así es muy pequeño, usar un default para evitar errores
+            if avail_w <= 1: 
+                avail_w = 200
+
+            padding = 10 
             avail_w = max(1, int(avail_w) - padding)
 
+            # Búsqueda simple para elegir tamaño
             chosen_size = min(max_size, max(min_size, int(max_size)))
-            for size in range(chosen_size, min_size - 1, -1):
+            # Optimización: probar primero el tamaño máximo
+            f = tkfont.Font(family=family, size=chosen_size, weight=weight)
+            if f.measure(text) <= avail_w:
+                label.configure(font=(family, chosen_size, weight))
+                return
+
+            # Reducir en pasos para velocidad
+            for size in range(chosen_size - 2, min_size - 1, -2):
                 f = tkfont.Font(family=family, size=size, weight=weight)
-                w = f.measure(text)
-                if w <= avail_w:
+                if f.measure(text) <= avail_w:
                     label.configure(font=(family, size, weight))
                     return
 
-            # Si ninguno encaja, forzar el mínimo
+            # Mínimo absoluto
             label.configure(font=(family, min_size, weight))
         except Exception:
             # Fallback silencioso
@@ -197,6 +203,7 @@ class BalanzaGUI(ttk.Window):
         # Fonts - Escalados según resolución
         FONT_MAIN = "Segoe UI"
         FONT_MONO = "Consolas"
+        FONT_NUMBERS = "Segoe UI"  # Usar la misma fuente que TareMaintValue para todos los números
         
         # Función helper local para escalar fuentes
         sf = self.scaled_font
@@ -208,20 +215,20 @@ class BalanzaGUI(ttk.Window):
         
         # Configure Label styles - Escalados
         self.style.configure('CardTitle.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, sf(16), "bold"))
-        self.style.configure('CardValue.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_MONO, sf(40), "bold"))
+        self.style.configure('CardValue.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_NUMBERS, sf(40), "bold"))
         self.style.configure('Unit.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, sf(18)))
         self.style.configure('SensorStatus.TLabel', background=BG_CARD, foreground=SUCCESS, font=(FONT_MAIN, sf(13), "bold"))
         
         # Total Panel - MUY PROMINENTE para nfasis mximo
         self.style.configure('TotalPanel.TFrame', background=PRIMARY)
         self.style.configure('TotalLabel.TLabel', background=PRIMARY, foreground="white", font=(FONT_MAIN, sf(28), "bold"))
-        self.style.configure('TotalValue.TLabel', background=PRIMARY, foreground="white", font=(FONT_MONO, sf(72), "bold"))
+        self.style.configure('TotalValue.TLabel', background=PRIMARY, foreground="white", font=(FONT_NUMBERS, sf(72), "bold"))
         self.style.configure('TotalUnit.TLabel', background=PRIMARY, foreground="white", font=(FONT_MAIN, sf(36)))
         
         # Total Panel DANGER - Cuando hay sensor desconectado (ROJO)
         self.style.configure('TotalPanelDanger.TFrame', background=DANGER)
         self.style.configure('TotalLabelDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MAIN, sf(24), "bold"))
-        self.style.configure('TotalValueDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MONO, sf(72), "bold"))
+        self.style.configure('TotalValueDanger.TLabel', background=DANGER, foreground="white", font=(FONT_NUMBERS, sf(72), "bold"))
         self.style.configure('TotalUnitDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MAIN, sf(20)))
         
         # Tara Info - Más visible
@@ -232,7 +239,7 @@ class BalanzaGUI(ttk.Window):
         self.style.configure('TareValue.TLabel', background=PRIMARY, foreground='white', font=(FONT_MONO, sf(36), 'bold'))
         # Estilos específicos para la sección de Tara dentro de MANUTENÇÃO (fondo blanco, texto negro)
         self.style.configure('TareMaint.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_MAIN, sf(14), 'bold'))
-        self.style.configure('TareMaintValue.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_MONO, sf(24), 'bold'))
+        self.style.configure('TareMaintValue.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_NUMBERS, sf(24), 'bold'))
         
         # Buttons - Escalados
         self.style.configure('TButton', font=(FONT_MAIN, sf(12), 'bold'))  # Default global BOLD
@@ -267,11 +274,11 @@ class BalanzaGUI(ttk.Window):
         # Logo label style to ensure visibility
         self.style.configure('Logo.TLabel', background=BG_CARD)
 
-        # Botón TARA (Amarillo + Fuente 28)
+        # Botón TARA (Amarillo) — usar mismo tamaño de fuente que Header.TButton
         self.style.configure('TareYellow.TButton', 
-                            font=(FONT_MAIN, sf(28), 'bold'), 
-                            background=WARNING, 
-                            foreground='white')
+                    font=(FONT_MAIN, sf(14), 'bold'), 
+                    background=WARNING, 
+                    foreground='white')
         # Efecto al presionar (amarillo más oscuro)
         self.style.map('TareYellow.TButton', background=[('active', '#d97706')]) 
 
@@ -282,6 +289,12 @@ class BalanzaGUI(ttk.Window):
                             foreground='white')
         # Efecto al presionar (rojo más oscuro)
         self.style.map('TareRed.TButton', background=[('active', '#dc2626')])
+
+        # Botones Connect - estilos dedicados para forzar color verde/rojo
+        self.style.configure('ConnectSuccess.TButton', font=(FONT_MAIN, sf(13), 'bold'), background=SUCCESS, foreground='white')
+        self.style.map('ConnectSuccess.TButton', background=[('active', '#16a34a')])
+        self.style.configure('ConnectDanger.TButton', font=(FONT_MAIN, sf(13), 'bold'), background=DANGER, foreground='white')
+        self.style.map('ConnectDanger.TButton', background=[('active', '#dc2626')])
 
     def _setup_ui(self):
         # Main Container - padding escalado
@@ -368,7 +381,24 @@ class BalanzaGUI(ttk.Window):
         logo_path = os.path.join(assets_path, "logo.png")
         self.logo_img = load_logo(logo_path, logo_height)
         
-        # Header: mantener área de marca pero sin título (el título se muestra en el footer)
+        # Header: mostrar título y estado en la parte superior (no en el footer)
+        try:
+            title_text = "Sistema de Pesagem"
+            title_lbl = ttk.Label(brand_frame, text=title_text, style='HeaderTitle.TLabel', font=("Segoe UI", self.scaled_font(20), "bold"))
+            title_lbl.pack(side=LEFT, padx=(10, 18))
+            # Indicador LED y texto de estado
+            self._status_led = ttk.Label(brand_frame, text="●", font=("Segoe UI", self.scaled_font(18)))
+            self._status_led.pack(side=LEFT, padx=(0, 8))
+            self._status_text = ttk.Label(brand_frame, text="Desconectado", style='HeaderSub.TLabel', font=("Segoe UI", self.scaled_font(12)))
+            self._status_text.pack(side=LEFT)
+            try:
+                self._update_status_led('disconnected')
+            except Exception:
+                pass
+            # Compatibilidad con código existente que usa self.lbl_status
+            self.lbl_status = self._status_text
+        except Exception:
+            pass
 
         # Establecer icono de la aplicación (barra de tareas + título)
         try:
@@ -412,7 +442,7 @@ class BalanzaGUI(ttk.Window):
         # Botn de decimales - Antes de CONFIG, ms al centro
         self.btn_decimals = ttk.Button(
             actions_frame, 
-            text="0.00", 
+            text="0,00", 
             bootstyle="primary", 
             command=self.toggle_decimals, 
             style='Header.TButton',
@@ -423,6 +453,21 @@ class BalanzaGUI(ttk.Window):
 
         # (Export/Import moved to Config -> CALIBRACAO tab)
         
+        # Botón de TARA en el header (mismo formato, color amarillo)
+        try:
+            self.btn_tare = ttk.Button(
+                actions_frame,
+                text="TARA",
+                bootstyle="warning",
+                command=self.do_tare,
+                style='TareYellow.TButton',
+                width=14,
+                padding=(15, 12)
+            )
+            self.btn_tare.pack(side=LEFT, padx=5)
+        except Exception:
+            pass
+
         # Botn de Configuracin - Color info (azul)
         self.btn_config = ttk.Button(
             actions_frame, 
@@ -430,19 +475,18 @@ class BalanzaGUI(ttk.Window):
             bootstyle="info", 
             command=self.show_configuration_dialog, 
             style='Header.TButton',
-            width=12,
+            width=14,
             padding=(15, 12)
         )
         self.btn_config.pack(side=LEFT, padx=5)
         
         # Botn Conectar/Desconectar - Color success (verde)
         self.btn_connect = ttk.Button(
-            actions_frame, 
-            text="CONECTAR", 
-            command=self.toggle_connection, 
-            bootstyle="success",
-            style='Header.TButton', 
-            width=14, 
+            actions_frame,
+            text="CONECTAR",
+            command=self.toggle_connection,
+            style='ConnectSuccess.TButton',
+            width=14,
             padding=(15, 12)
         )
         self.btn_connect.pack(side=LEFT, padx=5)
@@ -482,33 +526,16 @@ class BalanzaGUI(ttk.Window):
             except Exception:
                 APP_TITLE = "Sistema de Pesagem"
             try:
-                ttk.Label(footer_left, text=APP_TITLE, style='HeaderTitle.TLabel').pack(side=LEFT)
+                # No mostrar título duplicado aquí; mantener compatibilidad con self.lbl_status
+                # Si no existe self.lbl_status (header), crear una referencia mínima sin pack.
+                if not hasattr(self, 'lbl_status'):
+                    if hasattr(self, '_status_text'):
+                        self.lbl_status = self._status_text
+                    else:
+                        self.lbl_status = ttk.Label(footer_left, text="Desconectado", style='HeaderSub.TLabel')
+                # No reempacar ni reparentar para evitar mover widgets del header.
             except Exception:
-                try:
-                    ttk.Label(footer_left, text=APP_TITLE).pack(side=LEFT)
-                except Exception:
-                    pass
-
-            # Estado del sistema junto al título (reusar nombre self.lbl_status para compatibilidad)
-            # Si existe un lbl_status previo, reusar, sino crear.
-            try:
-                if hasattr(self, 'lbl_status') and isinstance(self.lbl_status, ttk.Label):
-                    # Reposicionar label al footer
-                    try:
-                        self.lbl_status.master = footer_left
-                    except Exception:
-                        pass
-                    self.lbl_status.configure(text="Desconectado", style='HeaderSub.TLabel')
-                    self.lbl_status.pack(side=LEFT, padx=(12, 0), pady=(8, 0))
-                else:
-                    self.lbl_status = ttk.Label(footer_left, text="Desconectado", style='HeaderSub.TLabel')
-                    self.lbl_status.pack(side=LEFT, padx=(12, 0), pady=(8, 0))
-            except Exception:
-                try:
-                    self.lbl_status = ttk.Label(footer_left, text="Desconectado", style='HeaderSub.TLabel')
-                    self.lbl_status.pack(side=LEFT, padx=(12, 0), pady=(8, 0))
-                except Exception:
-                    pass
+                pass
 
             # Cargar ambos logos en el footer con el mismo tamaño
             try:
@@ -524,6 +551,17 @@ class BalanzaGUI(ttk.Window):
                     if self.footer_logo_img:
                         logo_lbl = ttk.Label(footer_frame, image=self.footer_logo_img, style='Logo.TLabel')
                         logo_lbl.pack(side=RIGHT, padx=(0, 12), pady=(6, 6))
+                    # Reloj en footer (alineado a la derecha, antes del logo)
+                    try:
+                        self.footer_time = ttk.Label(footer_left, text="", style='HeaderSub.TLabel')
+                        self.footer_time.pack(side=LEFT, padx=(6, 12), pady=(6, 6))
+                        # Iniciar actualización periódica
+                        try:
+                            self._update_footer_time()
+                        except Exception:
+                            pass
+                    except Exception:
+                        self.footer_time = None
                 except Exception:
                     pass
             except Exception:
@@ -542,15 +580,18 @@ class BalanzaGUI(ttk.Window):
         grid_area.columnconfigure(2, weight=1, minsize=self.scaled(300), uniform="vigas")
         # Dos filas: 0 -> tarjetas (vigas/total), 1 -> control de tara (fija)
         grid_area.rowconfigure(0, weight=3)
-        # Ajustar minsize de la fila de TARA: más pequeña en laptops/monitores grandes
+        # Ajustar la fila 0 para que ocupe el espacio sobrante (usar todo el alto disponible)
         try:
             sw = self.winfo_screenwidth()
             sh = self.winfo_screenheight()
             is_tablet = (sw == 1280 and sh == 800)
         except Exception:
             is_tablet = False
-        tare_min = self.scaled(140) if is_tablet else self.scaled(100)
+        # Reservar un mínimo reducido para la fila inferior (ahora vacía)
+        tare_min = 0
         grid_area.rowconfigure(1, weight=0, minsize=tare_min)
+        # Aumentar peso de la fila 0 para que se expanda hacia abajo
+        grid_area.rowconfigure(0, weight=4)
 
         def create_static_beam_card(parent, title, col):
             card = ttk.Frame(parent, style='Card.TFrame', padding=20)
@@ -566,14 +607,14 @@ class BalanzaGUI(ttk.Window):
                 pass
 
             ttk.Label(card, text=title, style='CardTitle.TLabel', font=("Segoe UI", self.scaled_font(22), "bold")).pack(pady=(20, 30))
-            val_lbl = ttk.Label(card, text="0", style='CardValue.TLabel', font=("Consolas", self.scaled_font(60), "bold"), anchor="center")
+            val_lbl = ttk.Label(card, text="0", style='CardValue.TLabel', font=("Segoe UI", self.scaled_font(60), "bold"), anchor="center")
             val_lbl.pack(expand=YES, fill=X)
             # Guardar ancho objetivo para el auto-ajuste de fuente (calculado aprox)
             try:
                 val_lbl.target_width = self.scaled(280)
             except Exception:
                 val_lbl.target_width = None
-            ttk.Label(card, text="t", style='Unit.TLabel').pack(pady=(0, 30))
+            ttk.Label(card, text="toneladas", style='Unit.TLabel').pack(pady=(0, 30))
             return val_lbl
 
         # 1. TARJETA VIGA 1 (Izquierda)
@@ -604,7 +645,7 @@ class BalanzaGUI(ttk.Window):
             self.lbl_total.target_width = self.scaled(400)
         except Exception:
             self.lbl_total.target_width = None
-        self.lbl_total_unit = ttk.Label(self.total_section, text="t", style='TotalUnit.TLabel')
+        self.lbl_total_unit = ttk.Label(self.total_section, text="toneladas", style='TotalUnit.TLabel')
         self.lbl_total_unit.pack(pady=(0, 30))
 
         # 3. TARJETA VIGA 2 (Derecha)
@@ -619,101 +660,7 @@ class BalanzaGUI(ttk.Window):
         # Sección principal: CONTROL DE TARA (debajo de las tarjetas)
         # Diseño: grid con 3 columnas (botón izq | centro con título+valor | botón der)
         # -------------------------------------------------------------
-        try:
-            tare_frame = ttk.Frame(grid_area, style='Card.TFrame', padding=0)
-            tare_frame.grid(row=1, column=0, columnspan=3, sticky="nsew", padx=10, pady=(0, 10))
-            try:
-                tare_frame.grid_propagate(False)
-            except Exception:
-                pass
-
-            # Inner panel con fondo blanco (mantener la tarjeta externa) y padding
-            # Reducir espacio vertical en pantallas de laptop o mayores
-            try:
-                screen_w = self.winfo_screenwidth()
-                screen_h = self.winfo_screenheight()
-                is_laptop = (screen_w > 1280 or screen_h > 800)
-            except Exception:
-                is_laptop = False
-
-            inner_pad = self.scaled(8)
-            if is_laptop:
-                # Usar menos padding vertical en pantallas grandes
-                inner_pad = max(2, int(self.scaled(8) * 0.6))
-
-            tare_inner = ttk.Frame(tare_frame, style='CardNoBorder.TFrame', padding=inner_pad)
-            tare_inner.pack(fill=BOTH, expand=YES)
-
-            # Usar grid para controlar posiciones
-            tare_inner.columnconfigure(0, weight=0, minsize=self.scaled(328))  # columna fija izquierda (botón)
-            tare_inner.columnconfigure(1, weight=1)                             # columna central expansible
-            tare_inner.columnconfigure(2, weight=0, minsize=self.scaled(328))  # columna fija derecha (botón)
-
-            # Botones grandes integrados a los extremos; el centro se elimina
-            # Hacer que la fila ocupe todo el alto disponible para que los botones parezcan bloques
-            try:
-                tare_inner.rowconfigure(0, weight=1)
-            except Exception:
-                pass
-
-            # Botón izquierdo: TARE (amarillo sólido), diseño grande y con padding interior
-            try:
-                btn_tare = ttk.Button(
-                    tare_inner,
-                    text="TARA",
-                    style="TareYellow.TButton",
-                    command=self.do_tare,
-                    padding=(self.scaled(30), self.scaled(8)),
-                    width=4
-                )
-            except Exception:
-                btn_tare = ttk.Button(tare_inner, text="TARA", command=self.do_tare)
-            # Colocar el botón TARA en la columna central para centrarlo
-            btn_tare.grid(row=0, column=1, sticky='nsew', padx=0, pady=0)
-            self.btn_tare_main = btn_tare
-
-            # Botón derecho: RESET (rojo), consistente en tamaño y padding
-            try:
-                btn_reset = ttk.Button(
-                    tare_inner,
-                    text="RESET",
-                    style='TareRed.TButton',
-                    command=self.reset_tare,
-                    padding=(self.scaled(30), self.scaled(8)),
-                    width=4
-                )
-            except Exception:
-                btn_reset = ttk.Button(tare_inner, text="RESET", command=self.reset_tare)
-            # Ocultar el botón RESET en la vista principal (se crea pero no se muestra)
-            self.btn_reset_tare_main = btn_reset
-
-            # Centro: volver a añadir título pequeño de estado y 'Tara Aplicada' + valor
-            # Usar fondo blanco y texto negro
-            # Centro: se elimina la etiqueta 'Tara Aplicada' y se mantiene
-            # un contenedor oculto para compatibilidad con el widget de valor.
-            center_frame = ttk.Frame(tare_inner, style='CardNoBorder.TFrame')
-            # No gridear center_frame para mantenerlo oculto; usamos la columna central
-            center_frame.columnconfigure(0, weight=1)
-
-            # Valor de tara aplicado más compacto (visibilidad asegurada)
-            try:
-                val_font = ("Consolas", self.scaled_font(32), 'bold')
-            except Exception:
-                val_font = ("Consolas", 32, 'bold')
-            self.lbl_tare_value_main = ttk.Label(center_frame, text="0 t", style='TareMaintValue.TLabel', font=val_font, anchor='center')
-            # Ocultar el valor de la tara en la vista principal (se mantiene el widget para compatibilidad)
-            try:
-                # No grid() para mantener oculto en la vista principal
-                pass
-            except Exception:
-                pass
-            try:
-                self.lbl_tare_value_main.target_width = self.scaled(300)
-            except Exception:
-                self.lbl_tare_value_main.target_width = None
-        except Exception:
-            # En caso de fallo, ignorar para no romper la UI principal
-            pass
+        # Sección de TARA eliminada del layout principal: ahora el botón TARA está en el header.
         
         
     def _start_drag(self, event):
@@ -746,7 +693,31 @@ class BalanzaGUI(ttk.Window):
                     self.show_alert("Erro", msg['payload'], "error")
                     self.log_message(f"[ERRO] {msg['payload']}")
                 elif msg['type'] == 'LOG':
-                    self.log_message(msg['payload'])
+                    # Evitar escribir al disco en exceso: limitar escrituras a ~5Hz
+                    try:
+                        now = time.time()
+                        last = getattr(self, '_last_log_write_time', 0)
+                        interval = getattr(self, '_log_write_interval', 0.2)
+                        if now - last >= interval:
+                            try:
+                                self.log_message(msg['payload'])
+                                self._last_log_write_time = now
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    # Añadir al panel de eventos recientes si existe (siempre en memoria)
+                    try:
+                        if hasattr(self, 'status_listbox') and self.status_listbox:
+                            text = str(msg['payload'])
+                            try:
+                                self.status_listbox.insert(0, text)
+                                if self.status_listbox.size() > 20:
+                                    self.status_listbox.delete(20, tk.END)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
                 elif msg['type'] == 'CONNECTION_PROGRESS':
                     # Actualizar dialogo de conexion con progreso
                     payload = msg['payload']
@@ -921,7 +892,7 @@ class BalanzaGUI(ttk.Window):
                     else:
                         tgt = normal_total
                     fixed_total_w = getattr(self.lbl_total, 'target_width', self.scaled(360))
-                    self._fit_label_font(self.lbl_total, str(total_text), 'Consolas', max_size=tgt, min_size=total_extra_small, explicit_width=fixed_total_w)
+                    self._fit_label_font(self.lbl_total, str(total_text), 'Segoe UI', max_size=tgt, min_size=total_extra_small, explicit_width=fixed_total_w)
                 except Exception:
                     # Fallback conservador
                     try:
@@ -941,13 +912,15 @@ class BalanzaGUI(ttk.Window):
                             except Exception:
                                 pass
                     if hasattr(self, 'lbl_maint_total_unit') and self.lbl_maint_total_unit:
-                        self.lbl_maint_total_unit.configure(text="t", style='TotalUnit.TLabel')
+                        # Use short unit to avoid layout reflow when text width changes
+                        self.lbl_maint_total_unit.configure(text="toneladas", style='TotalUnit.TLabel')
                     if hasattr(self, 'lbl_maint_total_title') and self.lbl_maint_total_title:
                         self.lbl_maint_total_title.configure(text="PESO TOTAL", style='TotalLabel.TLabel')
                 except Exception:
                     pass
                 self._widget_last_total = incoming_total_last
-            self.lbl_total_unit.configure(text="t", style='TotalUnit.TLabel')
+            # Keep main unit short to prevent geometry churn
+            self.lbl_total_unit.configure(text="toneladas", style='TotalUnit.TLabel')
         
         # Actualizar Sensores Individuales (datos pueden ser parciales; usar get para evitar KeyError)
         sensores = data.get('sensores', {})
@@ -983,7 +956,7 @@ class BalanzaGUI(ttk.Window):
                     try:
                         fw = getattr(self.lbl_viga1_total, 'target_width', self.scaled(260))
                         # Ajuste estático: usar beam_tgt y ancho explícito para evitar mover la tarjeta
-                        self._fit_label_font(self.lbl_viga1_total, str(txt1), 'Consolas', max_size=beam_tgt, min_size=self.scaled_font(18), explicit_width=fw)
+                        self._fit_label_font(self.lbl_viga1_total, str(txt1), 'Segoe UI', max_size=beam_tgt, min_size=self.scaled_font(18), explicit_width=fw)
                     except Exception:
                         pass
                 if hasattr(self, 'lbl_viga2_total') and self.lbl_viga2_total:
@@ -991,7 +964,7 @@ class BalanzaGUI(ttk.Window):
                     self.lbl_viga2_total.configure(text=txt2)
                     try:
                         fw2 = getattr(self.lbl_viga2_total, 'target_width', self.scaled(260))
-                        self._fit_label_font(self.lbl_viga2_total, str(txt2), 'Consolas', max_size=beam_tgt, min_size=self.scaled_font(18), explicit_width=fw2)
+                        self._fit_label_font(self.lbl_viga2_total, str(txt2), 'Segoe UI', max_size=beam_tgt, min_size=self.scaled_font(18), explicit_width=fw2)
                     except Exception:
                         pass
                 # También actualizar labels alternativos creados en la nueva UI (compatibilidad)
@@ -1000,7 +973,7 @@ class BalanzaGUI(ttk.Window):
                         txt_v1 = self._format_weight(v1)
                         self.lbl_viga1_sum.configure(text=txt_v1)
                         fw_v1 = getattr(self.lbl_viga1_sum, 'target_width', self.scaled(260))
-                        self._fit_label_font(self.lbl_viga1_sum, txt_v1, 'Consolas', max_size=beam_tgt, min_size=min_font, explicit_width=fw_v1)
+                        self._fit_label_font(self.lbl_viga1_sum, txt_v1, 'Segoe UI', max_size=beam_tgt, min_size=min_font, explicit_width=fw_v1)
                 except Exception:
                     pass
                 try:
@@ -1008,7 +981,7 @@ class BalanzaGUI(ttk.Window):
                         txt_v2 = self._format_weight(v2)
                         self.lbl_viga2_sum.configure(text=txt_v2)
                         fw_v2 = getattr(self.lbl_viga2_sum, 'target_width', self.scaled(260))
-                        self._fit_label_font(self.lbl_viga2_sum, txt_v2, 'Consolas', max_size=beam_tgt, min_size=min_font, explicit_width=fw_v2)
+                        self._fit_label_font(self.lbl_viga2_sum, txt_v2, 'Segoe UI', max_size=beam_tgt, min_size=min_font, explicit_width=fw_v2)
                 except Exception:
                     pass
             except Exception:
@@ -1063,7 +1036,7 @@ class BalanzaGUI(ttk.Window):
                             tgt = normal_cell
 
                         fixed_w = getattr(val_widget, 'target_width', self.scaled(260))
-                        self._fit_label_font(val_widget, str(display_text), 'Consolas', max_size=tgt, min_size=cell_extra_small, explicit_width=fixed_w)
+                        self._fit_label_font(val_widget, str(display_text), 'Segoe UI', max_size=tgt, min_size=cell_extra_small, explicit_width=fixed_w)
                     except Exception:
                         pass
                     self._widget_last_seen[key] = incoming_last
@@ -1109,104 +1082,73 @@ class BalanzaGUI(ttk.Window):
                 except Exception:
                     pass
 
-    def _update_status(self, connected):
+    def _update_status_led(self, state):
+        """Actualiza el color del LED de estado de conexión."""
+        led_colors = {
+            'connected': ('●', '#22c55e'),  # Verde
+            'disconnected': ('●', '#64748b'), # Gris
+            'error': ('●', '#ef4444'),       # Rojo
+        }
+        char, color = led_colors.get(state, ('●', '#64748b'))
+        try:
+            self._status_led.config(text=char, foreground=color, font=("Segoe UI", self.scaled_font(18)))
+        except Exception:
+            try:
+                self._status_led.config(text=char, foreground=color)
+            except Exception:
+                pass
+
+    def _update_status(self, connected, error=False):
         self.connected = connected
-        if connected:
-            self.lbl_status.configure(text="Conectado", foreground="#22c55e")
-            # Manter dimenses ao mudar estilo
+        if error:
+            self._update_status_led('error')
+            self._status_text.config(text="Error")
             self.btn_connect.configure(
-                text="DESCONECTAR", 
-                bootstyle="danger",
-                style='Header.TButton',
+                text="CONECTAR",
+                style='ConnectDanger.TButton',
                 width=14,
                 padding=(15, 12)
             )
-            # Si el diálogo de configuración está abierto, actualizar su botón también
             try:
-                if hasattr(self, 'btn_connect_dialog') and getattr(self, 'btn_connect_dialog'):
-                    try:
-                        self.btn_connect_dialog.configure(text="DESCONECTAR", bootstyle="danger", style='Large.danger.TButton', width=12, padding=(20, 10))
-                        try:
-                            # Forzar fuente/estilo consistente para evitar cambios de tamaño
-                            self.btn_connect_dialog.configure(font=self.style.configure('Header.TButton').get('font'))
-                        except Exception:
-                            pass
-                    except Exception:
-                        pass
+                if hasattr(self, 'btn_connect_dialog') and self.btn_connect_dialog:
+                    self.btn_connect_dialog.configure(text="CONECTAR", style='Large.danger.TButton')
             except Exception:
                 pass
-            # Al conectarse, intentar cargar y aplicar calibraciones disponibles
+        elif connected:
+            self._update_status_led('connected')
+            self._status_text.config(text="Conectado")
+            self.btn_connect.configure(
+                text="DESCONECTAR",
+                style='ConnectDanger.TButton',
+                width=14,
+                padding=(15, 12)
+            )
+            try:
+                if hasattr(self, 'btn_connect_dialog') and self.btn_connect_dialog:
+                    self.btn_connect_dialog.configure(text="DESCONECTAR", style='Large.danger.TButton')
+            except Exception:
+                pass
             try:
                 self._apply_saved_calibrations_on_connect()
             except Exception:
                 pass
-            # Registrar timestamp de conexión exitosa para periodo de gracia
             try:
                 import time
                 self._conn_success_time = time.time()
             except Exception:
                 self._conn_success_time = 0.0
         else:
-            self.lbl_status.configure(text=" Desconectado", foreground="#64748b")
-            # Manter dimenses ao mudar estilo
+            self._update_status_led('disconnected')
+            self._status_text.config(text="Desconectado")
             self.btn_connect.configure(
-                text="CONECTAR", 
-                bootstyle="success",
-                style='Header.TButton',
+                text="CONECTAR",
+                style='ConnectSuccess.TButton',
                 width=14,
                 padding=(15, 12)
             )
             try:
-                if hasattr(self, 'btn_connect_dialog') and getattr(self, 'btn_connect_dialog'):
-                    try:
-                        self.btn_connect_dialog.configure(text="CONECTAR", bootstyle="success", style='Large.success.TButton', width=12, padding=(20, 10))
-                        try:
-                            self.btn_connect_dialog.configure(font=self.style.configure('Header.TButton').get('font'))
-                        except Exception:
-                            pass
-                    except Exception:
-                        pass
-                    # Si hay un diálogo de conexión activo, interpretar este STATUS=False
-                    # como el resultado de una tentativa finalizada. Lanzar nueva tentativa
-                    # sólo si el usuario no canceló y aún quedan intentos disponibles.
-                    try:
-                        if getattr(self, '_connection_dialog_active', False) and not getattr(self, '_cancel_connection', False):
-                            # Si aún podemos intentar más veces
-                            try:
-                                attempts = int(getattr(self, '_conn_attempt', 1))
-                            except Exception:
-                                attempts = 1
-
-                            if attempts < RECONNECT_ATTEMPTS:
-                                attempts += 1
-                                self._conn_attempt = attempts
-                                # Actualizar texto y solicitar nueva tentativa al backend
-                                try:
-                                    self._conn_status.configure(text=f"Tentativa {self._conn_attempt}...")
-                                    self._conn_info.configure(text=f"Tentativa {self._conn_attempt}")
-                                except Exception:
-                                    pass
-                                try:
-                                    self.command_queue.put({'cmd': 'CONNECT'})
-                                except Exception:
-                                    pass
-                            else:
-                                # Agotar intentos: mostrar fallo en el diálogo
-                                try:
-                                    if hasattr(self, '_conn_progress') and self._conn_progress.winfo_exists():
-                                        self._conn_progress.stop()
-                                except Exception:
-                                    pass
-                                try:
-                                    self._conn_status.configure(text=" Sensor não encontrado", foreground="#ef4444")
-                                    self._conn_info.configure(text="Verifique a conexão e tente novamente")
-                                    self._conn_btn.configure(text="FECHAR", bootstyle="secondary",
-                                                              command=self._safe_close_conn_dialog)
-                                except Exception:
-                                    pass
-                                self._connection_dialog_active = False
-                    except Exception:
-                        pass
+                if hasattr(self, 'btn_connect_dialog') and self.btn_connect_dialog:
+                    self.btn_connect_dialog.configure(text="CONECTAR", style='Large.success.TButton')
             except Exception:
                 pass
             # Al desconectarse, resetear flag de primera muestra
@@ -1214,6 +1156,24 @@ class BalanzaGUI(ttk.Window):
                 self._first_sample_received = False
             except Exception:
                 pass
+
+    def _update_footer_time(self):
+        """Actualiza la hora mostrada en el footer cada segundo."""
+        try:
+            if hasattr(self, 'footer_time') and self.footer_time:
+                import datetime
+                now = datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+                try:
+                    self.footer_time.config(text=now)
+                except Exception:
+                    pass
+            # Reagendar la actualización
+            try:
+                self.after(1000, self._update_footer_time)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def _show_numeric_keypad(self, entry_widget, title="Inserir Valor"):
         """Teclado numérico virtual grande y funcional."""
@@ -1350,7 +1310,7 @@ class BalanzaGUI(ttk.Window):
         keypad_frame.columnconfigure(0, weight=1)
 
         # Entry grande en la primera fila
-        entry_display = ttk.Entry(keypad_frame, textvariable=kp_value, font=("Consolas", 32), justify="center", state="readonly")
+        entry_display = ttk.Entry(keypad_frame, textvariable=kp_value, font=("Segoe UI", 32), justify="center", state="readonly")
         entry_display.grid(row=0, column=0, sticky="nsew", padx=40, pady=(40, 20))
 
         # Frame de botones en la segunda fila
@@ -1448,49 +1408,36 @@ class BalanzaGUI(ttk.Window):
             pass
 
     def toggle_decimals(self):
-        """Alterna entre mostrar valores con o sin decimales."""
-        # Toggle flag only; keep the button label as '0.00'
-        self._show_decimals = not self._show_decimals
-        # Simplified: only two font states exist now - with decimals and without decimals.
+        """Alterna entre mostrar valores con o sin decimales.
+
+        Implementación más segura: evita reentradas, actualiza texto de botones,
+        recalcula fuentes usando fuente monoespaciada para números y libera
+        el bloqueo tras un breve retardo.
+        """
+        if getattr(self, '_toggling_decimals', False):
+            return
+        self._toggling_decimals = True
+
         try:
-            normal_cell = self.scaled_font(64)
-        except Exception:
-            normal_cell = 64
-        try:
-            normal_total = self.scaled_font(120)
-        except Exception:
-            normal_total = 120
+            # 1. Cambiar estado
+            self._show_decimals = not self._show_decimals
+            
+            # 2. Actualizar texto de los botones
+            new_text = "0,00" if self._show_decimals else "0"
+            if hasattr(self, 'btn_decimals') and self.btn_decimals.winfo_exists():
+                self.btn_decimals.configure(text=new_text)
+            
+            if hasattr(self, 'btn_dec_dialog') and self.btn_dec_dialog.winfo_exists():
+                self.btn_dec_dialog.configure(text=new_text)
 
-        if self._show_decimals:
-            sensor_target = max(12, int(normal_cell * 0.85))
-            total_target = max(40, int(normal_total * 0.85))
-        else:
-            sensor_target = normal_cell
-            total_target = normal_total
-
-        min_sensor = max(8, int(sensor_target * 0.6))
-        min_total = max(20, int(total_target * 0.6))
-
-        # Aplicar tamaño de fuente a widgets individuales sin cambiar el tamaño del contenedor
-        for key, widgets in getattr(self, 'sensor_widgets', {}).items():
-            try:
-                txt = widgets['value'].cget('text') or "0"
-                fixed_w = getattr(widgets['value'], 'target_width', self.scaled(260))
-                self._fit_label_font(widgets['value'], str(txt), 'Consolas', max_size=sensor_target, min_size=min_sensor, explicit_width=fixed_w)
-            except Exception:
-                pass
-
-        # Ajustar TOTAL sin alterar contenedor central (dos estados solamente)
-        try:
-            if hasattr(self, 'lbl_total') and self.lbl_total:
-                txt_total = self.lbl_total.cget('text') or "0"
-                fixed_total_w = getattr(self.lbl_total, 'target_width', self.scaled(360))
-                self._fit_label_font(self.lbl_total, str(txt_total), 'Consolas', max_size=total_target, min_size=min_total, explicit_width=fixed_total_w)
-        except Exception:
-            pass
-
-        # Forzar actualización visual inmediata de todos los valores
-        self.after(10, self._refresh_all_displays)
+            # 3. Forzar actualización de datos (el refresco principal reajustará las fuentes)
+            self._refresh_all_displays()
+            
+        except Exception as e:
+            self.log_message(f"Error toggle_decimals: {e}")
+        finally:
+            # Liberar bloqueo rápidamente
+            self.after(200, lambda: setattr(self, '_toggling_decimals', False))
     
     def _apply_saved_calibrations_on_connect(self):
         """Busca y aplica calibraciones desde el directorio de calibraciones cuando se conecta el sistema.
@@ -1727,15 +1674,22 @@ class BalanzaGUI(ttk.Window):
             self._update_display(self._last_sensor_data)
 
     def _format_weight(self, value):
-        """Formatea el peso según configuración de decimales (redondeo bancario/IEEE 754)."""
+        """Formatea el peso con coma decimal y manejo robusto de entradas.
+
+        Devuelve un string con coma como separador decimal. Si el valor no es
+        convertible a float, devuelve "0,00" o "0" según el modo.
+        """
+        try:
+            val = float(value)
+        except Exception:
+            return "0,00" if self._show_decimals else "0"
+
         if self._show_decimals:
-            # Con decimales: 2 posiciones usando redondeo bancario
-            from decimal import Decimal, ROUND_HALF_EVEN
-            d = Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_EVEN)
-            return f"{d}"
+            s = f"{val:.2f}"
         else:
-            # Sin decimales: redondeo al entero más cercano (norma ISO 80000-1)
-            return f"{round(value)}"
+            s = f"{int(round(val))}"
+
+        return s.replace('.', ',')
 
     def export_calibrations_gui(self):
         """Exporta todas las calibraciones JSON a un único CSV en el directorio de calibraciones."""
@@ -2327,17 +2281,8 @@ class BalanzaGUI(ttk.Window):
         """
         Maneja la respuesta de descubrimiento de nodos.
         Actualiza la UI con los nodos y canales encontrados.
-        
-        Args:
-            nodes_list: Lista de dicts con info de cada nodo:
-                [{
-                    'id': 12345,
-                    'rssi': -45,
-                    'model': 'SG-Link-200',
-                    'channels': [{'channel': 'ch1', 'type': 'strain', 'value': 0.0}, ...],
-                    'sample_rate': '32 Hz'
-                }, ...]
         """
+        
         # Guardar nodos descubiertos
         self._discovered_nodes = nodes_list
         
@@ -2410,8 +2355,13 @@ class BalanzaGUI(ttk.Window):
         self._connection_dialog_active = True
         self._cancel_connection = False
         
-        # Criar janela
-        dialog = ttk.Toplevel(self)
+        # Criar janela. Si hay un diálogo de configuración abierto, crear
+        # este diálogo como hijo para evitar conflictos de grab/overrideredirect.
+        parent_for_conn = getattr(self, '_config_dialog', self)
+        try:
+            dialog = ttk.Toplevel(parent_for_conn)
+        except Exception:
+            dialog = ttk.Toplevel(self)
         dialog.overrideredirect(True)
         
         w_dlg = 700
@@ -2478,7 +2428,18 @@ class BalanzaGUI(ttk.Window):
         # dialog.transient(self) 
         dialog.update_idletasks()  # Forzar renderizado inmediato
         dialog.after(20, lambda: dialog.grab_set())
-        
+        # Adicional: intentar un grab seguro posteriormente para minimizar
+        # riesgos cuando el parent está en overrideredirect/grab.
+        try:
+            def _try_grab(dlg):
+                try:
+                    dlg.grab_set()
+                except Exception:
+                    pass
+            dialog.after(120, lambda d=dialog: _try_grab(d))
+        except Exception:
+            pass
+
         # Enviar primer intento de conexión (cada llamada es una tentativa)
         self._conn_attempt = 1
         self._conn_start_time = time.time()
@@ -2767,7 +2728,7 @@ class BalanzaGUI(ttk.Window):
 
             # Entry
             pwd_var = tk.StringVar()
-            entry = ttk.Entry(frame, textvariable=pwd_var, show='*', font=("Consolas", 14), justify='center')
+            entry = ttk.Entry(frame, textvariable=pwd_var, show='*', font=("Segoe UI", 14), justify='center')
             # Más espacio debajo de la entrada para bajar los botones
             entry.pack(pady=(0, 20), ipadx=10, ipady=6)
             entry.focus_set()
@@ -2876,6 +2837,12 @@ class BalanzaGUI(ttk.Window):
 
         # Crear ventana modal - FULLSCREEN (sin barra de título)
         dialog = ttk.Toplevel(self)
+        # Registrar referencia para que otros diálogos (p.ej. conexión)
+        # puedan crearse como hijos y evitar conflictos de grab/overrideredirect.
+        try:
+            self._config_dialog = dialog
+        except Exception:
+            pass
         dialog.overrideredirect(True)
         # Pantalla completa real
         screen_w = self.winfo_screenwidth()
@@ -3002,6 +2969,18 @@ class BalanzaGUI(ttk.Window):
                             pass
             except Exception:
                 pass
+            # Limpiar referencia al diálogo de configuración
+            try:
+                if hasattr(self, '_config_dialog'):
+                    try:
+                        delattr(self, '_config_dialog')
+                    except Exception:
+                        try:
+                            self._config_dialog = None
+                        except Exception:
+                            pass
+            except Exception:
+                pass
 
         # === BORDA para delimitar a janela ===
         # En pantallas pequeñas eliminamos el padding de la "borda" para
@@ -3089,11 +3068,11 @@ class BalanzaGUI(ttk.Window):
         except Exception:
             connect_text = "CONECTAR"
 
+        dlg_style = 'Large.success.TButton' if not getattr(self, 'connected', False) else 'Large.danger.TButton'
         btn_connect_dialog = ttk.Button(left_frame, text=connect_text,
-                                        command=self.toggle_connection,
-                                        bootstyle="success",
-                                        width=12, padding=btn_padding)
-        btn_connect_dialog.configure(style='Large.success.TButton')
+                        command=self.toggle_connection,
+                        width=12, padding=btn_padding)
+        btn_connect_dialog.configure(style=dlg_style)
         btn_connect_dialog.pack(side=LEFT, padx=(8, 12))
         # Guardar referencia en self para poder sincronizar estado desde _update_status
         try:
@@ -3103,15 +3082,20 @@ class BalanzaGUI(ttk.Window):
 
         # Decimals button mirrors main button behavior
         try:
-            dec_text = self.btn_decimals.cget('text') if hasattr(self, 'btn_decimals') else '0.00'
+            # Mostrar coma en el diálogo también
+            dec_text = self.btn_decimals.cget('text') if hasattr(self, 'btn_decimals') else '0,00'
+            dec_text = str(dec_text).replace('.', ',')
         except Exception:
-            dec_text = '0.00'
+            dec_text = '0,00'
         btn_dec_dialog = ttk.Button(left_frame, text=dec_text,
                                     command=self.toggle_decimals,
-                                    bootstyle="primary",
                                     width=8, padding=btn_padding)
         btn_dec_dialog.configure(style='Large.info.TButton')
         btn_dec_dialog.pack(side=LEFT, padx=(0, 8))
+        try:
+            self.btn_dec_dialog = btn_dec_dialog
+        except Exception:
+            pass
 
         # Right: SALVAR, CANCELAR, FECHAR
         btn_salvar = ttk.Button(right_frame, text="SALVAR",
@@ -3543,9 +3527,9 @@ class BalanzaGUI(ttk.Window):
                 rssi = ttk.Label(h, text="", font=("Segoe UI", 10), anchor='center', justify='center')
                 rssi.pack(fill=X)
                 ttk.Separator(card, orient=HORIZONTAL).pack(fill=X, pady=6)
-                val = ttk.Label(card, text="0.00", style='CardValue.TLabel', font=("Consolas", self.scaled_font(28), "bold"), anchor='center', justify='center')
+                val = ttk.Label(card, text="0.00", style='CardValue.TLabel', font=("Segoe UI", self.scaled_font(28), "bold"), anchor='center', justify='center')
                 val.pack(expand=YES, fill=BOTH)
-                ttk.Label(card, text="t", style='Unit.TLabel').pack()
+                ttk.Label(card, text="toneladas", style='Unit.TLabel').pack()
                 # Guardar target_width para ajuste de fuente, basado en ancho de la tarjeta
                 try:
                     val.target_width = max(1, card_w - self.scaled(40))
@@ -3705,22 +3689,12 @@ class BalanzaGUI(ttk.Window):
             content_frame.pack(expand=YES, fill=BOTH)
 
             self.lbl_maint_total_title = ttk.Label(content_frame, text="PESO TOTAL", style='TotalLabel.TLabel', anchor='center', justify='center')
-            # Padding reducido para el título
-            self.lbl_maint_total_title.pack(pady=(0, 6))
-            # Spacer fijo para mantener separación estable entre título y valor
-            try:
-                spacer_h = self.scaled(20)
-            except Exception:
-                spacer_h = 20
-            spacer = ttk.Frame(content_frame, height=spacer_h)
-            try:
-                spacer.pack_propagate(False)
-            except Exception:
-                pass
-            spacer.pack()
+            # Colocar título en la parte superior
+            self.lbl_maint_total_title.pack(side='top', fill='x')
+
+            # Valor central: permitir que ocupe el espacio disponible para centrarlo
             self.lbl_maint_total = ttk.Label(content_frame, text="0", style='TotalValue.TLabel', anchor='center', justify='center')
-            # Mantener pequeño padding inferior
-            self.lbl_maint_total.pack(pady=(0, 4))
+            self.lbl_maint_total.pack(expand=YES, fill=BOTH, pady=(6, 6))
             try:
                 self.lbl_maint_total.target_width = max(1, ctrl_w - self.scaled(80))
             except Exception:
@@ -3729,60 +3703,16 @@ class BalanzaGUI(ttk.Window):
                 except Exception:
                     self.lbl_maint_total.target_width = self.scaled(260)
             # Unidad justo debajo del valor, con poco padding
+            # Unidad justo debajo del valor, con poco padding - usar abreviatura para estabilidad
             self.lbl_maint_total_unit = ttk.Label(content_frame, text="t", style='TotalUnit.TLabel', anchor='center', justify='center')
-            self.lbl_maint_total_unit.pack(pady=(0, 2))
+            self.lbl_maint_total_unit.pack(side='bottom', fill='x', pady=(0, 2))
 
-            # Sección inferior: control de TARA (dentro de mantenimiento)
-            # Mostrar un único borde en la sección de TARA (Card.TFrame)
-            # Hacer la sección de TARA ligeramente más alta para dar prioridad
-            # visual a los controles de tara dentro del diálogo de configuración.
-            tare_section = ttk.Frame(ctrl_frame, style='Card.TFrame', padding=(6,4))
-            # Fijar una altura razonable y desactivar pack propagation para
-            # que la sección ocupe más espacio vertical, quitándoselo al TOTAL.
+            # Sección de TARA eliminada: ahora el botón TARA vive en el header.
+            # Mantener referencia explícita para evitar AttributeError en código que la consulte.
             try:
-                tare_section.configure(height=self.scaled(160))
-                tare_section.pack_propagate(False)
+                self.lbl_tare_value = None
             except Exception:
                 pass
-            tare_section.pack(fill=X, side='bottom', pady=(0, 0))
-
-            # Versión compacta: inner sin borde para que el borde exterior del tare_section sea el único visible
-            tare_inner = ttk.Frame(tare_section, style='CardNoBorder.TFrame', padding=(4, 2))
-            tare_inner.pack(fill=X, pady=(0, 0))
-
-            # (Título eliminado — todo en una sola sección)
-            actions_row = ttk.Frame(tare_inner)
-            # Espacio superior mayor sobre los botones (escalado según pantalla)
-            actions_row.pack(fill=X, pady=(self.scaled(12), 0))
-            try:
-                actions_row.columnconfigure(0, weight=0)
-                actions_row.columnconfigure(1, weight=1)
-                actions_row.columnconfigure(2, weight=0)
-            except Exception:
-                pass
-
-            btn_tare = ttk.Button(actions_row, text="TARA", command=self.do_tare, style='Tare.TButton', bootstyle="warning", width=14)
-            btn_tare.grid(row=0, column=0, sticky='w', padx=(2, 8))
-
-            # Placeholder en actions_row para mantener botones a los lados
-            try:
-                spacer = ttk.Frame(actions_row)
-                spacer.grid(row=0, column=1, sticky='nsew')
-            except Exception:
-                pass
-
-            btn_reset = ttk.Button(actions_row, text="RESET", command=self.reset_tare, style='Tare.TButton', bootstyle="secondary", width=14)
-            btn_reset.grid(row=0, column=2, sticky='e', padx=(8, 2))
-
-            # Valor de tara persistente (integrado en la misma sección) con padding reducido
-            tare_value_row = ttk.Frame(tare_inner, style='CardNoBorder.TFrame')
-            # Añadir más espacio superior para separar claramente el texto de los botones
-            tare_value_row.pack(fill=X, pady=(self.scaled(14), 0))
-            try:
-                self.lbl_tare_value = ttk.Label(tare_value_row, text="Tara: 0.00 t", style='TareMaintValue.TLabel', anchor='center', justify='center', font=("Segoe UI", self.scaled_font(24), "bold"))
-            except Exception:
-                self.lbl_tare_value = ttk.Label(tare_value_row, text="Tara: 0.00 t", anchor='center', justify='center', font=("Segoe UI", self.scaled_font(24), "bold"))
-            self.lbl_tare_value.pack(fill=X)
         except Exception:
             # Si falla la creación de la pestaña, continuar sin bloquear el diálogo
             pass
@@ -4838,7 +4768,7 @@ class BalanzaGUI(ttk.Window):
         f_w = ttk.Frame(f_fields)
         f_w.grid(row=0, column=0, sticky="ew", padx=(0, 10))
         ttk.Label(f_w, text="Peso Padrão (t):", font=("Segoe UI", 11)).pack(anchor="w")
-        e_weight = ttk.Entry(f_w, textvariable=self._cal_input_weight, font=("Consolas", 16))
+        e_weight = ttk.Entry(f_w, textvariable=self._cal_input_weight, font=("Segoe UI", 16))
         e_weight.pack(fill=X, ipady=8)
         e_weight.bind("<Return>", on_weight_enter)
         e_weight.bind("<KP_Enter>", on_weight_enter)
@@ -4855,7 +4785,7 @@ class BalanzaGUI(ttk.Window):
         f_r = ttk.Frame(f_fields)
         f_r.grid(row=0, column=1, sticky="ew", padx=(10, 0))
         ttk.Label(f_r, text="Leitura Sensor:", font=("Segoe UI", 11)).pack(anchor="w")
-        e_reading = ttk.Entry(f_r, textvariable=self._cal_input_reading, font=("Consolas", 16))
+        e_reading = ttk.Entry(f_r, textvariable=self._cal_input_reading, font=("Segoe UI", 16))
         e_reading.pack(fill=X, ipady=8)
         e_reading.bind("<Return>", on_reading_enter)
         e_reading.bind("<KP_Enter>", on_reading_enter)
@@ -5052,13 +4982,13 @@ class BalanzaGUI(ttk.Window):
                     pass
 
             # Entry Peso - con teclado numérico
-            e_w = ttk.Entry(row, textvariable=v_w, font=("Consolas", 12), justify="center")
+            e_w = ttk.Entry(row, textvariable=v_w, font=("Segoe UI", 12), justify="center")
             e_w.grid(row=0, column=0, sticky="ew", padx=5)
             e_w.bind("<FocusOut>", lambda e, idx=i, var=v_w: update_model(idx, var, 'w'))
             e_w.bind("<Button-1>", lambda e, ew=e_w: self.after(50, lambda: self._show_numeric_keypad(ew, "Peso (t)")))
 
             # Entry Leitura - con teclado numérico
-            e_r = ttk.Entry(row, textvariable=v_r, font=("Consolas", 12), justify="center")
+            e_r = ttk.Entry(row, textvariable=v_r, font=("Segoe UI", 12), justify="center")
             e_r.grid(row=0, column=1, sticky="ew", padx=5)
             e_r.bind("<FocusOut>", lambda e, idx=i, var=v_r: update_model(idx, var, 'r'))
             e_r.bind("<Button-1>", lambda e, er=e_r: self.after(50, lambda: self._show_numeric_keypad(er, "Leitura")))
@@ -5078,10 +5008,8 @@ class BalanzaGUI(ttk.Window):
         peso, lectura = points[idx]
         
         # Mostrar confirmación con el estilo del programa
-        if self.show_large_confirmation(
-            "Eliminar Ponto", 
-            f"Tem certeza que deseja eliminar o ponto?\n\nPeso: {peso:.2f} t\nLeitura: {lectura:.2f}"
-        ):
+        msg = f"Tem certeza que deseja eliminar o ponto?\n\nPeso: {peso:.2f} t\nLeitura: {lectura:.2f}".replace('.', ',')
+        if self.show_large_confirmation("Eliminar Ponto", msg):
             self._cal_manager.remove_point(idx)
             self._refresh_cal_wizard_table_ui()
             self._update_cal_wizard_graph()
