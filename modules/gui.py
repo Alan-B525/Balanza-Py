@@ -223,12 +223,15 @@ class BalanzaGUI(ttk.Window):
         self.style.configure('TotalPanel.TFrame', background=PRIMARY)
         self.style.configure('TotalLabel.TLabel', background=PRIMARY, foreground="white", font=(FONT_MAIN, sf(28), "bold"))
         self.style.configure('TotalValue.TLabel', background=PRIMARY, foreground="white", font=(FONT_NUMBERS, sf(72), "bold"))
+        # Mantener una versión monoespaciada para el total de la pestaña de mantenimiento
+        self.style.configure('MaintTotalValue.TLabel', background=PRIMARY, foreground="white", font=(FONT_MONO, sf(72), "bold"))
         self.style.configure('TotalUnit.TLabel', background=PRIMARY, foreground="white", font=(FONT_MAIN, sf(36)))
         
         # Total Panel DANGER - Cuando hay sensor desconectado (ROJO)
         self.style.configure('TotalPanelDanger.TFrame', background=DANGER)
         self.style.configure('TotalLabelDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MAIN, sf(24), "bold"))
         self.style.configure('TotalValueDanger.TLabel', background=DANGER, foreground="white", font=(FONT_NUMBERS, sf(72), "bold"))
+        self.style.configure('MaintTotalValueDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MONO, sf(72), "bold"))
         self.style.configure('TotalUnitDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MAIN, sf(20)))
         
         # Tara Info - Más visible
@@ -270,7 +273,7 @@ class BalanzaGUI(ttk.Window):
         self.style.configure('Header.TFrame', background=BG_CARD)
         # Reducir tamaño del título para que no ocupe tanto espacio en el footer
         self.style.configure('HeaderTitle.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_MAIN, sf(16), "bold"))
-        self.style.configure('HeaderSub.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, sf(12)))
+        self.style.configure('HeaderSub.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, sf(16)))
         # Logo label style to ensure visibility
         self.style.configure('Logo.TLabel', background=BG_CARD)
 
@@ -387,9 +390,9 @@ class BalanzaGUI(ttk.Window):
             title_lbl = ttk.Label(brand_frame, text=title_text, style='HeaderTitle.TLabel', font=("Segoe UI", self.scaled_font(20), "bold"))
             title_lbl.pack(side=LEFT, padx=(10, 18))
             # Indicador LED y texto de estado
-            self._status_led = ttk.Label(brand_frame, text="●", font=("Segoe UI", self.scaled_font(18)))
-            self._status_led.pack(side=LEFT, padx=(0, 8))
-            self._status_text = ttk.Label(brand_frame, text="Desconectado", style='HeaderSub.TLabel', font=("Segoe UI", self.scaled_font(12)))
+            self._status_led = ttk.Label(brand_frame, text="●", font=("Segoe UI", self.scaled_font(26)))
+            self._status_led.pack(side=LEFT, padx=(0, 10))
+            self._status_text = ttk.Label(brand_frame, text="Desconectado", style='HeaderSub.TLabel', font=("Segoe UI", self.scaled_font(16)))
             self._status_text.pack(side=LEFT)
             try:
                 self._update_status_led('disconnected')
@@ -854,7 +857,7 @@ class BalanzaGUI(ttk.Window):
             # Mantener paridad visual en la pestaña de mantenimiento si existe
             try:
                 if hasattr(self, 'lbl_maint_total') and self.lbl_maint_total:
-                    self.lbl_maint_total.configure(text="---", style='TotalValueDanger.TLabel')
+                    self.lbl_maint_total.configure(text="---", style='MaintTotalValueDanger.TLabel')
                 if hasattr(self, 'lbl_maint_total_title') and self.lbl_maint_total_title:
                     self.lbl_maint_total_title.configure(text="ERRO DE COMUNICAÇÃO", style='TotalLabelDanger.TLabel')
                 if hasattr(self, 'lbl_maint_total_unit') and self.lbl_maint_total_unit:
@@ -903,7 +906,8 @@ class BalanzaGUI(ttk.Window):
                 try:
                     if hasattr(self, 'lbl_maint_total') and self.lbl_maint_total:
                         try:
-                            self.lbl_maint_total.configure(text=total_text, style='TotalValue.TLabel')
+                            # Usar estilo monoespaciado para coincidir con valores individuales
+                            self.lbl_maint_total.configure(text=total_text, style='MaintTotalValue.TLabel')
                             fw_m = getattr(self.lbl_maint_total, 'target_width', getattr(self.lbl_total, 'target_width', self.scaled(260)))
                             self._fit_label_font(self.lbl_maint_total, str(total_text), 'Consolas', max_size=tgt, min_size=total_extra_small, explicit_width=fw_m)
                         except Exception:
@@ -913,14 +917,14 @@ class BalanzaGUI(ttk.Window):
                                 pass
                     if hasattr(self, 'lbl_maint_total_unit') and self.lbl_maint_total_unit:
                         # Use short unit to avoid layout reflow when text width changes
-                        self.lbl_maint_total_unit.configure(text="toneladas", style='TotalUnit.TLabel')
+                        self.lbl_maint_total_unit.configure(text="t", style='TotalUnit.TLabel')
                     if hasattr(self, 'lbl_maint_total_title') and self.lbl_maint_total_title:
                         self.lbl_maint_total_title.configure(text="PESO TOTAL", style='TotalLabel.TLabel')
                 except Exception:
                     pass
                 self._widget_last_total = incoming_total_last
             # Keep main unit short to prevent geometry churn
-            self.lbl_total_unit.configure(text="toneladas", style='TotalUnit.TLabel')
+            self.lbl_total_unit.configure(text="t", style='TotalUnit.TLabel')
         
         # Actualizar Sensores Individuales (datos pueden ser parciales; usar get para evitar KeyError)
         sensores = data.get('sensores', {})
@@ -2768,6 +2772,30 @@ class BalanzaGUI(ttk.Window):
                 btn_ok.pack(side=LEFT, expand=YES, fill=X, padx=(0, 6))
                 btn_cancel.pack(side=RIGHT, expand=YES, fill=X, padx=(6, 0))
 
+            # Garantizar anchura uniforme entre botones y enlazar Enter/Escape
+            try:
+                # Calcular ancho en caracteres razonable (usar la longitud del texto más un padding)
+                t_ok = (btn_ok.cget('text') or 'OK')
+                t_cancel = (btn_cancel.cget('text') or 'CANCELAR')
+                width_chars = max(len(str(t_ok)), len(str(t_cancel))) + 2
+                btn_ok.configure(width=width_chars)
+                btn_cancel.configure(width=width_chars)
+            except Exception:
+                pass
+
+            try:
+                # Enter confirma, Escape cancela
+                dialog.bind('<Return>', lambda e: on_ok())
+                dialog.bind('<KP_Enter>', lambda e: on_ok())
+                dialog.bind('<Escape>', lambda e: on_cancel())
+                # También enlazar la entrada para que Enter funcione allí
+                try:
+                    entry.bind('<Return>', lambda e: on_ok())
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
             try:
                 dialog.grab_set()
             except Exception:
@@ -3693,7 +3721,7 @@ class BalanzaGUI(ttk.Window):
             self.lbl_maint_total_title.pack(side='top', fill='x')
 
             # Valor central: permitir que ocupe el espacio disponible para centrarlo
-            self.lbl_maint_total = ttk.Label(content_frame, text="0", style='TotalValue.TLabel', anchor='center', justify='center')
+            self.lbl_maint_total = ttk.Label(content_frame, text="0", style='MaintTotalValue.TLabel', anchor='center', justify='center')
             self.lbl_maint_total.pack(expand=YES, fill=BOTH, pady=(6, 6))
             try:
                 self.lbl_maint_total.target_width = max(1, ctrl_w - self.scaled(80))
