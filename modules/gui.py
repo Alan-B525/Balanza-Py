@@ -415,10 +415,10 @@ class BalanzaGUI(ttk.Window):
             title_lbl = ttk.Label(brand_frame, text=title_text, style='HeaderTitle.TLabel', font=("Segoe UI", self.scaled_font(20), "bold"))
             title_lbl.pack(side=LEFT, padx=(10, 18))
             # Indicador LED y texto de estado
-            self._status_led = ttk.Label(brand_frame, text="●", font=("Segoe UI", self.scaled_font(26)))
+            self._status_led = ttk.Label(brand_frame, text="●", font=("Segoe UI", self.scaled_font(42)))
             self._status_led.pack(side=LEFT, padx=(0, 10))
-            self._status_text = ttk.Label(brand_frame, text="Desconectado", style='HeaderSub.TLabel', font=("Segoe UI", self.scaled_font(16)))
-            self._status_text.pack(side=LEFT)
+            self._status_text = ttk.Label(brand_frame, text="Desconectado", style='HeaderSub.TLabel', font=("Segoe UI", self.scaled_font(24)))
+            self._status_text.pack(side=LEFT, pady=(0, 2))
             try:
                 self._update_status_led('disconnected')
             except Exception:
@@ -537,7 +537,8 @@ class BalanzaGUI(ttk.Window):
         # para evitar que compriman las secciones de acciones (TARA).
 
         # --- Separador visual ---
-        ttk.Separator(main_container, orient=HORIZONTAL).pack(fill=X, pady=(0, 10))
+        # Removed as requested
+        # ttk.Separator(main_container, orient=HORIZONTAL).pack(fill=X, pady=(0, 10))
 
         # Footer frame fijo (creado antes del grid central para garantizar visibilidad en pantallas pequeñas)
         try:
@@ -605,40 +606,53 @@ class BalanzaGUI(ttk.Window):
         
         # Single column centered
         grid_area.columnconfigure(0, weight=1)
-        grid_area.rowconfigure(0, weight=3) # Load Section
-        grid_area.rowconfigure(1, weight=1) # Angle Section (Old Tare position)
+        # Give Equal weight to both sections for better distribution
+        grid_area.rowconfigure(0, weight=1) # Load Section
+        grid_area.rowconfigure(1, weight=1) # Angle Section
 
         # --- SECCIÓN CARGA (MAIN) ---
-        load_card = ttk.Frame(grid_area, style='TotalPanel.TFrame', padding=self.scaled(20))
-        load_card.grid(row=0, column=0, sticky="nsew", padx=20, pady=(20, 10))
+        # Reduced padding to 10 to save space
+        load_card = ttk.Frame(grid_area, style='TotalPanel.TFrame', padding=self.scaled(10))
+        load_card.grid(row=0, column=0, sticky="nsew", padx=20, pady=(5, 5))
         
         # Guardar referencia para cambiar color (aunque TotalPanel ya es azul)
         self.total_section = load_card
         
         # Título
-        self.lbl_total_title = ttk.Label(load_card, text="CARGA ACTUAL", style='TotalLabel.TLabel')
-        self.lbl_total_title.pack(pady=(10, 5))
+        self.lbl_total_title = ttk.Label(load_card, text="CARGA ATUAL", style='TotalLabel.TLabel')
+        self.lbl_total_title.pack(pady=(5, 2))
         
+        # Container for centering horizontal content (Value + Unit)
+        load_center_frame = ttk.Frame(load_card, style='TotalPanel.TFrame')
+        load_center_frame.pack(expand=YES, fill=X)
+        
+        # Inner container for tight packing
+        inner_center = ttk.Frame(load_center_frame, style='TotalPanel.TFrame')
+        inner_center.pack(anchor="center") # Centered horizontally
+
         # Valor Numérico Grande
-        self.lbl_total = ttk.Label(load_card, text="0", style='TotalValue.TLabel', anchor="center")
-        self.lbl_total.pack(expand=YES, fill=X)
+        # Reduced font to show bar scale (was implicit style ~90+, now 72)
+        self.lbl_total = ttk.Label(inner_center, text="0", font=("Segoe UI", self.scaled_font(72), "bold"), style='TotalValue.TLabel')
+        self.lbl_total.pack(side=LEFT)
         try:
             self.lbl_total.target_width = self.scaled(400) # Para ajuste de fuente
         except Exception:
             self.lbl_total.target_width = None
         
-        # Unidad
-        self.lbl_total_unit = ttk.Label(load_card, text="kg", style='TotalUnit.TLabel')
-        self.lbl_total_unit.pack(pady=(0, 15))
+        # Unidad - Side LEFT, vertically aligned to bottom (using pack options if possible, or font adjustment)
+        # Using a slightly smaller font for unit or same style
+        self.lbl_total_unit = ttk.Label(inner_center, text="kg", style='TotalUnit.TLabel', font=("Segoe UI", self.scaled_font(24), "bold"))
+        self.lbl_total_unit.pack(side=LEFT, padx=(5, 0), anchor="se", pady=(0, 15)) # Anchor south-east to align baseline roughly
 
         # --- BARRA DE COLOR (0 - 1200) ---
         try:
-            bar_height = self.scaled(40)
+            bar_height = self.scaled(50) # Increased height
         except Exception:
-            bar_height = 40
+            bar_height = 50
             
+        # Aumentar espacio vertical para la barra
         self.load_bar_canvas = tk.Canvas(load_card, height=bar_height, bg="#e2e8f0", highlightthickness=2, highlightbackground="#475569")
-        self.load_bar_canvas.pack(fill=X, padx=40, pady=20)
+        self.load_bar_canvas.pack(fill=X, padx=40, pady=(20, 10)) # More top padding
         
         # Rectángulo de llenado inicial
         try:
@@ -648,7 +662,7 @@ class BalanzaGUI(ttk.Window):
         
         # Escala / Ticks
         ticks_frame = ttk.Frame(load_card, style='TotalPanel.TFrame')
-        ticks_frame.pack(fill=X, padx=40)
+        ticks_frame.pack(fill=X, padx=40, pady=(0, 20)) # More bottom padding
         
         # Ticks: 0, 200, 400 ... 1200
         # Usamos place relativo para distribuir equitativamente
@@ -666,23 +680,34 @@ class BalanzaGUI(ttk.Window):
                 
             lbl.place(relx=rel_x, y=0, anchor=anchor_val)
         
-        # Espacio para los ticks
-        ttk.Frame(ticks_frame, height=self.scaled(30), style='TotalPanel.TFrame').pack()
+        # Espacio para los ticks - Aumentado
+        ttk.Frame(ticks_frame, height=self.scaled(40), style='TotalPanel.TFrame').pack()
 
         # --- SECCIÓN ÁNGULO (REEMPLAZA TARA) ---
-        angle_card = ttk.Frame(grid_area, style='Card.TFrame', padding=10)
-        angle_card.grid(row=1, column=0, sticky="ew", padx=20, pady=(10, 20))
+        # Aumentar padding vertical drásticamente para evitar cortes
+        # Change sticky to nsew to fill the allotted vertical space from rowconfigure
+        # --- SECCIÓN ÁNGULO (REEMPLAZA TARA) ---
+        # Aumentar padding vertical drásticamente para evitar cortes
+        # Change sticky to nsew to fill the allotted vertical space from rowconfigure
+        # Use CardNoBorder to remove unwanted lines
+        angle_card = ttk.Frame(grid_area, style='CardNoBorder.TFrame', padding=self.scaled(5))
+        angle_card.grid(row=1, column=0, sticky="nsew", padx=20, pady=0) # Top padding removed, bottom reduced to 0
         
         # Layout horizontal para ángulo: Título | Valor
-        angle_frame = ttk.Frame(angle_card, style='Card.TFrame')
-        angle_frame.pack(anchor="center")
+        angle_frame = ttk.Frame(angle_card, style='CardNoBorder.TFrame')
+        angle_frame.pack(expand=True, fill=BOTH)
         
-        # Icono o Texto grande
-        ttk.Label(angle_frame, text="ÂNGULO", style='CardTitle.TLabel', font=("Segoe UI", self.scaled_font(24), "bold")).pack(side=LEFT, padx=(20, 10))
+        # Container for centering horizontal content
+        center_container = ttk.Frame(angle_frame, style='CardNoBorder.TFrame')
+        center_container.pack(expand=True, anchor="center")
+
+        # Título "ÂNGULO" (Side LEFT) - Unified Color #0f172a
+        # Equal font size as requested (32)
+        ttk.Label(center_container, text="ÂNGULO:", font=("Segoe UI", self.scaled_font(32), "bold"), foreground="#0f172a", background="white").pack(side=LEFT, padx=(0, 10))
         
-        # Valor con fuente unificada
-        self.lbl_angle = ttk.Label(angle_frame, text="0.00°", style='CardValue.TLabel', font=("Segoe UI", self.scaled_font(48), "bold"), foreground="#1e293b")
-        self.lbl_angle.pack(side=LEFT, padx=(10, 20))
+        # Valor Ángulo - (Side LEFT) - Unified Color #0f172a
+        self.lbl_angle = ttk.Label(center_container, text="0.0º", font=("Segoe UI", self.scaled_font(32), "bold"), foreground="#0f172a", background="white")
+        self.lbl_angle.pack(side=LEFT)
         
         # Clean up old refs to avoid errors
         self.lbl_viga1_sum = None
@@ -1066,7 +1091,7 @@ class BalanzaGUI(ttk.Window):
                     else:
                         tgt = normal_total
                     fixed_total_w = getattr(self.lbl_total, 'target_width', self.scaled(360))
-                    self._fit_label_font(self.lbl_total, str(total_text), 'Consolas', max_size=tgt, min_size=total_extra_small, explicit_width=fixed_total_w)
+                    self._fit_label_font(self.lbl_total, str(total_text), 'Segoe UI', max_size=tgt, min_size=total_extra_small, explicit_width=fixed_total_w)
                 except Exception:
                     # Fallback conservador
                     try:
@@ -1079,7 +1104,7 @@ class BalanzaGUI(ttk.Window):
                         try:
                             self.lbl_maint_total.configure(text=total_text, style='TotalValue.TLabel')
                             fw_m = getattr(self.lbl_maint_total, 'target_width', getattr(self.lbl_total, 'target_width', self.scaled(260)))
-                            self._fit_label_font(self.lbl_maint_total, str(total_text), 'Consolas', max_size=tgt, min_size=total_extra_small, explicit_width=fw_m)
+                            self._fit_label_font(self.lbl_maint_total, str(total_text), 'Segoe UI', max_size=tgt, min_size=total_extra_small, explicit_width=fw_m)
                         except Exception:
                             try:
                                 self.lbl_maint_total.configure(text=total_text)
@@ -1126,31 +1151,39 @@ class BalanzaGUI(ttk.Window):
                 except Exception:
                     pass
                 # Actualizar label de ángulo
+                # Actualizar label de ángulo
                 try:
-                    angle = data.get('angle_val', 0.0)
-                    if self.lbl_angle:
-                        self.lbl_angle.configure(text=f"{angle:.2f}°")
-                except Exception:
-                    pass
-                    sensores = data.get('sensores', {})
-                    for s in sensores.values():
-                        if not s:
-                            continue
-                        vals = s.get('values', {}) if isinstance(s.get('values', {}), dict) else {}
-                        for candidate in ('angle', 'angulo', 'angle_deg', 'tilt'):
-                            if candidate in vals:
-                                try:
-                                    angle = float(vals[candidate])
-                                    break
-                                except Exception:
-                                    pass
-                        if angle is not None:
-                            break
-                    if angle is not None and hasattr(self, 'lbl_angle') and self.lbl_angle:
+                    angle_val = data.get('angle_val')
+                    final_angle = None
+                    
+                    # Intentar usar angle_val primero
+                    if angle_val is not None:
                         try:
-                            self.lbl_angle.configure(text=f"{angle:.2f}°")
-                        except Exception:
+                            final_angle = float(angle_val)
+                        except (ValueError, TypeError):
                             pass
+                    
+                    # Si no hay angle_val válido, buscar en sensores
+                    if final_angle is None:
+                        sensores = data.get('sensores', {})
+                        for s in sensores.values():
+                            if not s: continue
+                            vals = s.get('values', {})
+                            if isinstance(vals, dict):
+                                for candidate in ('angle', 'angulo', 'angle_deg', 'tilt'):
+                                    if candidate in vals:
+                                        try:
+                                            final_angle = float(vals[candidate])
+                                            break
+                                        except (ValueError, TypeError):
+                                            pass
+                                if final_angle is not None:
+                                    break
+                    
+                    # Actualizar UI si tenemos un ángulo válido
+                    if final_angle is not None and getattr(self, 'lbl_angle', None):
+                        text = f"{final_angle:.2f}".replace('.', ',') + "°"
+                        self.lbl_angle.configure(text=text)
                 except Exception:
                     pass
             self.lbl_total_unit.configure(text="kg", style='TotalUnit.TLabel')
@@ -1188,7 +1221,7 @@ class BalanzaGUI(ttk.Window):
                     self.lbl_left_total.configure(text=txt1)
                     try:
                         fw = getattr(self.lbl_left_total, 'target_width', self.scaled(260))
-                        self._fit_label_font(self.lbl_left_total, str(txt1), 'Consolas', max_size=beam_tgt, min_size=self.scaled_font(18), explicit_width=fw)
+                        self._fit_label_font(self.lbl_left_total, str(txt1), 'Segoe UI', max_size=beam_tgt, min_size=self.scaled_font(18), explicit_width=fw)
                     except Exception:
                         pass
                 if hasattr(self, 'lbl_right_total') and self.lbl_right_total:
@@ -1196,7 +1229,7 @@ class BalanzaGUI(ttk.Window):
                     self.lbl_right_total.configure(text=txt2)
                     try:
                         fw2 = getattr(self.lbl_right_total, 'target_width', self.scaled(260))
-                        self._fit_label_font(self.lbl_right_total, str(txt2), 'Consolas', max_size=beam_tgt, min_size=self.scaled_font(18), explicit_width=fw2)
+                        self._fit_label_font(self.lbl_right_total, str(txt2), 'Segoe UI', max_size=beam_tgt, min_size=self.scaled_font(18), explicit_width=fw2)
                     except Exception:
                         pass
                 # También actualizar labels alternativos creados en la nueva UI (compatibilidad)
@@ -1205,7 +1238,7 @@ class BalanzaGUI(ttk.Window):
                         txt_v1 = self._format_weight(v1)
                         self.lbl_left_sum.configure(text=txt_v1)
                         fw_v1 = getattr(self.lbl_left_sum, 'target_width', self.scaled(260))
-                        self._fit_label_font(self.lbl_left_sum, txt_v1, 'Consolas', max_size=beam_tgt, min_size=min_font, explicit_width=fw_v1)
+                        self._fit_label_font(self.lbl_left_sum, txt_v1, 'Segoe UI', max_size=beam_tgt, min_size=min_font, explicit_width=fw_v1)
                 except Exception:
                     pass
                 try:
@@ -1213,7 +1246,7 @@ class BalanzaGUI(ttk.Window):
                         txt_v2 = self._format_weight(v2)
                         self.lbl_right_sum.configure(text=txt_v2)
                         fw_v2 = getattr(self.lbl_right_sum, 'target_width', self.scaled(260))
-                        self._fit_label_font(self.lbl_right_sum, txt_v2, 'Consolas', max_size=beam_tgt, min_size=min_font, explicit_width=fw_v2)
+                        self._fit_label_font(self.lbl_right_sum, txt_v2, 'Segoe UI', max_size=beam_tgt, min_size=min_font, explicit_width=fw_v2)
                 except Exception:
                     pass
                 # Si solo hay un sensor, ocultar los totales por panel para simplificar la UI
@@ -1283,7 +1316,7 @@ class BalanzaGUI(ttk.Window):
                             tgt = normal_cell
 
                         fixed_w = getattr(val_widget, 'target_width', self.scaled(260))
-                        self._fit_label_font(val_widget, str(display_text), 'Consolas', max_size=tgt, min_size=cell_extra_small, explicit_width=fixed_w)
+                        self._fit_label_font(val_widget, str(display_text), 'Segoe UI', max_size=tgt, min_size=cell_extra_small, explicit_width=fixed_w)
                     except Exception:
                         pass
                     self._widget_last_seen[key] = incoming_last
@@ -1962,7 +1995,7 @@ class BalanzaGUI(ttk.Window):
             # Con decimales: 2 posiciones usando redondeo bancario
             from decimal import Decimal, ROUND_HALF_EVEN
             d = Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_EVEN)
-            return f"{d}"
+            return f"{d}".replace('.', ',')
         else:
             # Sin decimales: redondeo al entero más cercano (norma ISO 80000-1)
             return f"{round(value)}"
@@ -3037,12 +3070,12 @@ class BalanzaGUI(ttk.Window):
             dialog.bind('<Escape>', on_cancel)
 
             # Botones con mismo ancho
-            btn_ok = ttk.Button(btn_frame, text="OK", bootstyle="success", command=on_ok, width=15)
-            btn_cancel = ttk.Button(btn_frame, text="CANCELAR", bootstyle="danger", command=on_cancel, width=15)
+            btn_ok = ttk.Button(btn_frame, text="OK", bootstyle="success", command=on_ok, width=25)
+            btn_cancel = ttk.Button(btn_frame, text="CANCELAR", bootstyle="danger", command=on_cancel, width=25)
             try:
                 # Grid uniforme
-                btn_ok.grid(row=0, column=0, sticky='ns', padx=(0, 6), ipady=6)
-                btn_cancel.grid(row=0, column=1, sticky='ns', padx=(6, 0), ipady=6)
+                btn_ok.grid(row=0, column=0, sticky='ns', padx=(0, 6), ipady=12)
+                btn_cancel.grid(row=0, column=1, sticky='ns', padx=(6, 0), ipady=12)
             except Exception:
                 btn_ok.pack(side=LEFT, expand=YES, fill=X, padx=(0, 6))
                 btn_cancel.pack(side=RIGHT, expand=YES, fill=X, padx=(6, 0))
@@ -3689,25 +3722,37 @@ class BalanzaGUI(ttk.Window):
             self._bind_numeric_keypad(e_serial, f"Nº Série - Célula {celda_num}")
             row_idx += 1
             
-            # Channel - RadioButtons (colocar en grid)
-            ttk.Label(cell_grid, text="Canal:", font=base_font).grid(row=row_idx, column=0, sticky='w', padx=(0,12), pady=4)
-            ch_var = tk.StringVar(value=current_node_data.get("ch", "ch1"))
-            ch_btn_frame = ttk.Frame(cell_grid)
-            ch_btn_frame.grid(row=row_idx, column=1, sticky='w', pady=4)
+            # Channel Load - RadioButtons
+            ttk.Label(cell_grid, text="Canal Carga:", font=base_font).grid(row=row_idx, column=0, sticky='w', padx=(0,12), pady=4)
+            ch_load_var = tk.StringVar(value=current_node_data.get("ch_load", current_node_data.get("ch", "ch1")))
+            ch_load_frame = ttk.Frame(cell_grid)
+            ch_load_frame.grid(row=row_idx, column=1, sticky='w', pady=4)
             for ch_opt in ["ch1", "ch2", "ch3"]:
-                ch_btn = ttk.Radiobutton(
-                    ch_btn_frame, 
-                    text=ch_opt[-1],
-                    variable=ch_var,
-                    value=ch_opt,
-                    bootstyle="info-toolbutton",
-                    width=3,
-                    padding=(8, 5)
-                )
-                ch_btn.pack(side=LEFT, padx=2)
+                ttk.Radiobutton(
+                    ch_load_frame, text=ch_opt[-1], variable=ch_load_var, value=ch_opt,
+                    bootstyle="info-toolbutton", width=3, padding=(8, 5)
+                ).pack(side=LEFT, padx=2)
+            row_idx += 1
+
+            # Channel Angle - RadioButtons
+            ttk.Label(cell_grid, text="Canal Ângulo:", font=base_font).grid(row=row_idx, column=0, sticky='w', padx=(0,12), pady=4)
+            ch_angle_var = tk.StringVar(value=current_node_data.get("ch_angle", "ch2"))
+            ch_angle_frame = ttk.Frame(cell_grid)
+            ch_angle_frame.grid(row=row_idx, column=1, sticky='w', pady=4)
+            for ch_opt in ["ch1", "ch2", "ch3"]:
+                ttk.Radiobutton(
+                    ch_angle_frame, text=ch_opt[-1], variable=ch_angle_var, value=ch_opt,
+                    bootstyle="warning-toolbutton", width=3, padding=(8, 5)
+                ).pack(side=LEFT, padx=2)
             row_idx += 1
             
-            node_entries[key] = {"id": e_id, "ch": ch_var, "serial": e_serial, "com": e_com}
+            node_entries[key] = {
+                "id": e_id, 
+                "ch_load": ch_load_var, 
+                "ch_angle": ch_angle_var,
+                "serial": e_serial, 
+                "com": e_com
+            }
         
         # Añadir botón de calibración bajo el panel 'NÓ' (fuera de CÉLULA 1)
         try:
@@ -3733,7 +3778,15 @@ class BalanzaGUI(ttk.Window):
                             com_v = inputs['com'].get()
                         except Exception:
                             com_v = ''
-                        current_config['nodes'][k] = {'id': nid, 'ch': inputs['ch'].get(), 'serial': serial_v, 'com_port': com_v}
+                        current_config['nodes'][k] = {
+                            'id': nid, 
+                            'ch_load': inputs['ch_load'].get(), 
+                            'ch_angle': inputs['ch_angle'].get(),
+                            # Mantener compatibilidad hacia atras, 'ch' es load
+                            'ch': inputs['ch_load'].get(),
+                            'serial': serial_v, 
+                            'com_port': com_v
+                        }
                 except Exception:
                     pass
                 try:
@@ -3864,7 +3917,7 @@ class BalanzaGUI(ttk.Window):
                     slave_id_val = 1
 
             new_config = {
-                "execution_mode": "REAL",
+                "execution_mode": current_config.get('execution_mode', 'REAL'),
                 "connection_type": "SERIAL",
                 # Campo legacy/compatibilidad (puerto principal de transmissão)
                 "serial_port": entry_trans.get() if 'entry_trans' in locals() or 'entry_trans' in globals() else current_config.get('serial_port', 'COM3'),
@@ -3902,7 +3955,9 @@ class BalanzaGUI(ttk.Window):
                         com_val = ""
                 new_config["nodes"][key] = {
                     "id": nid,
-                    "ch": inputs["ch"].get(),
+                    "ch_load": inputs["ch_load"].get(),
+                    "ch_angle": inputs["ch_angle"].get(),
+                    "ch": inputs["ch_load"].get(), # Legacy compat
                     "serial": serial_val,
                     "com_port": com_val
                 }

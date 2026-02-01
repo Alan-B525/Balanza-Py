@@ -262,6 +262,21 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                             data_queue.put({'type': 'LOG', 'payload': f"Puerto serial actualizado a {ACTIVE_COM}"})
                         if new_nodes:
                             ACTIVE_NODOS = new_nodes
+                            # IMPORTANTE: Actualizar también el procesador con la nueva config
+                            try:
+                                procesador.update_config(ACTIVE_NODOS)
+                                data_queue.put({'type': 'LOG', 'payload': "Configuración de procesador actualizada."})
+                            except Exception as e:
+                                data_queue.put({'type': 'LOG', 'payload': f"Error actualizando procesador: {e}"})
+
+                            # IMPORTANTE: Actualizar también el DRIVER (Mock) si lo soporta
+                            try:
+                                if hasattr(sistema_pesaje, 'update_nodes_config'):
+                                    sistema_pesaje.update_nodes_config(ACTIVE_NODOS)
+                                    data_queue.put({'type': 'LOG', 'payload': "Configuración de driver actualizada."})
+                            except Exception as e:
+                                data_queue.put({'type': 'LOG', 'payload': f"Error actualizando driver: {e}"})
+
                             data_queue.put({'type': 'LOG', 'payload': f"Asignación de nodos actualizada ({len(ACTIVE_NODOS)} nodos)"})
 
                         # Si ya estamos conectados, desconectar y reconectar usando la nueva configuración
@@ -338,11 +353,12 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                 datos_procesados = procesador.procesar(raw_data)
 
                 # Debug: registrar resumen rápido de lo que devolvió el procesador
-                try:
-                    sensor_keys = list(datos_procesados.get('sensores', {}).keys())
-                    data_queue.put({'type': 'LOG', 'payload': f"Procesador: sensores={sensor_keys} total={datos_procesados.get('total')} any_disconnected={datos_procesados.get('any_disconnected', False)}"})
-                except Exception:
-                    pass
+                # (Comentado para evitar exceso de logs)
+                # try:
+                #     sensor_keys = list(datos_procesados.get('sensores', {}).keys())
+                #     data_queue.put({'type': 'LOG', 'payload': f"Procesador: sensores={sensor_keys} total={datos_procesados.get('total')} any_disconnected={datos_procesados.get('any_disconnected', False)}"})
+                # except Exception:
+                #     pass
                 
                 # Extrair logs do processador e enviar
                 if 'logs' in datos_procesados:

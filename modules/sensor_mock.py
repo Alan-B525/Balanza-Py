@@ -16,50 +16,15 @@ class MockDriver(ISistemaPesaje):
     def __init__(self, nodos_config: Optional[Dict[str, Any]] = None, use_sensor_config: bool = False):
         self.nodos_config = nodos_config or {}
         self.use_sensor_config = use_sensor_config
-        self._expected_node_ids = set()
-        # map: node_id -> set(channels)
-        self._node_channels = {}
-        self._logical_to_id = {}
-        for k, v in self.nodos_config.items():
-            nid = v.get('id', 0)
-            ch = v.get('ch', 'ch1')
-            if nid >= 0:
-                self._expected_node_ids.add(nid)
-                self._node_channels.setdefault(nid, set()).add(ch)
-                self._logical_to_id[k] = nid
-
+        
         self._running = False
         self._thread = None
         self._frames = deque()
         self._state = 'disconnected'
         self._stats = {'total_packets': 0, 'valid_packets': 0, 'start_time': None}
 
-        # Si no hay IDs configuradas (todos 0), generar IDs simulados secuenciales
-        if not self._expected_node_ids and self.nodos_config:
-            base = 3010
-            for idx, (logical, cfg) in enumerate(self.nodos_config.items()):
-                fake_id = base + idx
-                self._expected_node_ids.add(fake_id)
-                self._node_channels.setdefault(fake_id, set()).add(cfg.get('ch', 'ch1'))
-                self._logical_to_id[logical] = fake_id
-
-        # Forzar modo single-node: si la configuración tenía múltiples nodos,
-        # conservar solo el primero para las pruebas mock.
-        try:
-            if isinstance(self.nodos_config, dict) and len(self.nodos_config) > 1:
-                first_logical = next(iter(self.nodos_config))
-                first_nid = self._logical_to_id.get(first_logical)
-                if first_nid is None and self._expected_node_ids:
-                    first_nid = next(iter(self._expected_node_ids))
-                if first_nid is not None:
-                    # Reducir estructuras a un único nodo
-                    self._expected_node_ids = {first_nid}
-                    # filtrar canales: Forzar ch1 y ch2 para pruebas
-                    self._node_channels = {first_nid: {'ch1', 'ch2'}}
-                    # filtrar mapping lógico
-                    self._logical_to_id = {first_logical: first_nid}
-        except Exception:
-            pass
+        # Inicializar canales y estructuras usando la lógica centralizada
+        self.update_nodes_config(self.nodos_config)
 
     def conectar(self, puerto: str) -> bool:
         self._running = True
@@ -79,9 +44,25 @@ class MockDriver(ISistemaPesaje):
             rssi = {}
             for nid in sorted(self._expected_node_ids):
                 channels = sorted(list(self._node_channels.get(nid, {'ch1'})))
+                
+                # Determine role based on config for this node
+                # Since we force single node, we can look up config easily
+                try:
+                     # Find config for this nid
+                    node_cfg = None
+                    if self.nodos_config:
+                        for cfg in self.nodos_config.values():
+                            if cfg.get('id') == nid:
+                                node_cfg = cfg
+                                break
+                    
+                    ch_angle = node_cfg.get('ch_angle', 'ch2') if node_cfg else 'ch2'
+                except:
+                    ch_angle = 'ch2'
+
                 for channel in channels:
-                    # Valores simulados según canal
-                    if channel == 'ch2':
+                    # Valores simulados según canal (usando config)
+                    if channel == ch_angle:
                         # Ángulo: 0 a 10 grados
                         val = random.uniform(0.0, 10.0)
                     else:
@@ -193,6 +174,27 @@ class MockDriver(ISistemaPesaje):
     def get_last_cached_value(self, node_id: int):
         # Retornar None como placeholder
         return None
+
+    def update_nodes_config(self, new_nodes_config: Dict[str, Any]):
+        """Actualiza la configuración de nodos en tiempo real."""
+        self.nodos_config = new_nodes_config
+        self._expected_node_ids = set()
+        self._node_channels = {}
+        self._logical_to_id = {}
+        
+        # Re-inicializar estructuras internas con la nueva config
+        # (Lógica simplificada duplicada de __init__)
+        if isinstance(self.nodos_config, dict) and len(self.nodos_config) > 0:
+            # En mock forzamos single node
+            first_logical = next(iter(self.nodos_config))
+            cfg = self.nodos_config[first_logical]
+            nid = cfg.get('id', 4248)
+            ch_load = cfg.get('ch_load', 'ch1')
+            ch_angle = cfg.get('ch_angle', 'ch2')
+            
+            self._logical_to_id[first_logical] = nid
+            self._expected_node_ids.add(nid)
+            self._node_channels[nid] = {ch_load, ch_angle}
 
 
 RealPesajeMock = MockDriver

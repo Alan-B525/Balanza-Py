@@ -135,8 +135,12 @@ class DataProcessor:
             node_id = cfg["id"]
             # Force creating structures for both channels
             
+            # Load configuration for channels (default: Load=ch1, Angle=ch2)
+            ch_load = cfg.get('ch_load', cfg.get('ch', 'ch1'))
+            ch_angle = cfg.get('ch_angle', 'ch2')
+
             # Channel 1: Load (Main)
-            comp_load = f"{node_id}:ch1"
+            comp_load = f"{node_id}:{ch_load}"
             self._node_to_name[comp_load] = nombre_logico # Primary name maps to load
             self._median_buffers[comp_load] = deque(maxlen=self.median_window)
             self._ema_values[comp_load] = None
@@ -146,7 +150,7 @@ class DataProcessor:
             self._node_connected_state[comp_load] = False
             
             # Channel 2: Angle (Aux)
-            comp_angle = f"{node_id}:ch2"
+            comp_angle = f"{node_id}:{ch_angle}"
             self._node_to_name[comp_angle] = f"{nombre_logico}_Angle"
             self._median_buffers[comp_angle] = deque(maxlen=self.median_window)
             self._ema_values[comp_angle] = None
@@ -159,6 +163,11 @@ class DataProcessor:
             serial = cfg.get('serial') if isinstance(cfg, dict) else None
             # Map serial to both? Usually calibration applies to Load (ch1)
             self._composite_to_serial[comp_load] = serial
+
+    def update_config(self, new_nodes_config: Dict[str, Any]):
+        """Actualiza la configuración en caliente y reinicializa estructuras."""
+        self.nodos_config = new_nodes_config
+        self._initialize_structures()
             # evento de inicialización: no loguear para evitar ruido en el log
     
     def _apply_median_filter(self, node_key, value: float) -> float:
@@ -235,9 +244,11 @@ class DataProcessor:
 
         for nombre_logico, cfg in self.nodos_config.items():
             node_id = cfg["id"]
+            ch_load = cfg.get('ch_load', cfg.get('ch', 'ch1'))
+            ch_angle = cfg.get('ch_angle', 'ch2')
             
-            # --- PROCESAR CANAL 1: CARGA ---
-            comp_load = f"{node_id}:ch1"
+            # --- PROCESAR CANAL DE CARGA ---
+            comp_load = f"{node_id}:{ch_load}"
             is_connected_load = self._check_connection(comp_load, current_time, resultado)
             
             # Obtener Valor Crudo (Load)
@@ -287,8 +298,8 @@ class DataProcessor:
             else:
                 resultado["any_disconnected"] = True
 
-            # --- PROCESAR CANAL 2: ANGULO ---
-            comp_angle = f"{node_id}:ch2"
+            # --- PROCESAR CANAL DE ANGULO ---
+            comp_angle = f"{node_id}:{ch_angle}"
             self._check_connection(comp_angle, current_time, resultado) # Actualizar estado angle
             
             val_angle = 0.0
@@ -337,7 +348,15 @@ class DataProcessor:
         # Calcular tara total (suma de taras de los canales de carga activos o configurados)
         tara_total = 0.0
         for k, v in self._tares.items():
-            if ":ch1" in str(k): # Solo sumar taras de canales de carga
+            # Check against configured load channels for any node
+            is_load_channel = False
+            for cfg in self.nodos_config.values():
+                ch_load = cfg.get('ch_load', cfg.get('ch', 'ch1'))
+                if f":{ch_load}" in str(k):
+                    is_load_channel = True
+                    break
+            
+            if is_load_channel: # Solo sumar taras de canales de carga
                 try: tara_total += float(v)
                 except: pass
         
