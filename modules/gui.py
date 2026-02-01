@@ -274,6 +274,8 @@ class BalanzaGUI(ttk.Window):
         # Reducir tamaño del título para que no ocupe tanto espacio en el footer
         self.style.configure('HeaderTitle.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_MAIN, sf(16), "bold"))
         self.style.configure('HeaderSub.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, sf(16)))
+        # Estilo para hora en footer (negrita)
+        self.style.configure('FooterTime.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, sf(16), "bold"))
         # Logo label style to ensure visibility
         self.style.configure('Logo.TLabel', background=BG_CARD)
 
@@ -390,10 +392,10 @@ class BalanzaGUI(ttk.Window):
             title_lbl = ttk.Label(brand_frame, text=title_text, style='HeaderTitle.TLabel', font=("Segoe UI", self.scaled_font(20), "bold"))
             title_lbl.pack(side=LEFT, padx=(10, 18))
             # Indicador LED y texto de estado
-            self._status_led = ttk.Label(brand_frame, text="●", font=("Segoe UI", self.scaled_font(26)))
+            self._status_led = ttk.Label(brand_frame, text="●", font=("Segoe UI", self.scaled_font(42)))
             self._status_led.pack(side=LEFT, padx=(0, 10))
-            self._status_text = ttk.Label(brand_frame, text="Desconectado", style='HeaderSub.TLabel', font=("Segoe UI", self.scaled_font(16)))
-            self._status_text.pack(side=LEFT)
+            self._status_text = ttk.Label(brand_frame, text="Desconectado", style='HeaderSub.TLabel', font=("Segoe UI", self.scaled_font(24)))
+            self._status_text.pack(side=LEFT, pady=(0, 2))
             try:
                 self._update_status_led('disconnected')
             except Exception:
@@ -512,7 +514,7 @@ class BalanzaGUI(ttk.Window):
         # para evitar que compriman las secciones de acciones (TARA).
 
         # --- Separador visual ---
-        ttk.Separator(main_container, orient=HORIZONTAL).pack(fill=X, pady=(0, 10))
+        # ttk.Separator(main_container, orient=HORIZONTAL).pack(fill=X, pady=(0, 10))
 
         # Footer frame fijo (creado antes del grid central para garantizar visibilidad en pantallas pequeñas)
         try:
@@ -556,7 +558,7 @@ class BalanzaGUI(ttk.Window):
                         logo_lbl.pack(side=RIGHT, padx=(0, 12), pady=(6, 6))
                     # Reloj en footer (alineado a la derecha, antes del logo)
                     try:
-                        self.footer_time = ttk.Label(footer_left, text="", style='HeaderSub.TLabel')
+                        self.footer_time = ttk.Label(footer_left, text="", style='FooterTime.TLabel')
                         self.footer_time.pack(side=LEFT, padx=(6, 12), pady=(6, 6))
                         # Iniciar actualización periódica
                         try:
@@ -1106,7 +1108,7 @@ class BalanzaGUI(ttk.Window):
         self.connected = connected
         if error:
             self._update_status_led('error')
-            self._status_text.config(text="Error")
+            self._status_text.config(text="Error", foreground="#ef4444")
             self.btn_connect.configure(
                 text="CONECTAR",
                 style='ConnectDanger.TButton',
@@ -1120,7 +1122,7 @@ class BalanzaGUI(ttk.Window):
                 pass
         elif connected:
             self._update_status_led('connected')
-            self._status_text.config(text="Conectado")
+            self._status_text.config(text="Conectado", foreground="#22c55e")
             self.btn_connect.configure(
                 text="DESCONECTAR",
                 style='ConnectDanger.TButton',
@@ -1143,7 +1145,7 @@ class BalanzaGUI(ttk.Window):
                 self._conn_success_time = 0.0
         else:
             self._update_status_led('disconnected')
-            self._status_text.config(text="Desconectado")
+            self._status_text.config(text="Desconectado", foreground="#64748b")
             self.btn_connect.configure(
                 text="CONECTAR",
                 style='ConnectSuccess.TButton',
