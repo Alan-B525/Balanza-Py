@@ -498,65 +498,59 @@ def main():
         logger.info('Mapping lógico→físico: ' + '; '.join(mapping_lines))
     except Exception:
         pass
-    # Iniciar servidor Modbus (si la configuracion indica uso de transmissao TCP esperamos puerto en config)
+    # Iniciar servidor Modbus (RTU) usando settings.json/config
     modbus_server = None
     try:
-        settings = None
-        try:
-            import json
-            with open(config.SETTINGS_FILE, 'r', encoding='utf-8') as f:
-                settings = json.load(f)
-        except Exception:
-            settings = None
+        settings = config.load_settings()
 
-            # Forzar uso exclusivo de Modbus RTU (RS-485) por puerto serie.
-            # Tomar `porta` de settings.transmissao si existe, sino usar `ACTIVE_COM`.
-            serial_port = None
-            baudrate = 9600
-            parity = 'N'
-            stopbits = 1
-            bytesize = 8
-            timeout = 1.0
+        # Forzar uso exclusivo de Modbus RTU (RS-485) por puerto serie.
+        # Tomar `porta` de settings.transmissao si existe, sino usar `ACTIVE_COM`.
+        serial_port = None
+        baudrate = 9600
+        parity = 'N'
+        stopbits = 1
+        bytesize = 8
+        timeout = 1.0
 
-            if settings and isinstance(settings.get('transmissao'), dict):
-                t = settings.get('transmissao')
-                porta_conf = t.get('porta')
-                # Preferir valor explícito en transmissao.porta
-                if isinstance(porta_conf, str) and porta_conf.strip():
-                    serial_port = porta_conf.strip()
-                # Configurar baudrate y paridad si vienen en settings
-                try:
-                    baudrate = int(t.get('velocidade', t.get('baudrate', baudrate)))
-                except Exception:
-                    pass
-                p = t.get('paridade', t.get('parity', 'Nenhuma'))
-                if isinstance(p, str):
-                    mp = p.lower()
-                    if 'par' in mp and 'impar' not in mp:
-                        parity = 'E'
-                    elif 'impar' in mp or 'ímpar' in mp:
-                        parity = 'O'
-                    else:
-                        parity = 'N'
+        if settings and isinstance(settings.get('transmissao'), dict):
+            t = settings.get('transmissao')
+            porta_conf = t.get('porta')
+            # Preferir valor explícito en transmissao.porta
+            if isinstance(porta_conf, str) and porta_conf.strip():
+                serial_port = porta_conf.strip()
+            # Configurar baudrate y paridad si vienen en settings
+            try:
+                baudrate = int(t.get('velocidade', t.get('baudrate', baudrate)))
+            except Exception:
+                pass
+            p = t.get('paridade', t.get('parity', 'Nenhuma'))
+            if isinstance(p, str):
+                mp = p.lower()
+                if 'par' in mp and 'impar' not in mp:
+                    parity = 'E'
+                elif 'impar' in mp or 'ímpar' in mp:
+                    parity = 'O'
+                else:
+                    parity = 'N'
 
-            # Si no se especificó en settings, usar ACTIVE_COM
-            if not serial_port:
-                try:
-                    serial_port = ACTIVE_COM
-                except Exception:
-                    serial_port = None
+        # Si no se especificó en settings, usar ACTIVE_COM
+        if not serial_port:
+            try:
+                serial_port = ACTIVE_COM
+            except Exception:
+                serial_port = None
 
-            if not serial_port:
-                # No hay puerto serie disponible: informar y no iniciar servidor
-                print("[WARN] No se encontró puerto serie para Modbus RTU (transmissao.porta ni ACTIVE_COM). No se inicia servidor Modbus.")
+        if not serial_port:
+            # No hay puerto serie disponible: informar y no iniciar servidor
+            print("[WARN] No se encontró puerto serie para Modbus RTU (transmissao.porta ni ACTIVE_COM). No se inicia servidor Modbus.")
+            modbus_server = None
+        else:
+            modbus_server = ModbusDataServer(serial_port=serial_port, baudrate=baudrate, parity=parity, stopbits=stopbits, bytesize=bytesize, timeout=timeout)
+            try:
+                modbus_server.start()
+            except Exception as e:
+                print(f"[ERROR] No se pudo iniciar Modbus RTU: {e}")
                 modbus_server = None
-            else:
-                modbus_server = ModbusDataServer(serial_port=serial_port, baudrate=baudrate, parity=parity, stopbits=stopbits, bytesize=bytesize, timeout=timeout)
-                try:
-                    modbus_server.start()
-                except Exception as e:
-                    print(f"[ERROR] No se pudo iniciar Modbus RTU: {e}")
-                    modbus_server = None
     except Exception:
         modbus_server = None
 

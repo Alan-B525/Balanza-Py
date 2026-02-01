@@ -109,7 +109,16 @@ PUERTO_COM = "COM3"
 BAUDRATE = 3000000
 
 NODOS_CONFIG = {
-    "celda_1": {"id": 0, "ch": "ch1", "nombre": "Célula 1", "posicion": "1", "serial": "", "com_port": ""},
+    "celda_1": {
+        "id": 0,
+        "ch": "ch1",
+        "ch_load": "ch1",
+        "ch_angle": "ch2",
+        "nombre": "Célula 1",
+        "posicion": "1",
+        "serial": "",
+        "com_port": ""
+    },
 }
 
 # =============================================================================

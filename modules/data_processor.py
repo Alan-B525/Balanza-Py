@@ -102,6 +102,8 @@ class DataProcessor:
         self._last_stable_values: Dict[str, float] = {}
         self._last_seen: Dict[str, float] = {}
         self._node_connected_state: Dict[str, bool] = {}
+        # Claves de canal de carga (para logs/eventos)
+        self._load_keys: set = set()
         self._last_total_seen: float = 0.0
         # Mapas para calibración por sensor
         self.sensor_calibrations: Dict[str, Dict[str, Any]] = {}  # key -> {'method':..., 'points':[(raw,weight),...]}
@@ -130,6 +132,7 @@ class DataProcessor:
         self._last_seen.clear()
         self._node_connected_state.clear()
         self._composite_to_serial.clear()
+        self._load_keys.clear()
 
         for nombre_logico, cfg in self.nodos_config.items():
             node_id = cfg["id"]
@@ -148,6 +151,7 @@ class DataProcessor:
             self._last_stable_values[comp_load] = 0.0
             self._last_seen[comp_load] = 0.0
             self._node_connected_state[comp_load] = False
+            self._load_keys.add(comp_load)
             
             # Channel 2: Angle (Aux)
             comp_angle = f"{node_id}:{ch_angle}"
@@ -227,7 +231,7 @@ class DataProcessor:
                     self._node_connected_state[node_key] = True
                     nombre = self._node_to_name.get(node_key, f"Nodo {node_key}")
                     # Loguear conexión solo para el canal principal (LOAD) para evitar spam doble
-                    if 'ch1' in node_key:
+                    if node_key in self._load_keys:
                         resultado["logs"].append(f"Sensor {nombre} conectado")
         
         # 2. Estrategia "Suma de Fuerzas" (Solo Carga ch1)
@@ -249,7 +253,7 @@ class DataProcessor:
             
             # --- PROCESAR CANAL DE CARGA ---
             comp_load = f"{node_id}:{ch_load}"
-            is_connected_load = self._check_connection(comp_load, current_time, resultado)
+            is_connected_load = self._check_connection(comp_load, current_time, resultado, emit_event=True)
             
             # Obtener Valor Crudo (Load)
             val_load = 0.0
@@ -300,7 +304,7 @@ class DataProcessor:
 
             # --- PROCESAR CANAL DE ANGULO ---
             comp_angle = f"{node_id}:{ch_angle}"
-            self._check_connection(comp_angle, current_time, resultado) # Actualizar estado angle
+            self._check_connection(comp_angle, current_time, resultado, emit_event=False) # Actualizar estado angle
             
             val_angle = 0.0
             if comp_angle in datos_por_nodo:
@@ -422,7 +426,7 @@ class DataProcessor:
         return result
 
 
-    def _check_connection(self, node_key: str, current_time: float, resultado: Dict[str, Any]) -> bool:
+    def _check_connection(self, node_key: str, current_time: float, resultado: Dict[str, Any], emit_event: bool = True) -> bool:
         """Verifica si un nodo está conectado según último timestamp observado.
 
         Si se detecta timeout, genera un evento de desconexión y actualiza el estado.
@@ -440,9 +444,10 @@ class DataProcessor:
                     node_num = int(str(node_key).split(":")[0])
                 except Exception:
                     node_num = 0
-                ev = SensorDisconnectEvent(node_id=node_num, nombre_logico=nombre, timestamp=current_time, was_connected=True)
-                self._disconnect_events.append(ev)
-                resultado.setdefault("logs", []).append(f"Sensor {nombre} (Key:{node_key}) desconectado")
+                if emit_event:
+                    ev = SensorDisconnectEvent(node_id=node_num, nombre_logico=nombre, timestamp=current_time, was_connected=True)
+                    self._disconnect_events.append(ev)
+                    resultado.setdefault("logs", []).append(f"Sensor {nombre} (Key:{node_key}) desconectado")
             return False
         else:
             return True

@@ -100,9 +100,6 @@ class BalanzaGUI(ttk.Window):
         # Almacenar ltimos datos para calibracin
         self._last_sensor_data = {}
         
-        # Almacenar nodos descubiertos
-        self._discovered_nodes = []
-
         # Último timestamp visto por widget para cada sensor (mantener display hasta nueva muestra)
         self._widget_last_seen = {}
         # Último timestamp visto para el total (mantener total hasta nueva muestra)
@@ -221,10 +218,10 @@ class BalanzaGUI(ttk.Window):
         TEXT_MUTED = "#64748b"
         BORDER_COLOR = "#cbd5e1"
         
-        # Fonts - Escalados según resolución
+        # Fonts - Escalados según resolución (unificar tipografías)
         FONT_MAIN = "Segoe UI"
-        FONT_MONO = "Consolas"
-        FONT_NUMBERS = "Segoe UI"  # Usar la misma fuente que TareMaintValue para todos los números
+        FONT_MONO = "Segoe UI"
+        FONT_NUMBERS = "Segoe UI"
         
         # Función helper local para escalar fuentes
         sf = self.scaled_font
@@ -246,9 +243,11 @@ class BalanzaGUI(ttk.Window):
         # Reducir ligeramente las fuentes para un PC normal (no tablet)
         self.style.configure('TotalLabel.TLabel', background=PRIMARY, foreground="white", font=(FONT_MAIN, sf(30), "bold"))
         # Valor principal: fuente grande pero comprimida
-        self.style.configure('TotalValue.TLabel', background=PRIMARY, foreground="white", font=(FONT_NUMBERS, sf(96), "bold"))
+        self.style.configure('TotalValue.TLabel', background=PRIMARY, foreground="white", font=(FONT_NUMBERS, sf(94), "bold"))
         # Unidad: tamaño grande pero menor que el valor
-        self.style.configure('TotalUnit.TLabel', background=PRIMARY, foreground="white", font=(FONT_MAIN, sf(40)))
+        self.style.configure('TotalUnit.TLabel', background=PRIMARY, foreground="white", font=(FONT_MAIN, sf(32), "bold"))
+        # Ticks de la barra
+        self.style.configure('TotalTick.TLabel', background=PRIMARY, foreground="white", font=(FONT_MAIN, sf(12), "bold"))
         
         # Total Panel DANGER - Cuando hay sensor desconectado (ROJO)
         self.style.configure('TotalPanelDanger.TFrame', background=DANGER)
@@ -265,6 +264,10 @@ class BalanzaGUI(ttk.Window):
         # Estilos específicos para la sección de Tara dentro de MANUTENÇÃO (fondo blanco, texto negro)
         self.style.configure('TareMaint.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_MAIN, sf(14), 'bold'))
         self.style.configure('TareMaintValue.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_MONO, sf(24), 'bold'))
+        # Ángulo (card secundaria)
+        self.style.configure('AngleCard.TFrame', background=BG_CARD, relief="solid", borderwidth=1)
+        self.style.configure('AngleTitle.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_MAIN, sf(36), "bold"))
+        self.style.configure('AngleValue.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_NUMBERS, sf(36), "bold"))
         
         # Buttons - Escalados
         self.style.configure('TButton', font=(FONT_MAIN, sf(12), 'bold'))  # Default global BOLD
@@ -619,7 +622,7 @@ class BalanzaGUI(ttk.Window):
         self.total_section = load_card
         
         # Título
-        self.lbl_total_title = ttk.Label(load_card, text="CARGA ATUAL", style='TotalLabel.TLabel')
+        self.lbl_total_title = ttk.Label(load_card, text="CARGA", style='TotalLabel.TLabel')
         self.lbl_total_title.pack(pady=(5, 2))
         
         # Container for centering horizontal content (Value + Unit)
@@ -631,8 +634,7 @@ class BalanzaGUI(ttk.Window):
         inner_center.pack(anchor="center") # Centered horizontally
 
         # Valor Numérico Grande
-        # Reduced font to show bar scale (was implicit style ~90+, now 72)
-        self.lbl_total = ttk.Label(inner_center, text="0", font=("Segoe UI", self.scaled_font(72), "bold"), style='TotalValue.TLabel')
+        self.lbl_total = ttk.Label(inner_center, text="0", style='TotalValue.TLabel')
         self.lbl_total.pack(side=LEFT)
         try:
             self.lbl_total.target_width = self.scaled(400) # Para ajuste de fuente
@@ -641,7 +643,7 @@ class BalanzaGUI(ttk.Window):
         
         # Unidad - Side LEFT, vertically aligned to bottom (using pack options if possible, or font adjustment)
         # Using a slightly smaller font for unit or same style
-        self.lbl_total_unit = ttk.Label(inner_center, text="kg", style='TotalUnit.TLabel', font=("Segoe UI", self.scaled_font(24), "bold"))
+        self.lbl_total_unit = ttk.Label(inner_center, text="kg", style='TotalUnit.TLabel')
         self.lbl_total_unit.pack(side=LEFT, padx=(5, 0), anchor="se", pady=(0, 15)) # Anchor south-east to align baseline roughly
 
         # --- BARRA DE COLOR (0 - 1200) ---
@@ -659,6 +661,11 @@ class BalanzaGUI(ttk.Window):
             self._load_bar_fill = self.load_bar_canvas.create_rectangle(0, 0, 0, bar_height, fill="#2563eb", width=0)
         except Exception:
             self._load_bar_fill = None
+        # Borde visible de la barra (rectángulo completo)
+        try:
+            self._load_bar_border = self.load_bar_canvas.create_rectangle(0, 0, 0, bar_height, outline="#475569", width=2)
+        except Exception:
+            self._load_bar_border = None
         
         # Escala / Ticks
         ticks_frame = ttk.Frame(load_card, style='TotalPanel.TFrame')
@@ -667,7 +674,7 @@ class BalanzaGUI(ttk.Window):
         # Ticks: 0, 200, 400 ... 1200
         # Usamos place relativo para distribuir equitativamente
         for i in range(0, 1201, 200):
-            lbl = ttk.Label(ticks_frame, text=str(i), font=("Segoe UI", self.scaled_font(12), "bold"), background="#2563eb", foreground="white") # Hardcoded blue bg to match panel
+            lbl = ttk.Label(ticks_frame, text=str(i), style='TotalTick.TLabel')
             rel_x = i / 1200.0
             
             # Ajustar anchor para que no se corten los extremos
@@ -690,8 +697,8 @@ class BalanzaGUI(ttk.Window):
         # Aumentar padding vertical drásticamente para evitar cortes
         # Change sticky to nsew to fill the allotted vertical space from rowconfigure
         # Use CardNoBorder to remove unwanted lines
-        angle_card = ttk.Frame(grid_area, style='CardNoBorder.TFrame', padding=self.scaled(5))
-        angle_card.grid(row=1, column=0, sticky="nsew", padx=20, pady=0) # Top padding removed, bottom reduced to 0
+        angle_card = ttk.Frame(grid_area, style='AngleCard.TFrame', padding=self.scaled(10))
+        angle_card.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 5))
         
         # Layout horizontal para ángulo: Título | Valor
         angle_frame = ttk.Frame(angle_card, style='CardNoBorder.TFrame')
@@ -703,10 +710,10 @@ class BalanzaGUI(ttk.Window):
 
         # Título "ÂNGULO" (Side LEFT) - Unified Color #0f172a
         # Equal font size as requested (32)
-        ttk.Label(center_container, text="ÂNGULO:", font=("Segoe UI", self.scaled_font(32), "bold"), foreground="#0f172a", background="white").pack(side=LEFT, padx=(0, 10))
+        ttk.Label(center_container, text="ÂNGULO:", style='AngleTitle.TLabel').pack(side=LEFT, padx=(0, 5))
         
         # Valor Ángulo - (Side LEFT) - Unified Color #0f172a
-        self.lbl_angle = ttk.Label(center_container, text="0.0º", font=("Segoe UI", self.scaled_font(32), "bold"), foreground="#0f172a", background="white")
+        self.lbl_angle = ttk.Label(center_container, text="0.0º", style='AngleValue.TLabel')
         self.lbl_angle.pack(side=LEFT)
         
         # Clean up old refs to avoid errors
@@ -927,11 +934,6 @@ class BalanzaGUI(ttk.Window):
                     # Notificar fallo de reconexion
                     payload = msg['payload']
                     self._handle_reconnect_failed(payload)
-                elif msg['type'] == 'DISCOVERED_NODES':
-                    # Actualizar lista de nodos descubiertos en configuracin
-                    payload = msg['payload']
-                    self._handle_discovered_nodes(payload)
-                
         except queue.Empty:
             pass
         finally:
@@ -1063,7 +1065,7 @@ class BalanzaGUI(ttk.Window):
         else:
             # AZUL - Todos os sensores conectados (normal)
             self.total_section.configure(style='TotalPanel.TFrame')
-            self.lbl_total_title.configure(text="PESO TOTAL", style='TotalLabel.TLabel')
+            self.lbl_total_title.configure(text="CARGA", style='TotalLabel.TLabel')
             # Actualizar total usando timestamp (permitiendo totals negativos).
             incoming_total_last = data.get('total_last_seen', 0.0) or 0.0
             # Ignoramos la comprobación 'total_raw>0' para que valores negativos
@@ -1113,7 +1115,7 @@ class BalanzaGUI(ttk.Window):
                     if hasattr(self, 'lbl_maint_total_unit') and self.lbl_maint_total_unit:
                         self.lbl_maint_total_unit.configure(text="t", style='TotalUnit.TLabel')
                     if hasattr(self, 'lbl_maint_total_title') and self.lbl_maint_total_title:
-                        self.lbl_maint_total_title.configure(text="PESO TOTAL", style='TotalLabel.TLabel')
+                        self.lbl_maint_total_title.configure(text="CARGA", style='TotalLabel.TLabel')
                 except Exception:
                     pass
                 self._widget_last_total = incoming_total_last
@@ -1129,23 +1131,47 @@ class BalanzaGUI(ttk.Window):
                         c_w = self.scaled(360)
                     fill_w = int(c_w * pct)
 
+                    # Transición suave entre umbrales:
+                    # azul(0) -> celeste(300) -> verde(600) -> amarillo(800) -> naranja(1000) -> rojo(>=1200)
                     def interp_color(v0, v1, t):
                         return tuple(int(v0[i] + (v1[i] - v0[i]) * t) for i in range(3))
 
                     blue = (37, 99, 235)
+                    light_blue = (56, 189, 248)
                     green = (34, 197, 94)
+                    yellow = (245, 158, 11)
+                    orange = (249, 115, 22)
                     red = (239, 68, 68)
-                    if pct <= 0.5:
-                        t = pct / 0.5 if 0.5 else 0.0
-                        rgb = interp_color(blue, green, t)
+
+                    if val <= 0:
+                        rgb = blue
+                    elif val <= 300:
+                        t = val / 300.0
+                        rgb = interp_color(blue, light_blue, t)
+                    elif val <= 600:
+                        t = (val - 300) / 300.0
+                        rgb = interp_color(light_blue, green, t)
+                    elif val <= 800:
+                        t = (val - 600) / 200.0
+                        rgb = interp_color(green, yellow, t)
+                    elif val <= 1000:
+                        t = (val - 800) / 200.0
+                        rgb = interp_color(yellow, orange, t)
+                    elif val <= 1200:
+                        t = (val - 1000) / 200.0
+                        rgb = interp_color(orange, red, t)
                     else:
-                        t = (pct - 0.5) / 0.5
-                        rgb = interp_color(green, red, t)
+                        rgb = red
+
                     color = '#%02x%02x%02x' % rgb
                     try:
-                        if getattr(self, '_load_bar_fill', None) and self.load_bar_canvas.winfo_exists():
-                            self.load_bar_canvas.coords(self._load_bar_fill, 0, 0, fill_w, self.load_bar_canvas.winfo_height())
-                            self.load_bar_canvas.itemconfig(self._load_bar_fill, fill=color)
+                        if self.load_bar_canvas.winfo_exists():
+                            if getattr(self, '_load_bar_fill', None):
+                                self.load_bar_canvas.coords(self._load_bar_fill, 0, 0, fill_w, self.load_bar_canvas.winfo_height())
+                                self.load_bar_canvas.itemconfig(self._load_bar_fill, fill=color)
+                            if getattr(self, '_load_bar_border', None):
+                                full_w = self.load_bar_canvas.winfo_width() or c_w
+                                self.load_bar_canvas.coords(self._load_bar_border, 0, 0, full_w, self.load_bar_canvas.winfo_height())
                     except Exception:
                         pass
                 except Exception:
@@ -1190,84 +1216,7 @@ class BalanzaGUI(ttk.Window):
         
         # Actualizar Sensores Individuales (datos pueden ser parciales; usar get para evitar KeyError)
         sensores = data.get('sensores', {})
-        # Calcular sumas por panel (left/right) — en modo single-node no aplica
-        try:
-            v1_keys = ['celda_1', 'celda_3']
-            v2_keys = ['celda_2', 'celda_4']
-            v1 = 0.0
-            v2 = 0.0
-            found_v1 = False
-            found_v2 = False
-            for k in v1_keys:
-                if k in sensores:
-                    v1 += float(sensores[k].get('valor', 0.0) or 0.0)
-                    found_v1 = True
-            for k in v2_keys:
-                if k in sensores:
-                    v2 += float(sensores[k].get('valor', 0.0) or 0.0)
-                    found_v2 = True
 
-            # Fallback: si no se detectan claves esperadas, repartir por mitades
-            if not (found_v1 or found_v2):
-                vals = [float(v.get('valor', 0.0) or 0.0) for v in sensores.values()]
-                half = len(vals) // 2 or 1
-                v1 = sum(vals[:half])
-                v2 = sum(vals[half:])
-
-            # Actualizar widgets de panel si existen
-            try:
-                if hasattr(self, 'lbl_left_total') and self.lbl_left_total:
-                    txt1 = self._format_weight(v1)
-                    self.lbl_left_total.configure(text=txt1)
-                    try:
-                        fw = getattr(self.lbl_left_total, 'target_width', self.scaled(260))
-                        self._fit_label_font(self.lbl_left_total, str(txt1), 'Segoe UI', max_size=beam_tgt, min_size=self.scaled_font(18), explicit_width=fw)
-                    except Exception:
-                        pass
-                if hasattr(self, 'lbl_right_total') and self.lbl_right_total:
-                    txt2 = self._format_weight(v2)
-                    self.lbl_right_total.configure(text=txt2)
-                    try:
-                        fw2 = getattr(self.lbl_right_total, 'target_width', self.scaled(260))
-                        self._fit_label_font(self.lbl_right_total, str(txt2), 'Segoe UI', max_size=beam_tgt, min_size=self.scaled_font(18), explicit_width=fw2)
-                    except Exception:
-                        pass
-                # También actualizar labels alternativos creados en la nueva UI (compatibilidad)
-                try:
-                    if hasattr(self, 'lbl_left_sum') and self.lbl_left_sum and getattr(self, 'lbl_left_sum') is not None:
-                        txt_v1 = self._format_weight(v1)
-                        self.lbl_left_sum.configure(text=txt_v1)
-                        fw_v1 = getattr(self.lbl_left_sum, 'target_width', self.scaled(260))
-                        self._fit_label_font(self.lbl_left_sum, txt_v1, 'Segoe UI', max_size=beam_tgt, min_size=min_font, explicit_width=fw_v1)
-                except Exception:
-                    pass
-                try:
-                    if hasattr(self, 'lbl_right_sum') and self.lbl_right_sum and getattr(self, 'lbl_right_sum') is not None:
-                        txt_v2 = self._format_weight(v2)
-                        self.lbl_right_sum.configure(text=txt_v2)
-                        fw_v2 = getattr(self.lbl_right_sum, 'target_width', self.scaled(260))
-                        self._fit_label_font(self.lbl_right_sum, txt_v2, 'Segoe UI', max_size=beam_tgt, min_size=min_font, explicit_width=fw_v2)
-                except Exception:
-                    pass
-                # Si solo hay un sensor, ocultar los totales por panel para simplificar la UI
-                try:
-                    if len(sensores) <= 1:
-                        try:
-                            if hasattr(self, 'lbl_left_sum') and self.lbl_left_sum:
-                                self.lbl_left_sum.configure(text="")
-                        except Exception:
-                            pass
-                        try:
-                            if hasattr(self, 'lbl_right_sum') and self.lbl_right_sum:
-                                self.lbl_right_sum.configure(text="")
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-            except Exception:
-                pass
-        except Exception:
-            pass
         for key, widgets in list(self.sensor_widgets.items()):
             if key in sensores:
                 info = sensores[key]
@@ -2586,63 +2535,6 @@ class BalanzaGUI(ttk.Window):
             except:
                 pass
     
-    def _handle_discovered_nodes(self, nodes_list):
-        """
-        Maneja la respuesta de descubrimiento de nodos.
-        Actualiza la UI con los nodos y canales encontrados.
-        
-        Args:
-            nodes_list: Lista de dicts con info de cada nodo:
-                [{
-                    'id': 12345,
-                    'rssi': -45,
-                    'model': 'SG-Link-200',
-                    'channels': [{'channel': 'ch1', 'type': 'strain', 'value': 0.0}, ...],
-                    'sample_rate': '32 Hz'
-                }, ...]
-        """
-        # Guardar nodos descubiertos
-        self._discovered_nodes = nodes_list
-        
-        # Actualizar label de status
-        if hasattr(self, '_discovered_nodes_var'):
-            if nodes_list:
-                total_channels = sum(len(n.get('channels', [])) for n in nodes_list)
-                self._discovered_nodes_var.set(
-                    f" Encontrados {len(nodes_list)} no(s) com {total_channels} canais"
-                )
-            else:
-                self._discovered_nodes_var.set(" Nenhum no encontrado")
-        
-        # Actualizar treeview si existe
-        if hasattr(self, '_disc_tree'):
-            try:
-                # Limpiar treeview
-                for item in self._disc_tree.get_children():
-                    self._disc_tree.delete(item)
-                
-                # Agregar nodos y canales
-                for node in nodes_list:
-                    node_id = node.get('id', 0)
-                    serial = node.get('serial', str(node_id))
-                    rssi = node.get('rssi', 0)
-                    channels = node.get('channels', [])
-                    
-                    for ch_info in channels:
-                        ch_name = ch_info.get('channel', 'ch1')
-                        ch_value = ch_info.get('value', 0.0)
-                        
-                        self._disc_tree.insert("", "end", values=(
-                            node_id,
-                            serial,
-                            ch_name,
-                            f"{rssi} dBm",
-                            f"{ch_value:.4f}",
-                            " Activo"
-                        ))
-            except Exception as e:
-                self.log_message(f"Erro atualizando lista de ns: {e}")
-
     def toggle_connection(self):
         if not self.connected:
             self._show_connection_dialog()
@@ -3511,11 +3403,10 @@ class BalanzaGUI(ttk.Window):
             main_content.pack(fill=BOTH, expand=True, pady=(15, self.scaled(30)))
         else:
             main_content.pack(fill=BOTH, expand=True, pady=(15, 0))
-        # Tres columnas: Descoberta (40%), Izquierda (30%), Derecha (30%)
+        # Dos columnas: PLC/MODBUS y NÓ (50% / 50%)
         # Usar proporciones de peso para asegurar reparto estable del espacio
-        main_content.columnconfigure(0, weight=50)
-        main_content.columnconfigure(1, weight=25)
-        main_content.columnconfigure(2, weight=25)
+        main_content.columnconfigure(0, weight=1)
+        main_content.columnconfigure(1, weight=1)
 
         # Enforce stable column sizes as percentages of available width to avoid
         # reflow when dialog buttons change size (e.g., al pulsar SALVAR).
@@ -3525,11 +3416,9 @@ class BalanzaGUI(ttk.Window):
                 if not total_w or total_w < 100:
                     return
                 col0 = int(total_w * 0.50)
-                col1 = int(total_w * 0.25)
-                col2 = total_w - col0 - col1
+                col1 = total_w - col0
                 main_content.columnconfigure(0, minsize=col0)
                 main_content.columnconfigure(1, minsize=col1)
-                main_content.columnconfigure(2, minsize=col2)
             except Exception:
                 pass
 
@@ -3547,8 +3436,8 @@ class BalanzaGUI(ttk.Window):
         main_content.rowconfigure(1, weight=1)
 
         # === COLUMNA IZQUIERDA: Búsqueda de Nodos ===
-        discover_frame = ttk.Labelframe(main_content, text="TRANSMISSÃO PLC / MODBUS", padding=15, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Panel.TLabelframe')
-        discover_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 5))
+        discover_frame = ttk.Labelframe(main_content, text="TRANSMISSÃO PLC / MODBUS", padding=12, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Panel.TLabelframe')
+        discover_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 8))
         try:
             discover_frame.grid_propagate(True)
         except Exception:
@@ -3638,20 +3527,20 @@ class BalanzaGUI(ttk.Window):
         except Exception:
             # Fallback: no usar font/style si la plataforma no lo permite
             ttk.Checkbutton(trans_grid, text="Inverter Bytes (Swap Words)", variable=swap_var, bootstyle="secondary").grid(row=4, column=0, columnspan=2, sticky="w", pady=(10,0))
+
+        # Spacer para igualar altura interna con la sección "NÓ"
+        try:
+            spacer = ttk.Frame(discover_frame)
+            spacer.pack(expand=True, fill=BOTH)
+        except Exception:
+            pass
         
-        # === COLUMNA DERECHA: Asignación de Células dividida en 2 panels ===
-        # Colocamos los panels como columnas independientes en main_content
-        panel1 = ttk.Labelframe(main_content, text="NÓ", padding=5, borderwidth=self.scaled(2), relief='solid', labelanchor='n', style='Panel.TLabelframe')
-        panel1.grid(row=1, column=1, rowspan=1, sticky="nsew", padx=8, pady=8)
+        # === COLUMNA DERECHA: Asignación de Células ===
+        panel1 = ttk.Labelframe(main_content, text="NÓ", padding=12, borderwidth=self.scaled(2), relief='solid', labelanchor='n', style='Panel.TLabelframe')
+        panel1.grid(row=1, column=1, rowspan=1, sticky="nsew", padx=(8, 0), pady=8)
         panel1.columnconfigure(0, weight=1)
         panel1.rowconfigure(0, weight=1)
         panel1.rowconfigure(1, weight=1)
-
-        panel2 = ttk.Labelframe(main_content, text="", padding=5, borderwidth=self.scaled(2), relief='solid', labelanchor='n', style='Panel.TLabelframe')
-        panel2.grid(row=1, column=2, rowspan=1, sticky="nsew", padx=8, pady=8)
-        panel2.columnconfigure(0, weight=1)
-        panel2.rowconfigure(0, weight=1)
-        panel2.rowconfigure(1, weight=1)
         
         # Modo simplificado: sólo una célula (celda_1)
         positions = [
@@ -3810,19 +3699,7 @@ class BalanzaGUI(ttk.Window):
         except Exception:
             pass
 
-        # Ocultar panel derecho si está vacío y expandir el panel "NÓ" a ambas columnas
-        try:
-            if not panel2.winfo_children():
-                try:
-                    panel2.grid_remove()
-                except Exception:
-                    pass
-                try:
-                    panel1.grid_configure(columnspan=2)
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        # Mantener layout simple de dos columnas (PLC/MODBUS + NÓ)
             spacer = ttk.Frame(content_frame, height=spacer_h)
             try:
                 spacer.pack_propagate(False)
