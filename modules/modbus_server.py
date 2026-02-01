@@ -32,19 +32,48 @@ from typing import List, Optional
 log = logging.getLogger(__name__)
 
 try:
+    # pymodbus <=2.x (API legacy)
     from pymodbus.server.sync import StartTcpServer, StartSerialServer
     from pymodbus.datastore import ModbusSlaveContext, ModbusServerContext
     from pymodbus.datastore import ModbusSequentialDataBlock
     from pymodbus.device import ModbusDeviceIdentification
     from pymodbus.transaction import ModbusRtuFramer
 except Exception:  # pragma: no cover - optional dependency
-    StartTcpServer = None
-    StartSerialServer = None
-    ModbusSlaveContext = None
-    ModbusServerContext = None
-    ModbusSequentialDataBlock = None
-    ModbusDeviceIdentification = None
-    ModbusRtuFramer = None
+    try:
+        # pymodbus >=3.x
+        from pymodbus.server import StartTcpServer, StartSerialServer
+        from pymodbus.datastore import ModbusSlaveContext, ModbusServerContext
+        from pymodbus.datastore import ModbusSequentialDataBlock
+        from pymodbus.device import ModbusDeviceIdentification
+        try:
+            from pymodbus.framer import ModbusRtuFramer
+        except Exception:
+            try:
+                from pymodbus.framer import FramerRTU as ModbusRtuFramer
+            except Exception:
+                from pymodbus.transaction import ModbusRtuFramer
+    except Exception:
+        try:
+            # pymodbus >=3.x (startstop module)
+            from pymodbus.server.startstop import StartTcpServer, StartSerialServer
+            from pymodbus.datastore import ModbusSlaveContext, ModbusServerContext
+            from pymodbus.datastore import ModbusSequentialDataBlock
+            from pymodbus.device import ModbusDeviceIdentification
+            try:
+                from pymodbus.framer import ModbusRtuFramer
+            except Exception:
+                try:
+                    from pymodbus.framer import FramerRTU as ModbusRtuFramer
+                except Exception:
+                    from pymodbus.transaction import ModbusRtuFramer
+        except Exception:
+            StartTcpServer = None
+            StartSerialServer = None
+            ModbusSlaveContext = None
+            ModbusServerContext = None
+            ModbusSequentialDataBlock = None
+            ModbusDeviceIdentification = None
+            ModbusRtuFramer = None
 
 
 class ModbusDataServer:

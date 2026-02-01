@@ -20,7 +20,7 @@
     },
     "transmissao": {
         "porta": "COM4",
-        "velocidade": 3000000,
+        "velocidade": 115200,
         "paridade": "Nenhuma",
         "id_escravo_pc": 1,
         "swap_words": false

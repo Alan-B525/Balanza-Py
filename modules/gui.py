@@ -3700,77 +3700,6 @@ class BalanzaGUI(ttk.Window):
             pass
 
         # Mantener layout simple de dos columnas (PLC/MODBUS + NÓ)
-            spacer = ttk.Frame(content_frame, height=spacer_h)
-            try:
-                spacer.pack_propagate(False)
-            except Exception:
-                pass
-            spacer.pack()
-            self.lbl_maint_total = ttk.Label(content_frame, text="0", style='TotalValue.TLabel', anchor='center', justify='center')
-            # Mantener pequeño padding inferior
-            self.lbl_maint_total.pack(pady=(0, 4))
-            try:
-                self.lbl_maint_total.target_width = max(1, ctrl_w - self.scaled(80))
-            except Exception:
-                try:
-                    self.lbl_maint_total.target_width = self.lbl_total.target_width
-                except Exception:
-                    self.lbl_maint_total.target_width = self.scaled(260)
-            # Unidad justo debajo del valor, con poco padding
-            self.lbl_maint_total_unit = ttk.Label(content_frame, text="t", style='TotalUnit.TLabel', anchor='center', justify='center')
-            self.lbl_maint_total_unit.pack(pady=(0, 2))
-
-            # Sección inferior: control de TARA (dentro de mantenimiento)
-            # Mostrar un único borde en la sección de TARA (Card.TFrame)
-            # Hacer la sección de TARA ligeramente más alta para dar prioridad
-            # visual a los controles de tara dentro del diálogo de configuración.
-            tare_section = ttk.Frame(ctrl_frame, style='Card.TFrame', padding=(6,4))
-            # Fijar una altura razonable y desactivar pack propagation para
-            # que la sección ocupe más espacio vertical, quitándoselo al TOTAL.
-            try:
-                tare_section.configure(height=self.scaled(160))
-                tare_section.pack_propagate(False)
-            except Exception:
-                pass
-            tare_section.pack(fill=X, side='bottom', pady=(0, 0))
-
-            # Versión compacta: inner sin borde para que el borde exterior del tare_section sea el único visible
-            tare_inner = ttk.Frame(tare_section, style='CardNoBorder.TFrame', padding=(4, 2))
-            tare_inner.pack(fill=X, pady=(0, 0))
-
-            # (Título eliminado — todo en una sola sección)
-            actions_row = ttk.Frame(tare_inner)
-            # Espacio superior mayor sobre los botones (escalado según pantalla)
-            actions_row.pack(fill=X, pady=(self.scaled(12), 0))
-            try:
-                actions_row.columnconfigure(0, weight=0)
-                actions_row.columnconfigure(1, weight=1)
-                actions_row.columnconfigure(2, weight=0)
-            except Exception:
-                pass
-
-            btn_tare = ttk.Button(actions_row, text="TARA", command=self.do_tare, style='Tare.TButton', bootstyle="warning", width=14)
-            btn_tare.grid(row=0, column=0, sticky='w', padx=(2, 8))
-
-            # Placeholder en actions_row para mantener botones a los lados
-            try:
-                spacer = ttk.Frame(actions_row)
-                spacer.grid(row=0, column=1, sticky='nsew')
-            except Exception:
-                pass
-
-            btn_reset = ttk.Button(actions_row, text="RESET", command=self.reset_tare, style='Tare.TButton', bootstyle="secondary", width=14)
-            btn_reset.grid(row=0, column=2, sticky='e', padx=(8, 2))
-
-            # Valor de tara persistente (integrado en la misma sección) con padding reducido
-            tare_value_row = ttk.Frame(tare_inner, style='CardNoBorder.TFrame')
-            # Añadir más espacio superior para separar claramente el texto de los botones
-            tare_value_row.pack(fill=X, pady=(self.scaled(14), 0))
-            try:
-                self.lbl_tare_value = ttk.Label(tare_value_row, text="Tara: 0.00 t", style='TareMaintValue.TLabel', anchor='center', justify='center', font=("Segoe UI", self.scaled_font(24), "bold"))
-            except Exception:
-                self.lbl_tare_value = ttk.Label(tare_value_row, text="Tara: 0.00 t", anchor='center', justify='center', font=("Segoe UI", self.scaled_font(24), "bold"))
-            self.lbl_tare_value.pack(fill=X)
         except Exception:
             # Si falla la creación de la pestaña, continuar sin bloquear el diálogo
             pass
@@ -3849,6 +3778,8 @@ class BalanzaGUI(ttk.Window):
                 if not saved_ok:
                     # Fallback: intentar escribir manualmente
                     try:
+                        from config import SETTINGS_FILE
+                        config_path = SETTINGS_FILE
                         with open(config_path, 'w', encoding='utf-8') as f:
                             json.dump(new_config, f, indent=4, ensure_ascii=False)
                             saved_ok = True
