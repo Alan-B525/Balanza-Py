@@ -414,7 +414,7 @@ class BalanzaGUI(ttk.Window):
         
         # Header: mostrar título y estado en la parte superior (no en el footer)
         try:
-            title_text = "Sistema de Pesagem"
+            title_text = "Control de Carga"
             title_lbl = ttk.Label(brand_frame, text=title_text, style='HeaderTitle.TLabel', font=("Segoe UI", self.scaled_font(20), "bold"))
             title_lbl.pack(side=LEFT, padx=(10, 18))
             # Indicador LED y texto de estado
@@ -556,7 +556,7 @@ class BalanzaGUI(ttk.Window):
             try:
                 from config import APP_TITLE
             except Exception:
-                APP_TITLE = "Sistema de Pesagem"
+                APP_TITLE = "Control de Carga"
             try:
                 # No mostrar título duplicado aquí; mantener compatibilidad con self.lbl_status
                 # Si no existe self.lbl_status (header), crear una referencia mínima sin pack.
