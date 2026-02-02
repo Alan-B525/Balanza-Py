@@ -918,15 +918,13 @@ class BalanzaGUI(ttk.Window):
                             except Exception:
                                 pass
                     if hasattr(self, 'lbl_maint_total_unit') and self.lbl_maint_total_unit:
-                        # Use short unit to avoid layout reflow when text width changes
-                        self.lbl_maint_total_unit.configure(text="t", style='TotalUnit.TLabel')
+                        self.lbl_maint_total_unit.configure(text="toneladas", style='TotalUnit.TLabel')
                     if hasattr(self, 'lbl_maint_total_title') and self.lbl_maint_total_title:
                         self.lbl_maint_total_title.configure(text="PESO TOTAL", style='TotalLabel.TLabel')
                 except Exception:
                     pass
                 self._widget_last_total = incoming_total_last
-            # Keep main unit short to prevent geometry churn
-            self.lbl_total_unit.configure(text="t", style='TotalUnit.TLabel')
+            self.lbl_total_unit.configure(text="toneladas", style='TotalUnit.TLabel')
         
         # Actualizar Sensores Individuales (datos pueden ser parciales; usar get para evitar KeyError)
         sensores = data.get('sensores', {})
