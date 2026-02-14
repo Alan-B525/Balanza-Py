@@ -442,7 +442,7 @@ class BalanzaGUI(ttk.Window):
         actions_frame.pack(side=RIGHT)
         
         # Espaciador para centrar mejor los botones
-        ttk.Frame(actions_frame, width=50, style='Header.TFrame').pack(side=LEFT)
+        ttk.Frame(actions_frame, width=20, style='Header.TFrame').pack(side=LEFT)
         
         # Botn de decimales - Antes de CONFIG, ms al centro
         self.btn_decimals = ttk.Button(
@@ -451,8 +451,8 @@ class BalanzaGUI(ttk.Window):
             bootstyle="primary", 
             command=self.toggle_decimals, 
             style='Header.TButton',
-            width=8,
-            padding=(15, 12)
+            width=4,
+            padding=(10, 12)
         )
         # Ocultar el botón de decimales en todas las resoluciones: no hacer pack()
 
@@ -466,7 +466,7 @@ class BalanzaGUI(ttk.Window):
                 bootstyle="warning",
                 command=self.do_tare,
                 style='TareYellow.TButton',
-                width=14,
+                width=10,
                 padding=(15, 12)
             )
             self.btn_tare.pack(side=LEFT, padx=5)
@@ -480,7 +480,7 @@ class BalanzaGUI(ttk.Window):
             bootstyle="info", 
             command=self.show_configuration_dialog, 
             style='Header.TButton',
-            width=14,
+            width=10,
             padding=(15, 12)
         )
         self.btn_config.pack(side=LEFT, padx=5)
@@ -491,13 +491,13 @@ class BalanzaGUI(ttk.Window):
             text="CONECTAR",
             command=self.toggle_connection,
             style='ConnectSuccess.TButton',
-            width=14,
+            width=16,
             padding=(15, 12)
         )
         self.btn_connect.pack(side=LEFT, padx=5)
         
         # Separador visual antes del botn SAIR
-        ttk.Frame(actions_frame, width=30, style='Header.TFrame').pack(side=LEFT)
+        ttk.Frame(actions_frame, width=10, style='Header.TFrame').pack(side=LEFT)
         
         # Botn Salir - Rojo y separado
         ttk.Button(
@@ -508,7 +508,7 @@ class BalanzaGUI(ttk.Window):
             style='Header.TButton', 
             width=10, 
             padding=(15, 12)
-        ).pack(side=LEFT, padx=(20, 5))
+        ).pack(side=LEFT, padx=(10, 5))
 
         # Nota: el título y el estado se muestran en el pie (footer)
         # para evitar que compriman las secciones de acciones (TARA).
@@ -3099,7 +3099,7 @@ class BalanzaGUI(ttk.Window):
         dlg_style = 'Large.success.TButton' if not getattr(self, 'connected', False) else 'Large.danger.TButton'
         btn_connect_dialog = ttk.Button(left_frame, text=connect_text,
                         command=self.toggle_connection,
-                        width=12, padding=btn_padding)
+                        width=18, padding=btn_padding)
         btn_connect_dialog.configure(style=dlg_style)
         btn_connect_dialog.pack(side=LEFT, padx=(8, 12))
         # Guardar referencia en self para poder sincronizar estado desde _update_status
@@ -3117,7 +3117,7 @@ class BalanzaGUI(ttk.Window):
             dec_text = '0,00'
         btn_dec_dialog = ttk.Button(left_frame, text=dec_text,
                                     command=self.toggle_decimals,
-                                    width=8, padding=btn_padding)
+                                    width=4, padding=btn_padding)
         btn_dec_dialog.configure(style='Large.info.TButton')
         btn_dec_dialog.pack(side=LEFT, padx=(0, 8))
         try:
@@ -3238,7 +3238,10 @@ class BalanzaGUI(ttk.Window):
         
         
         # === Porta Serial (USB Gateway) - Compacto ===
-        port_frame = ttk.Labelframe(tab_nodes, text="Porta Serial (Gateway USB)", padding=10)
+        base_font = ("Segoe UI", self.scaled_font(14))
+        base_font_bold = ("Segoe UI", self.scaled_font(14), "bold")
+
+        port_frame = ttk.Labelframe(tab_nodes, text="Porta Serial (Gateway USB)", padding=15, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Viga.TLabelframe')
         port_frame.pack(fill=X, pady=(0, 10))
         
         # Layout con grid para mejor alineacion
@@ -3246,7 +3249,7 @@ class BalanzaGUI(ttk.Window):
         port_grid.pack(fill=X)
         port_grid.columnconfigure(1, weight=1)
         
-        ttk.Label(port_grid, text="Porta COM:", font=("Segoe UI", 14)).grid(row=0, column=0, sticky="w", padx=(0, 15))
+        ttk.Label(port_grid, text="Porta COM:", font=base_font).grid(row=0, column=0, sticky="w", padx=(0, 15), pady=6)
         
         # PROCURAR PORTAS DISPONIVEIS AUTOMATICAMENTE
         com_values = []
@@ -3272,28 +3275,9 @@ class BalanzaGUI(ttk.Window):
             pass # No ordenar si falla
             
         # Combobox editable para seleccionar o escribir
-        entry_serial = ttk.Combobox(port_grid, font=("Segoe UI", 14), width=12, values=com_values)
+        entry_serial = ttk.Combobox(port_grid, font=base_font, values=com_values)
         entry_serial.set(current_port)
-        entry_serial.grid(row=0, column=1, sticky="w", ipady=6)
-        
-        # Boton Actualizar Portas - sin feedback visual acumulativo
-        def refresh_ports():
-            try:
-                import serial.tools.list_ports
-                ports = serial.tools.list_ports.comports()
-                new_values = [p.device for p in ports]
-                # Ordenar
-                if new_values:
-                    new_values.sort(key=lambda x: int(x.replace('COM', '')) if x.startswith('COM') and x[3:].isdigit() else x)
-                    entry_serial['values'] = new_values
-                    entry_serial.set(new_values[0])
-                
-            except ImportError:
-                self.show_alert("Aviso", "Instale 'pyserial' para deteccao automatica.", parent=dialog)
-            except Exception as e:
-                self.show_alert("Erro", str(e), "error", parent=dialog)
-                
-        ttk.Button(port_grid, text="Atualizar", command=refresh_ports, bootstyle="secondary-outline", width=10).grid(row=0, column=2, padx=(15, 0))
+        entry_serial.grid(row=0, column=1, sticky="ew", ipady=self.scaled(6), pady=6)
 
         # Import/Export moved to the CALIBRACAO tab (see _setup_calibration_tab)
         
@@ -3308,44 +3292,16 @@ class BalanzaGUI(ttk.Window):
             main_content.pack(fill=BOTH, expand=True, pady=(15, self.scaled(30)))
         else:
             main_content.pack(fill=BOTH, expand=True, pady=(15, 0))
-        # Tres columnas: Descoberta (40%), Viga 1 (30%), Viga 2 (30%)
-        # Usar proporciones de peso para asegurar reparto estable del espacio
-        main_content.columnconfigure(0, weight=50)
-        main_content.columnconfigure(1, weight=25)
-        main_content.columnconfigure(2, weight=25)
-
-        # Enforce stable column sizes as percentages of available width to avoid
-        # reflow when dialog buttons change size (e.g., al pulsar SALVAR).
-        def _enforce_col_sizes(event=None):
-            try:
-                total_w = main_content.winfo_width()
-                if not total_w or total_w < 100:
-                    return
-                col0 = int(total_w * 0.50)
-                col1 = int(total_w * 0.25)
-                col2 = total_w - col0 - col1
-                main_content.columnconfigure(0, minsize=col0)
-                main_content.columnconfigure(1, minsize=col1)
-                main_content.columnconfigure(2, minsize=col2)
-            except Exception:
-                pass
-
-        try:
-            main_content.bind('<Configure>', _enforce_col_sizes)
-            # Run once after layout to set initial sizes
-            try:
-                self.after(100, _enforce_col_sizes)
-            except Exception:
-                _enforce_col_sizes()
-        except Exception:
-            pass
-        # Fila 0: headers; Fila 1: contenido principal
-        main_content.rowconfigure(0, weight=0)
-        main_content.rowconfigure(1, weight=1)
+        # Tres columnas balanceadas: Descoberta (1) | Viga 1 (1) | Viga 2 (1)
+        main_content.columnconfigure(0, weight=1, uniform="cols")
+        main_content.columnconfigure(1, weight=1, uniform="cols")
+        main_content.columnconfigure(2, weight=1, uniform="cols")
+        # Fila única de contenido principal
+        main_content.rowconfigure(0, weight=1)
 
         # === COLUMNA IZQUIERDA: Búsqueda de Nodos ===
         discover_frame = ttk.Labelframe(main_content, text="Descoberta de Nós", padding=15, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Viga.TLabelframe')
-        discover_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 5))
+        discover_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5), pady=8)
         try:
             discover_frame.grid_propagate(True)
         except Exception:
@@ -3353,10 +3309,10 @@ class BalanzaGUI(ttk.Window):
         # Estilo para las Vigas / Descoberta: etiqueta en negrita y fuente ligeramente mayor
         try:
             style = ttk.Style()
-            style.configure('Viga.TLabelframe.Label', font=("Segoe UI", self.scaled(13), 'bold'))
+            style.configure('Viga.TLabelframe.Label', font=("Segoe UI", self.scaled_font(14), 'bold'))
         except Exception:
             try:
-                style.configure('Viga.TLabelframe.Label', font=("Segoe UI", 13, 'bold'))
+                style.configure('Viga.TLabelframe.Label', font=("Segoe UI", 14, 'bold'))
             except Exception:
                 pass
         
@@ -3378,14 +3334,13 @@ class BalanzaGUI(ttk.Window):
             text=" BUSCAR NÓS", 
             command=discover_nodes_action,
             bootstyle="info",
-            padding=(20, 12)
-        ).pack(side=LEFT)
+        ).pack(fill=X, ipadx=self.scaled(10), ipady=self.scaled(8))
         
         # Label de status
         ttk.Label(
             discover_frame, 
             textvariable=self._discovered_nodes_var, 
-            font=("Segoe UI", 11), 
+            font=base_font, 
             foreground="#64748b",
             wraplength=350
         ).pack(anchor="n", fill=X, pady=(10, 5))
@@ -3400,24 +3355,29 @@ class BalanzaGUI(ttk.Window):
         self._disc_tree.heading("rssi", text="RSSI")
         self._disc_tree.heading("status", text="Estado")
         
-        self._disc_tree.column("node_id", width=90, anchor="center")
-        self._disc_tree.column("serial", width=110, anchor="center")
-        self._disc_tree.column("channel", width=70, anchor="center")
-        self._disc_tree.column("rssi", width=70, anchor="center")
-        self._disc_tree.column("status", width=90, anchor="center")
+        self._disc_tree.column("node_id", width=80, minwidth=60, anchor="center", stretch=True)
+        self._disc_tree.column("serial", width=100, minwidth=70, anchor="center", stretch=True)
+        self._disc_tree.column("channel", width=60, minwidth=50, anchor="center", stretch=True)
+        self._disc_tree.column("rssi", width=60, minwidth=50, anchor="center", stretch=True)
+        self._disc_tree.column("status", width=80, minwidth=60, anchor="center", stretch=True)
+        
+        # Bloquear redimensionamiento manual de columnas por el usuario
+        try:
+            self._disc_tree.bind('<Button-1>', lambda e: 'break' if self._disc_tree.identify_region(e.x, e.y) == 'separator' else None)
+        except Exception:
+            pass
         
         self._disc_tree.pack(fill=BOTH, expand=True, pady=(10, 0))
         
-        # === COLUMNA DERECHA: Asignación de Células dividida en 2 vigas ===
-        # Colocamos las vigas como columnas independientes en main_content
-        viga1 = ttk.Labelframe(main_content, text="Viga 1", padding=5, borderwidth=self.scaled(2), relief='solid', labelanchor='n', style='Viga.TLabelframe')
-        viga1.grid(row=1, column=1, rowspan=1, sticky="nsew", padx=8, pady=8)
+        # === COLUMNA CENTRAL Y DERECHA: Asignación de Células dividida en 2 vigas ===
+        viga1 = ttk.Labelframe(main_content, text="Viga 1", padding=15, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Viga.TLabelframe')
+        viga1.grid(row=0, column=1, rowspan=1, sticky="nsew", padx=(5, 5), pady=8)
         viga1.columnconfigure(0, weight=1)
         viga1.rowconfigure(0, weight=1)
         viga1.rowconfigure(1, weight=1)
 
-        viga2 = ttk.Labelframe(main_content, text="Viga 2", padding=5, borderwidth=self.scaled(2), relief='solid', labelanchor='n', style='Viga.TLabelframe')
-        viga2.grid(row=1, column=2, rowspan=1, sticky="nsew", padx=8, pady=8)
+        viga2 = ttk.Labelframe(main_content, text="Viga 2", padding=15, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Viga.TLabelframe')
+        viga2.grid(row=0, column=2, rowspan=1, sticky="nsew", padx=(5, 0), pady=8)
         viga2.columnconfigure(0, weight=1)
         viga2.rowconfigure(0, weight=1)
         viga2.rowconfigure(1, weight=1)
@@ -3436,62 +3396,56 @@ class BalanzaGUI(ttk.Window):
             # Frame de cada celda con borde más visible, dentro de la viga correspondiente
             parent_viga = viga1 if col == 0 else viga2
             # Mostrar sólo la etiqueta simple CÉLULA N (no mostrar posición frente/atrás/izq/der)
-            cell_frame = ttk.Labelframe(parent_viga, text=f"CÉLULA {celda_num}", padding=15)
-            cell_frame.grid(row=row, column=0, sticky="nsew", padx=8, pady=8)
-            # Permitir que el frame propague cambios de tamaño para evitar recortes
+            # Layout directamente dentro de la viga (sin Labelframe anidado)
+            cell_grid = ttk.Frame(parent_viga)
+            cell_grid.grid(row=row, column=0, sticky="nsew", padx=4, pady=4)
+            cell_grid.columnconfigure(1, weight=1)
             try:
-                cell_frame.grid_propagate(True)
-            except Exception:
-                pass
-            try:
-                cell_frame.pack_propagate(True)
+                cell_grid.columnconfigure(0, weight=0, minsize=self.scaled(60))
             except Exception:
                 pass
             
-            # Layout interno centrado
-            cell_grid = ttk.Frame(cell_frame)
-            cell_grid.pack(fill=BOTH, expand=True)
-            
-            field_width = 12
+            # Título de célula
+            ttk.Label(cell_grid, text=f"CÉLULA {celda_num}", font=base_font_bold, anchor='center').grid(row=0, column=0, columnspan=2, sticky='ew', pady=(0, 6))
             
             # Node ID
-            id_frame = ttk.Frame(cell_grid)
-            id_frame.pack(fill=X, pady=4)
-            ttk.Label(id_frame, text="ID:", font=("Segoe UI", 12), width=6).pack(side=LEFT)
-            e_id = ttk.Entry(id_frame, font=("Segoe UI", 13), width=field_width)
+            ttk.Label(cell_grid, text="ID:", font=base_font).grid(row=1, column=0, sticky='w', padx=(0, 8), pady=4)
+            e_id = ttk.Entry(cell_grid, font=base_font)
             e_id.insert(0, str(current_node_data.get("id", 0)))
-            e_id.pack(side=LEFT, ipady=4)
+            e_id.grid(row=1, column=1, sticky='ew', pady=4)
             self._bind_numeric_keypad(e_id, f"ID do Nó - Célula {celda_num}")
             
             # Número de Serie
-            serial_frame = ttk.Frame(cell_grid)
-            serial_frame.pack(fill=X, pady=4)
-            ttk.Label(serial_frame, text="Série:", font=("Segoe UI", 12), width=6).pack(side=LEFT)
-            e_serial = ttk.Entry(serial_frame, font=("Segoe UI", 13), width=field_width)
+            ttk.Label(cell_grid, text="Série:", font=base_font).grid(row=2, column=0, sticky='w', padx=(0, 8), pady=4)
+            e_serial = ttk.Entry(cell_grid, font=base_font)
             e_serial.insert(0, str(current_node_data.get("serial", "")))
-            e_serial.pack(side=LEFT, ipady=4)
+            e_serial.grid(row=2, column=1, sticky='ew', pady=4)
             self._bind_numeric_keypad(e_serial, f"Nº Série - Célula {celda_num}")
             
             # Channel - RadioButtons
-            ch_frame = ttk.Frame(cell_grid)
-            ch_frame.pack(fill=X, pady=4)
-            ttk.Label(ch_frame, text="Canal:", font=("Segoe UI", 12), width=6).pack(side=LEFT)
+            ttk.Label(cell_grid, text="Canal:", font=base_font).grid(row=3, column=0, sticky='w', padx=(0, 8), pady=4)
             
             ch_var = tk.StringVar(value=current_node_data.get("ch", "ch1"))
-            ch_btn_frame = ttk.Frame(ch_frame)
-            ch_btn_frame.pack(side=LEFT)
+            ch_btn_frame = ttk.Frame(cell_grid)
+            ch_btn_frame.grid(row=3, column=1, sticky='w', pady=4)
             
+            ch_radio_font = ("Segoe UI", self.scaled_font(15), "bold")
             for ch_opt in ["ch1", "ch2", "ch3"]:
                 ch_btn = ttk.Radiobutton(
                     ch_btn_frame, 
-                    text=ch_opt[-1],
+                    text=f" {ch_opt[-1]} ",
                     variable=ch_var,
                     value=ch_opt,
                     bootstyle="info-toolbutton",
-                    width=3,
-                    padding=(8, 5)
+                    width=5,
+                    padding=(14, 8)
                 )
-                ch_btn.pack(side=LEFT, padx=2)
+                ch_btn.pack(side=LEFT, padx=3)
+            try:
+                for rb in ch_btn_frame.winfo_children():
+                    rb.configure(font=ch_radio_font)
+            except Exception:
+                pass
             
             node_entries[key] = {"id": e_id, "ch": ch_var, "serial": e_serial}
         
