@@ -4,6 +4,9 @@
     "serial_port": "COM4",
     "baudrate": 3000000,
     "paridade": "Nenhuma",
+    "stopbits": 1,
+    "bytesize": 8,
+    "timeout": 0.05,
     "id_escravo_pc": 1,
     "swap_words": false,
     "nodes": {
@@ -20,6 +23,9 @@
         "porta": "COM4",
         "velocidade": 3000000,
         "paridade": "Nenhuma",
+        "stopbits": 1,
+        "bytesize": 8,
+        "timeout": 0.05,
         "id_escravo_pc": 1,
         "swap_words": false
     },

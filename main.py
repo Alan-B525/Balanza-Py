@@ -86,7 +86,7 @@ def _float_to_int32_registers(value: float, scale: int = 1000) -> list:
     return [hi, lo]
 
 
-def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modbus_server=None):
+def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modbus_params=None, modbus_server=None):
     """
     Thread secundaria (Backend) que gerencia o hardware e o processamento.
     Incluye manejo de desconexión de sensores y reconexión automática.
@@ -97,11 +97,48 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
     reconnect_attempts = {}         # {node_id: intentos}
     MAX_AUTO_RECONNECT = 5          # Máximo intentos automáticos
     reconnect_check_counter = {}    # Contador para espaciar notificaciones
+    GUI_PUBLISH_INTERVAL_S = 0.05   # Limitar refresco GUI (~20 Hz) para mantener UI responsiva
+    last_gui_publish_ts = 0.0
     
     # Variables para conexión asíncrona
     connection_thread = None
     connection_in_progress = False
     
+    def _start_modbus_if_needed():
+        nonlocal modbus_server
+        if modbus_server is not None:
+            return
+        if not modbus_params:
+            return
+        serial_port = modbus_params.get('serial_port')
+        if not serial_port:
+            data_queue.put({'type': 'LOG', 'payload': "Modbus RTU não iniciado: porta serial não configurada."})
+            return
+        port_ok = True
+        try:
+            from serial.tools import list_ports
+            ports = {p.device for p in list_ports.comports()}
+            port_ok = serial_port in ports
+        except Exception:
+            port_ok = True
+        if not port_ok:
+            data_queue.put({'type': 'LOG', 'payload': f"Modbus RTU não iniciado: porta {serial_port} indisponível."})
+            return
+        try:
+            modbus_server = ModbusDataServer(
+                serial_port=serial_port,
+                baudrate=modbus_params.get('baudrate', 3000000),
+                parity=modbus_params.get('parity', 'N'),
+                stopbits=modbus_params.get('stopbits', 1),
+                bytesize=modbus_params.get('bytesize', 8),
+                timeout=modbus_params.get('timeout', 0.05),
+            )
+            modbus_server.start()
+            data_queue.put({'type': 'LOG', 'payload': f"Modbus RTU iniciado en {serial_port}"})
+        except Exception as e:
+            modbus_server = None
+            data_queue.put({'type': 'LOG', 'payload': f"Modbus RTU no iniciado: {e}"})
+
     while running:
         # 1. Processar Comandos da GUI
         try:
@@ -137,10 +174,11 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                                 if connected:
                                     data_queue.put({'type': 'LOG', 'payload': f"Conectado com sucesso a {ACTIVE_COM}"})
                                     # Notify GUI progress finished
-                                    data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'success', 'message': 'Conexión establecida'}})
+                                    data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'success', 'message': 'Conexão estabelecida'}})
                                     acquisition_paused = False
                                     reconnecting_nodes.clear()
                                     reconnect_attempts.clear()
+                                    _start_modbus_if_needed()
                                 else:
                                     # Si hubo recuperación parcial, reportar 'partial' en lugar de 'failed'
                                     if recovered > 0:
@@ -148,8 +186,8 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                                             expected = len(ACTIVE_NODOS) if ACTIVE_NODOS else 0
                                         except Exception:
                                             expected = 0
-                                        data_queue.put({'type': 'LOG', 'payload': f"Conexión parcial: {recovered}/{expected} nodos"})
-                                        data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'partial', 'message': f'Conexión parcial: {recovered}/{expected} nodos', 'recovered': recovered, 'expected': expected}})
+                                        data_queue.put({'type': 'LOG', 'payload': f"Conexão parcial: {recovered}/{expected} nós"})
+                                        data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'partial', 'message': f'Conexão parcial: {recovered}/{expected} nós', 'recovered': recovered, 'expected': expected}})
                                     else:
                                         data_queue.put({'type': 'LOG', 'payload': f"Falha ao conectar a {ACTIVE_COM}"})
                                         data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'failed', 'message': 'Falha ao conectar'}})
@@ -176,8 +214,14 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                 elif cmd == 'DISCONNECT':
                     sistema_pesaje.desconectar()
                     data_queue.put({'type': 'STATUS', 'payload': False})
-                    data_queue.put({'type': 'LOG', 'payload': "Sistema desconectado pelo usuario."})
+                    data_queue.put({'type': 'LOG', 'payload': "Sistema desconectado pelo usuário."})
                     acquisition_paused = True
+                    if modbus_server is not None:
+                        try:
+                            modbus_server.stop()
+                        except Exception:
+                            pass
+                        modbus_server = None
                 
                 elif cmd == 'PAUSE_ACQUISITION':
                     acquisition_paused = True
@@ -210,7 +254,7 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                         procesador.reset_tara()
                         # Notificar GUI inmediatamente
                         data_queue.put({'type': 'DATA', 'payload': {'total_tare': 0.0}})
-                        data_queue.put({'type': 'LOG', 'payload': "Tara reiniciada para 0."})
+                        data_queue.put({'type': 'LOG', 'payload': "Tara redefinida para 0."})
                     except Exception:
                         data_queue.put({'type': 'LOG', 'payload': "Erro reiniciando tara."})
                     
@@ -259,25 +303,25 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                         global ACTIVE_COM, ACTIVE_NODOS
                         if new_port:
                             ACTIVE_COM = new_port
-                            data_queue.put({'type': 'LOG', 'payload': f"Puerto serial actualizado a {ACTIVE_COM}"})
+                            data_queue.put({'type': 'LOG', 'payload': f"Porta serial atualizada para {ACTIVE_COM}"})
                         if new_nodes:
                             ACTIVE_NODOS = new_nodes
                             # IMPORTANTE: Actualizar también el procesador con la nueva config
                             try:
                                 procesador.update_config(ACTIVE_NODOS)
-                                data_queue.put({'type': 'LOG', 'payload': "Configuración de procesador actualizada."})
+                                data_queue.put({'type': 'LOG', 'payload': "Configuração do processador atualizada."})
                             except Exception as e:
-                                data_queue.put({'type': 'LOG', 'payload': f"Error actualizando procesador: {e}"})
+                                data_queue.put({'type': 'LOG', 'payload': f"Erro ao atualizar processador: {e}"})
 
                             # IMPORTANTE: Actualizar también el DRIVER (Mock) si lo soporta
                             try:
                                 if hasattr(sistema_pesaje, 'update_nodes_config'):
                                     sistema_pesaje.update_nodes_config(ACTIVE_NODOS)
-                                    data_queue.put({'type': 'LOG', 'payload': "Configuración de driver actualizada."})
+                                    data_queue.put({'type': 'LOG', 'payload': "Configuração do driver atualizada."})
                             except Exception as e:
-                                data_queue.put({'type': 'LOG', 'payload': f"Error actualizando driver: {e}"})
+                                data_queue.put({'type': 'LOG', 'payload': f"Erro ao atualizar driver: {e}"})
 
-                            data_queue.put({'type': 'LOG', 'payload': f"Asignación de nodos actualizada ({len(ACTIVE_NODOS)} nodos)"})
+                            data_queue.put({'type': 'LOG', 'payload': f"Mapeamento de nós atualizado ({len(ACTIVE_NODOS)} nós)"})
 
                         # Si ya estamos conectados, desconectar y reconectar usando la nueva configuración
                         def do_reconnect():
@@ -305,22 +349,23 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
 
                                 data_queue.put({'type': 'STATUS', 'payload': connected})
                                 if connected:
-                                    data_queue.put({'type': 'LOG', 'payload': f"Re-conectado con éxito en {ACTIVE_COM}"})
-                                    data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'success', 'message': 'Re-conexión establecida'}})
+                                    data_queue.put({'type': 'LOG', 'payload': f"Reconectado com sucesso em {ACTIVE_COM}"})
+                                    data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'success', 'message': 'Reconexão estabelecida'}})
                                     acquisition_paused = False
+                                    _start_modbus_if_needed()
                                 else:
                                     if recovered > 0:
                                         try:
                                             expected = len(ACTIVE_NODOS) if ACTIVE_NODOS else 0
                                         except Exception:
                                             expected = 0
-                                        data_queue.put({'type': 'LOG', 'payload': f"Conexión parcial tras aplicar config: {recovered}/{expected} nodos"})
-                                        data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'partial', 'message': f'Conexión parcial: {recovered}/{expected} nodos', 'recovered': recovered, 'expected': expected}})
+                                        data_queue.put({'type': 'LOG', 'payload': f"Conexão parcial após aplicar configuração: {recovered}/{expected} nós"})
+                                        data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'partial', 'message': f'Conexão parcial: {recovered}/{expected} nós', 'recovered': recovered, 'expected': expected}})
                                     else:
-                                        data_queue.put({'type': 'LOG', 'payload': f"Fallo al reconectar en {ACTIVE_COM}"})
-                                        data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'failed', 'message': 'Fallo al reconectar'}})
+                                        data_queue.put({'type': 'LOG', 'payload': f"Falha ao reconectar em {ACTIVE_COM}"})
+                                        data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'failed', 'message': 'Falha ao reconectar'}})
                             except Exception as e:
-                                data_queue.put({'type': 'LOG', 'payload': f"Error durante reconexión: {e}"})
+                                data_queue.put({'type': 'LOG', 'payload': f"Erro durante reconexão: {e}"})
                             finally:
                                 try:
                                     if hasattr(sistema_pesaje, 'set_progress_callback'):
@@ -336,10 +381,16 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                             connection_thread.start()
 
                     except Exception as e:
-                        data_queue.put({'type': 'LOG', 'payload': f"Error aplicando configuración: {e}"})
+                        data_queue.put({'type': 'LOG', 'payload': f"Erro ao aplicar configuração: {e}"})
                 elif cmd == 'EXIT':
                     running = False
                     sistema_pesaje.desconectar()
+                    if modbus_server is not None:
+                        try:
+                            modbus_server.stop()
+                        except Exception:
+                            pass
+                        modbus_server = None
                     
         except queue.Empty:
             pass
@@ -413,7 +464,7 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                             'type': 'LOG',
                             'payload': f"Sensor {node_id} reconectado exitosamente"
                         })
-                    elif reconnect_check_counter[node_id] >= 20:  # Cada ~1 segundo (20 * 50ms)
+                    elif reconnect_check_counter[node_id] >= 333:  # Cada ~1 segundo con loop ~3ms
                         reconnect_check_counter[node_id] = 0
                         reconnect_attempts[node_id] = attempts + 1
                         
@@ -443,8 +494,11 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                                 'payload': f"Fallo reconexion de sensor {node_id} despues de {MAX_AUTO_RECONNECT} intentos"
                             })
                 
-                # Enviar datos a GUI
-                data_queue.put({'type': 'DATA', 'payload': datos_procesados})
+                # Enviar datos a GUI con tasa limitada para evitar congelamiento por cola
+                now_ts = time.monotonic()
+                if (now_ts - last_gui_publish_ts) >= GUI_PUBLISH_INTERVAL_S:
+                    data_queue.put({'type': 'DATA', 'payload': datos_procesados})
+                    last_gui_publish_ts = now_ts
 
                 # Empujar datos al servidor Modbus (si está activo)
                 try:
@@ -459,8 +513,11 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
             except Exception as e:
                 data_queue.put({'type': 'LOG', 'payload': f"Erro na aquisicao: {e}"})
         
-        # Pequena pausa para nao saturar CPU
-        time.sleep(0.05)
+        # Pausa dinámica para evitar saturar CPU y mantener UI responsiva
+        if sistema_pesaje.esta_conectado() and not acquisition_paused:
+            time.sleep(0.003)
+        else:
+            time.sleep(0.05)
 
 
 def main():
@@ -498,27 +555,23 @@ def main():
         logger.info('Mapping lógico→físico: ' + '; '.join(mapping_lines))
     except Exception:
         pass
-    # Iniciar servidor Modbus (RTU) usando settings.json/config
-    modbus_server = None
+    # Preparar configuración Modbus (RTU) usando settings.json/config
+    modbus_params = None
     try:
         settings = config.load_settings()
 
-        # Forzar uso exclusivo de Modbus RTU (RS-485) por puerto serie.
-        # Tomar `porta` de settings.transmissao si existe, sino usar `ACTIVE_COM`.
         serial_port = None
-        baudrate = 9600
+        baudrate = 3000000
         parity = 'N'
         stopbits = 1
         bytesize = 8
-        timeout = 1.0
+        timeout = 0.05
 
         if settings and isinstance(settings.get('transmissao'), dict):
             t = settings.get('transmissao')
             porta_conf = t.get('porta')
-            # Preferir valor explícito en transmissao.porta
             if isinstance(porta_conf, str) and porta_conf.strip():
                 serial_port = porta_conf.strip()
-            # Configurar baudrate y paridad si vienen en settings
             try:
                 baudrate = int(t.get('velocidade', t.get('baudrate', baudrate)))
             except Exception:
@@ -532,31 +585,40 @@ def main():
                     parity = 'O'
                 else:
                     parity = 'N'
+            try:
+                stopbits = int(t.get('stopbits', stopbits))
+            except Exception:
+                pass
+            try:
+                bytesize = int(t.get('bytesize', bytesize))
+            except Exception:
+                pass
+            try:
+                timeout = float(t.get('timeout', timeout))
+            except Exception:
+                pass
 
-        # Si no se especificó en settings, usar ACTIVE_COM
         if not serial_port:
             try:
                 serial_port = ACTIVE_COM
             except Exception:
                 serial_port = None
 
-        if not serial_port:
-            # No hay puerto serie disponible: informar y no iniciar servidor
-            print("[WARN] No se encontró puerto serie para Modbus RTU (transmissao.porta ni ACTIVE_COM). No se inicia servidor Modbus.")
-            modbus_server = None
-        else:
-            modbus_server = ModbusDataServer(serial_port=serial_port, baudrate=baudrate, parity=parity, stopbits=stopbits, bytesize=bytesize, timeout=timeout)
-            try:
-                modbus_server.start()
-            except Exception as e:
-                print(f"[ERROR] No se pudo iniciar Modbus RTU: {e}")
-                modbus_server = None
+        modbus_params = {
+            'serial_port': serial_port,
+            'baudrate': baudrate,
+            'parity': parity,
+            'stopbits': stopbits,
+            'bytesize': bytesize,
+            'timeout': timeout,
+        }
     except Exception:
-        modbus_server = None
+        modbus_params = None
+    modbus_server = None
 
     backend_thread = threading.Thread(
         target=hilo_adquisicion,
-        args=(data_queue, command_queue, sistema_pesaje, procesador, modbus_server),
+        args=(data_queue, command_queue, sistema_pesaje, procesador, modbus_params, modbus_server),
         daemon=True
     )
     backend_thread.start()

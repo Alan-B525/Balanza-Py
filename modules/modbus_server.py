@@ -86,8 +86,8 @@ class ModbusDataServer:
         parity: str = 'N',
         stopbits: int = 1,
         bytesize: int = 8,
-        timeout: float = 1.0,
-        max_queue: int = 200,
+        timeout: float = 0.05,
+        max_queue: int = 2000,
         holding_start: int = 1000,
     ) -> None:
         self.host = host
@@ -209,7 +209,7 @@ class ModbusDataServer:
         while self._running.is_set():
             try:
                 if not self._context:
-                    time.sleep(0.2)
+                    time.sleep(0.02)
                     continue
 
                 # leer coil ack
@@ -236,10 +236,10 @@ class ModbusDataServer:
                         except Exception:
                             log.exception("Error limpiando coil ACK")
 
-                time.sleep(0.2)
+                time.sleep(0.02)
             except Exception:
                 log.exception("Error en monitor Modbus")
-                time.sleep(0.5)
+                time.sleep(0.1)
 
 
 if __name__ == "__main__":

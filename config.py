@@ -135,8 +135,11 @@ NODOS_CONFIG = {
 
 TRANSMISSAO = {
     "porta": "COM4",
-    "velocidade": 9600,
+    "velocidade": 3000000,
     "paridade": "Nenhuma",
+    "stopbits": 1,
+    "bytesize": 8,
+    "timeout": 0.05,
     "id_escravo_pc": 1,
     "swap_words": False,
 }
@@ -148,6 +151,9 @@ DEFAULT_SETTINGS = {
     "serial_port": PUERTO_COM,
     "baudrate": BAUDRATE,
     "paridade": TRANSMISSAO.get("paridade", "Nenhuma"),
+    "stopbits": TRANSMISSAO.get("stopbits", 1),
+    "bytesize": TRANSMISSAO.get("bytesize", 8),
+    "timeout": TRANSMISSAO.get("timeout", 0.05),
     "id_escravo_pc": TRANSMISSAO.get("id_escravo_pc", 1),
     "swap_words": TRANSMISSAO.get("swap_words", False),
     "nodes": NODOS_CONFIG,
@@ -190,7 +196,7 @@ CONNECTION_ATTEMPT_TIMEOUT_S = 12
 
 # Especificaciones del Display
 APP_TITLE = "Control de Carga ARBRA"
-APP_SIZE = "1280x800"
+APP_SIZE = "1360x768"
 THEME_NAME = "litera"
 
 # Especificaciones del Sensor

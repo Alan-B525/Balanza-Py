@@ -29,7 +29,7 @@ for src, dest in add_data:
 # Argumentos para PyInstaller
 args = [
     script_name,
-    '--name=Sistema de Pesagem ARBRA',
+    '--name=Control de Carga ARBRA',
     '--onefile',        # Crear un solo archivo ejecutable
     '--windowed',       # No mostrar consola (GUI app)
     '--clean',          # Limpiar caché antes de construir
