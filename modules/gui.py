@@ -1,4 +1,4 @@
-from config import APP_TITLE, APP_SIZE, THEME_NAME, NODOS_CONFIG, RECONNECT_ATTEMPTS, CONNECTION_ATTEMPT_TIMEOUT_S, load_settings, save_settings
+from config import APP_TITLE, APP_SIZE, THEME_NAME, NODOS_CONFIG, RECONNECT_ATTEMPTS, CONNECTION_ATTEMPT_TIMEOUT_S, load_settings, save_settings, PROFILES_FILE
 import os
 import json
 import tkinter as tk
@@ -46,6 +46,62 @@ class BalanzaGUI(ttk.Window):
                 self.log_message("No existe un gestor de calibración activo.")
         except Exception as e:
             self.log_message(f"Erro ao carregar sessão de calibração: {e}")
+
+    def _load_profiles(self):
+        """Carrega perfis de manutenção. Garante que existam exatamente 5 perfis fixos (slots)."""
+        # Estructura base con keys estables
+        base_profiles = {
+            "slot_1": {"name": "Perfil 1", "min": 400, "max": 800},
+            "slot_2": {"name": "Perfil 2", "min": 0, "max": 0},
+            "slot_3": {"name": "Perfil 3", "min": 0, "max": 0},
+            "slot_4": {"name": "Perfil 4", "min": 0, "max": 0},
+            "slot_5": {"name": "Perfil 5", "min": 0, "max": 0}
+        }
+        
+        data = {"profiles": base_profiles, "active_profile": "slot_1"}
+        
+        try:
+            if os.path.exists(PROFILES_FILE):
+                with open(PROFILES_FILE, 'r', encoding='utf-8') as f:
+                    loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        loaded_profs = loaded.get("profiles", {})
+                        if isinstance(loaded_profs, dict):
+                            for k in base_profiles.keys():
+                                if k in loaded_profs:
+                                    # Merge fields (name, min, max)
+                                    base_profiles[k].update(loaded_profs[k])
+                            
+                            act = loaded.get("active_profile")
+                            if act in base_profiles:
+                                data["active_profile"] = act
+                        
+                        data["profiles"] = base_profiles
+            
+            self._save_profiles(data)
+            
+        except Exception as e:
+            print(f"Erro ao carregar perfis: {e}")
+            
+        return data
+
+    def _save_profiles(self, profiles_data):
+        """Salva perfis de manutenção no arquivo JSON."""
+        try:
+            with open(PROFILES_FILE, 'w', encoding='utf-8') as f:
+                json.dump(profiles_data, f, indent=4, ensure_ascii=False)
+            return True
+        except Exception as e:
+            print(f"Erro ao salvar perfis: {e}")
+            return False
+
+    def _get_active_profile_limits(self):
+        """Retorna os limites (min, max) do perfil ativo ou None."""
+        data = self._load_profiles()
+        active_name = data.get("active_profile")
+        if active_name and active_name in data.get("profiles", {}):
+            return data["profiles"][active_name]
+        return None
 
     def __init__(self, data_queue, command_queue, data_processor=None):
         super().__init__(themename=THEME_NAME)
@@ -1124,51 +1180,104 @@ class BalanzaGUI(ttk.Window):
                     val = float(peso_ton or 0.0)
                     min_v = 0.0
                     max_v = 1200.0
-                    pct = max(0.0, min(1.0, (val - min_v) / (max_v - min_v)))
+                    
+                    # Verificar Perfil Ativo
+                    profile_limits = self._get_active_profile_limits()
+                    color = None
+                    pct = 0.0
+                    
                     try:
                         c_w = self.load_bar_canvas.winfo_width() or self.load_bar_canvas.target_width or self.scaled(360)
                     except Exception:
                         c_w = self.scaled(360)
+                    
+                    if profile_limits:
+                        # === LÓGICA DE PERFIL ===
+                        p_min = float(profile_limits.get('min', 0))
+                        p_max = float(profile_limits.get('max', 100))
+                        
+                        # Auto-swap si el usuario puso min > max
+                        if p_min > p_max:
+                            p_min, p_max = p_max, p_min
+                        
+                        # Escala dinâmica (FIXA em 1200 para coincidir con background)
+                        max_v = 1200.0
+                        pct = max(0.0, min(1.0, (val - min_v) / (max_v - min_v)))
+                        
+                        if val < p_min or val > p_max:
+                            color = "#ef4444" # Vermelho (Fora do intervalo)
+                        else:
+                            color = "#22c55e" # Verde (Dentro do intervalo)
+                            
+                        # Calcular posiciones de marcadores
+                        try:
+                            c_h = self.load_bar_canvas.winfo_height() or self.scaled(40)
+                            marker_min_x = int(c_w * (p_min / max_v))
+                            marker_max_x = int(c_w * (p_max / max_v))
+                        except Exception:
+                            marker_min_x, marker_max_x = -1, -1
+                    else:
+                        # === LÓGICA PADRÃO (GRADIENTE) ===
+                        max_v = 1200.0
+                        pct = max(0.0, min(1.0, (val - min_v) / (max_v - min_v)))
+                        marker_min_x, marker_max_x = -1, -1
+
+                        def interp_color(v0, v1, t):
+                            return tuple(int(v0[i] + (v1[i] - v0[i]) * t) for i in range(3))
+
+                        blue = (37, 99, 235)
+                        light_blue = (56, 189, 248)
+                        green = (34, 197, 94)
+                        yellow = (245, 158, 11)
+                        orange = (249, 115, 22)
+                        red = (239, 68, 68)
+
+                        if val <= 0:
+                            rgb = blue
+                        elif val <= 300:
+                            t = val / 300.0
+                            rgb = interp_color(blue, light_blue, t)
+                        elif val <= 600:
+                            t = (val - 300) / 300.0
+                            rgb = interp_color(light_blue, green, t)
+                        elif val <= 800:
+                            t = (val - 600) / 200.0
+                            rgb = interp_color(green, yellow, t)
+                        elif val <= 1000:
+                            t = (val - 800) / 200.0
+                            rgb = interp_color(yellow, orange, t)
+                        elif val <= 1200:
+                            t = (val - 1000) / 200.0
+                            rgb = interp_color(orange, red, t)
+                        else:
+                            rgb = red
+                        color = '#%02x%02x%02x' % rgb
+
                     fill_w = int(c_w * pct)
 
-                    # Transición suave entre umbrales:
-                    # azul(0) -> celeste(300) -> verde(600) -> amarillo(800) -> naranja(1000) -> rojo(>=1200)
-                    def interp_color(v0, v1, t):
-                        return tuple(int(v0[i] + (v1[i] - v0[i]) * t) for i in range(3))
-
-                    blue = (37, 99, 235)
-                    light_blue = (56, 189, 248)
-                    green = (34, 197, 94)
-                    yellow = (245, 158, 11)
-                    orange = (249, 115, 22)
-                    red = (239, 68, 68)
-
-                    if val <= 0:
-                        rgb = blue
-                    elif val <= 300:
-                        t = val / 300.0
-                        rgb = interp_color(blue, light_blue, t)
-                    elif val <= 600:
-                        t = (val - 300) / 300.0
-                        rgb = interp_color(light_blue, green, t)
-                    elif val <= 800:
-                        t = (val - 600) / 200.0
-                        rgb = interp_color(green, yellow, t)
-                    elif val <= 1000:
-                        t = (val - 800) / 200.0
-                        rgb = interp_color(yellow, orange, t)
-                    elif val <= 1200:
-                        t = (val - 1000) / 200.0
-                        rgb = interp_color(orange, red, t)
-                    else:
-                        rgb = red
-
-                    color = '#%02x%02x%02x' % rgb
                     try:
                         if self.load_bar_canvas.winfo_exists():
                             if getattr(self, '_load_bar_fill', None):
                                 self.load_bar_canvas.coords(self._load_bar_fill, 0, 0, fill_w, self.load_bar_canvas.winfo_height())
                                 self.load_bar_canvas.itemconfig(self._load_bar_fill, fill=color)
+                            
+                            # Marcadores de limites
+                            if not hasattr(self, '_marker_min'):
+                                self._marker_min = self.load_bar_canvas.create_line(0, 0, 0, 0, fill="black", width=self.scaled(4), dash=(2, 4))
+                                self._marker_max = self.load_bar_canvas.create_line(0, 0, 0, 0, fill="black", width=self.scaled(4), dash=(2, 4))
+                            
+                            if marker_min_x >= 0:
+                                c_h_real = self.load_bar_canvas.winfo_height()
+                                self.load_bar_canvas.coords(self._marker_min, marker_min_x, 0, marker_min_x, c_h_real)
+                                self.load_bar_canvas.coords(self._marker_max, marker_max_x, 0, marker_max_x, c_h_real)
+                                self.load_bar_canvas.itemconfig(self._marker_min, state='normal')
+                                self.load_bar_canvas.itemconfig(self._marker_max, state='normal')
+                                self.load_bar_canvas.tag_raise(self._marker_min)
+                                self.load_bar_canvas.tag_raise(self._marker_max)
+                            else:
+                                self.load_bar_canvas.itemconfig(self._marker_min, state='hidden')
+                                self.load_bar_canvas.itemconfig(self._marker_max, state='hidden')
+
                             if getattr(self, '_load_bar_border', None):
                                 full_w = self.load_bar_canvas.winfo_width() or c_w
                                 self.load_bar_canvas.coords(self._load_bar_border, 0, 0, full_w, self.load_bar_canvas.winfo_height())
@@ -1553,91 +1662,70 @@ class BalanzaGUI(ttk.Window):
                 pass
             finally:
                 self.after(50, self.actualizar_gui)
-        # Entry para mostrar el valor digitado
-        # Frame superior para layout grid
-        keypad_frame = ttk.Frame(keypad)
-        keypad_frame.pack(fill="both", expand=True)
-        keypad_frame.rowconfigure(0, weight=2)
-        keypad_frame.rowconfigure(1, weight=8)
-        keypad_frame.columnconfigure(0, weight=1)
+        
 
-        # Entry grande en la primera fila
-        entry_display = ttk.Entry(keypad_frame, textvariable=kp_value, font=("Consolas", 32), justify="center", state="readonly")
-        entry_display.grid(row=0, column=0, sticky="nsew", padx=40, pady=(40, 20))
-
-        # Frame de botones en la segunda fila
-        all_btns = ttk.Frame(keypad_frame)
-        all_btns.grid(row=1, column=0, sticky="nsew")
-        for i in range(5):
-            all_btns.rowconfigure(i, weight=1)
-        for j in range(3):
-            all_btns.columnconfigure(j, weight=1)
-
-        pad_num = (18, 18)
-        pad_act = (18, 22)
-
-        def _close_keypad():
-            try:
-                keypad.grab_release()
-            except Exception:
-                pass
-            try:
-                keypad.destroy()
-            except Exception:
-                pass
-            try:
-                self._suppress_cfg_watch = False
-            except Exception:
-                pass
-            try:
-                self._active_keypad = None
-            except Exception:
-                pass
-
-        def confirm_and_close():
-            entry_widget.delete(0, tk.END)
-            entry_widget.insert(0, kp_value.get())
-            _close_keypad()
-
-        # Fila 0: 7 8 9
-        ttk.Button(all_btns, text="7", command=lambda: press_digit("7"), bootstyle="light", padding=pad_num).grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
-        ttk.Button(all_btns, text="8", command=lambda: press_digit("8"), bootstyle="light", padding=pad_num).grid(row=0, column=1, sticky="nsew", padx=4, pady=4)
-        ttk.Button(all_btns, text="9", command=lambda: press_digit("9"), bootstyle="light", padding=pad_num).grid(row=0, column=2, sticky="nsew", padx=4, pady=4)
-
-        # Fila 1: 4 5 6
-        ttk.Button(all_btns, text="4", command=lambda: press_digit("4"), bootstyle="light", padding=pad_num).grid(row=1, column=0, sticky="nsew", padx=4, pady=4)
-        ttk.Button(all_btns, text="5", command=lambda: press_digit("5"), bootstyle="light", padding=pad_num).grid(row=1, column=1, sticky="nsew", padx=4, pady=4)
-        ttk.Button(all_btns, text="6", command=lambda: press_digit("6"), bootstyle="light", padding=pad_num).grid(row=1, column=2, sticky="nsew", padx=4, pady=4)
-
-        # Fila 2: 1 2 3
-        ttk.Button(all_btns, text="1", command=lambda: press_digit("1"), bootstyle="light", padding=pad_num).grid(row=2, column=0, sticky="nsew", padx=4, pady=4)
-        ttk.Button(all_btns, text="2", command=lambda: press_digit("2"), bootstyle="light", padding=pad_num).grid(row=2, column=1, sticky="nsew", padx=4, pady=4)
-        ttk.Button(all_btns, text="3", command=lambda: press_digit("3"), bootstyle="light", padding=pad_num).grid(row=2, column=2, sticky="nsew", padx=4, pady=4)
-
-        # Fila 3: . 0 DEL
-        ttk.Button(all_btns, text=".", command=lambda: press_digit("."), bootstyle="secondary", padding=pad_num).grid(row=3, column=0, sticky="nsew", padx=4, pady=4)
-        ttk.Button(all_btns, text="0", command=lambda: press_digit("0"), bootstyle="light", padding=pad_num).grid(row=3, column=1, sticky="nsew", padx=4, pady=4)
-        ttk.Button(all_btns, text="DEL", command=press_backspace, bootstyle="warning", padding=pad_act).grid(row=3, column=2, sticky="nsew", padx=4, pady=4)
-
-        # Fila 4: - | OK (OK ocupa 2 columnas)
-        ttk.Button(all_btns, text="-", command=lambda: press_digit("-"), bootstyle="secondary", padding=pad_act).grid(row=4, column=0, sticky="nsew", padx=4, pady=4)
-        ttk.Button(all_btns, text="OK", command=confirm_and_close, bootstyle="success", padding=pad_act).grid(row=4, column=1, columnspan=2, sticky="nsew", padx=4, pady=4)
-
-        # Evitar grab_set() para no bloquear la app en tablets; usar focus/lift
+    def _validate_numeric_input(self, new_value):
+        """Valida que la entrada sea numerica (float o vacia)."""
+        if not new_value: return True # Empty is valid
+        if new_value in ("-", ".", ",", "-.", "-,"): return True # Partial inputs
+        
+        # Permitir varios puntos/comas mientras se escribe (ej: 1.2.3 -> invalido final, valido intermedio)
+        # O ser estricto pero considerar replace
         try:
-            keypad.focus_set()
-            keypad.lift()
-        except Exception:
-            pass
+            float(new_value.replace(',', '.'))
+            return True
+        except ValueError:
+            return False
 
     def _bind_numeric_keypad(self, entry_widget, title="Inserir Valor"):
-        """Vincula un Entry para mostrar teclado numérico al hacer click."""
-        def on_click(event):
-            self.after(50, lambda: self._show_numeric_keypad(entry_widget, title))
-            return "break"
-        entry_widget.bind("<Button-1>", on_click)
-        entry_widget.bind("<Return>", lambda e: "break")
-        entry_widget.bind("<KP_Enter>", lambda e: "break")
+        """Deprecated: No operations."""
+        pass
+
+    def _check_connection_status(self):
+        """Monitora o status da conexão durante o diálogo de conexão."""
+        try:
+            if not getattr(self, '_connection_dialog_active', False):
+                return
+            
+            # Verificar se já conectou
+            if self.connected:
+                # Sucesso!
+                try:
+                    self._conn_progress.stop()
+                    self._conn_status.configure(text="Conectado com sucesso!", foreground="#22c55e") # Green
+                    self._conn_info.configure(text="Iniciando...", foreground="#22c55e")
+                    # Cerrar dialogo despues de 1s
+                    if hasattr(self, '_conn_dialog'):
+                        self._conn_dialog.after(1000, self._close_connection_dialog_success)
+                except Exception:
+                    self._close_connection_dialog_success()
+                return
+
+            # Verificar timeout ou error
+            elapsed = time.time() - getattr(self, '_conn_start_time', 0)
+            timeout = getattr(self, 'CONNECTION_ATTEMPT_TIMEOUT_S', 15) # Default a 15s si no está en config
+            if elapsed > timeout:
+                # Timeout
+                self._conn_status.configure(text="Tempo limite excedido", foreground="#dc2626")
+                self._conn_info.configure(text="Verifique cabos e portas COM")
+                self._conn_progress.stop()
+                return
+
+            # Si sigue intentando, agendar nueva revisión
+            if hasattr(self, '_conn_dialog') and self._conn_dialog.winfo_exists():
+                self._conn_dialog.after(200, self._check_connection_status)
+        except Exception as e:
+            print(f"Error checking connection status: {e}")
+            pass
+
+    def _close_connection_dialog_success(self):
+        try:
+            self._connection_dialog_active = False
+            if hasattr(self, '_conn_dialog'):
+                self._conn_dialog.destroy()
+        except:
+            pass
+
 
     def do_tare(self):
         # Si ya existe una tara aplicada, pedir confirmación antes de sobrescribir
@@ -2087,7 +2175,7 @@ class BalanzaGUI(ttk.Window):
                                 cols[t].append((w, r))
 
                     # Apply each non-empty column
-                    if hasattr(self, 'data_processor') and self.data_processor:
+                    if hasattr(self.data_processor) and self.data_processor:
                         for target, pts in cols.items():
                             if not pts:
                                 continue
@@ -2162,7 +2250,7 @@ class BalanzaGUI(ttk.Window):
         dialog = ttk.Toplevel(parent)
         dialog.overrideredirect(True)  # Quitar barra de Windows
         
-        # Centralizar em relao  tela
+        # Centralizar em relao  la tela
         screen_w = dialog.winfo_screenwidth()
         screen_h = dialog.winfo_screenheight()
         x = (screen_w // 2) - 350
@@ -2640,31 +2728,172 @@ class BalanzaGUI(ttk.Window):
         self.command_queue.put({'cmd': 'CONNECT'})
         dialog.after(100, self._check_connection_status)
     
-    def _check_connection_status(self):
-        """Verifica estado - llamado via after(), nunca bloquea."""
-        if not self._connection_dialog_active:
+    def _on_profile_select(self, event):
+        """Maneja la selección de un perfil en la lista."""
+        selection = self.tree_profiles.selection()
+        if not selection:
             return
+        
+        item_id = selection[0]
+        item = self.tree_profiles.item(item_id)
+        values = item['values'] 
+        # values: [ActiveChar, Name, Min, Max]
+
+    def _update_profile_field(self, event=None):
+        """Actualiza la estructura de datos interna inmediatamente al editar campos."""
+        if not hasattr(self, 'current_profile_id') or not self.current_profile_id:
+            return
+
+        # Obtener valores actuales de los inputs
+        name = self.entry_name.get()
+        
+        raw_min = self.entry_min.get().replace(',', '.')
+        raw_max = self.entry_max.get().replace(',', '.')
         
         try:
-            if not self._conn_dialog.winfo_exists():
-                return
-        except:
-            return
+            p_min = float(raw_min) if raw_min and raw_min not in ('-', '.', '-.') else 0.0
+        except ValueError:
+            p_min = 0.0
+        try:
+            p_max = float(raw_max) if raw_max and raw_max not in ('-', '.', '-.') else 0.0
+        except ValueError:
+            p_max = 0.0
+
+        # Validar rango [0, 1200] — mostrar alerta si fuera de rango
+        out_of_range = False
+        if p_min < 0 or p_min > 1200:
+            out_of_range = True
+            self.entry_min.delete(0, 'end')
+            self.entry_min.insert(0, "0")
+            p_min = 0.0
+        if p_max < 0 or p_max > 1200:
+            out_of_range = True
+            self.entry_max.delete(0, 'end')
+            self.entry_max.insert(0, "0")
+            p_max = 0.0
         
-        # xito
-        if self.connected:
-            self._conn_progress.stop()
-            self._conn_status.configure(text="Conectado!", foreground="#22c55e")
-            self._conn_info.configure(text="")
-            self._conn_btn.configure(state='disabled')
-            self._connection_dialog_active = False
-            self._conn_dialog.after(800, self._safe_close_conn_dialog)
-            return
+        if out_of_range:
+            # Evitar mostrar alerta repetidamente mientras escribe
+            if not getattr(self, '_range_alert_shown', False):
+                self._range_alert_shown = True
+                def _show_range_alert():
+                    try:
+                        # Buscar la ventana Toplevel padre (diálogo de config)
+                        parent = self.entry_min.winfo_toplevel()
+                        alert = ttk.Toplevel(parent)
+                        alert.overrideredirect(True)
+                        alert.grab_set()
+                        
+                        # Centrar sobre el diálogo padre
+                        aw, ah = 480, 200
+                        px = parent.winfo_rootx() + (parent.winfo_width() - aw) // 2
+                        py = parent.winfo_rooty() + (parent.winfo_height() - ah) // 2
+                        alert.geometry(f"{aw}x{ah}+{px}+{py}")
+                        alert.configure(relief="solid", borderwidth=2)
+                        
+                        # Contenido
+                        frm = ttk.Frame(alert, padding=20)
+                        frm.pack(fill=BOTH, expand=True)
+                        
+                        ttk.Label(frm, text="⚠  Valor Fora do Intervalo", 
+                                  font=("Segoe UI", 16, "bold"), foreground="#dc2626").pack(pady=(0, 10))
+                        ttk.Label(frm, text="Os valores devem estar entre 0 e 1200 kg.\nPor favor, insira um valor válido.",
+                                  font=("Segoe UI", 13), justify="center").pack(pady=(0, 15))
+                        
+                        def close_alert():
+                            try:
+                                alert.grab_release()
+                                alert.destroy()
+                            except Exception:
+                                pass
+                            # Restaurar visibilidad y grab del diálogo de config
+                            try:
+                                parent.lift()
+                                parent.attributes('-topmost', True)
+                                parent.grab_set()
+                                parent.focus_force()
+                                # Quitar topmost después de un momento para no bloquear otras ventanas
+                                parent.after(500, lambda: parent.attributes('-topmost', False))
+                            except Exception:
+                                pass
+                            self._range_alert_shown = False
+                        
+                        ttk.Button(frm, text="OK", bootstyle="danger", 
+                                   command=close_alert, padding=(30, 8)).pack()
+                        
+                        alert.protocol("WM_DELETE_WINDOW", close_alert)
+                    except Exception:
+                        self._range_alert_shown = False
+                
+                self.after(100, _show_range_alert)
+            return  # No guardar valores inválidos
+        else:
+            self._range_alert_shown = False
+
+        data = self._load_profiles()
+        if self.current_profile_id in data["profiles"]:
+            data["profiles"][self.current_profile_id]["name"] = name
+            data["profiles"][self.current_profile_id]["min"] = p_min
+            data["profiles"][self.current_profile_id]["max"] = p_max
+            
+        # Guardamos inmediatamente para que 'Active Profile' refleje cambios
+        self._save_profiles(data)
         
-        # Cancelado
-        if self._cancel_connection:
-            return
+        # Actualizar el item en el treeview sin recrear todo
+        try:
+            active_char = "✔" if data.get("active_profile") == self.current_profile_id else ""
+            self.tree_profiles.item(self.current_profile_id, values=(active_char, name, f"{p_min:.0f}", f"{p_max:.0f}"))
+        except Exception:
+            pass
         
+        # Refrescar display principal si es el activo
+        if data.get("active_profile") == self.current_profile_id:
+             self.after(200, lambda: self._update_display(self._last_sensor_data))
+
+    def _set_active_profile(self, slot_key):
+        """Define el perfil como activo y guarda."""
+        data = self._load_profiles()
+        if slot_key in data["profiles"]:
+            data["active_profile"] = slot_key
+            self._save_profiles(data)
+            self._refresh_profile_list()
+            # Actualizar display principal
+            self._update_display(self._last_sensor_data)
+
+    def _refresh_profile_list(self):
+        """Recarga la lista de perfiles."""
+        # Guardar selección actual
+        sel = self.tree_profiles.selection()
+        
+        for item in self.tree_profiles.get_children():
+            self.tree_profiles.delete(item)
+            
+        data = self._load_profiles()
+        profiles = data.get("profiles", {})
+        active = data.get("active_profile")
+        
+        # Ordenar por slotKey (slot_1, slot_2...)
+        sorted_keys = sorted(profiles.keys())
+        
+        for k in sorted_keys:
+            p = profiles[k]
+            is_active = (k == active)
+            active_char = "✔" if is_active else ""
+            
+            # Insertar
+            self.tree_profiles.insert("", END, iid=k, values=(
+                active_char,
+                p.get("name", ""),
+                f"{p.get('min', 0)}",
+                f"{p.get('max', 0)}"
+            ))
+            
+        # Restaurar selección
+        if sel:
+            try:
+                self.tree_profiles.selection_set(sel)
+            except:
+                pass
         # Actualizar información visual del diálogo (sin reintentos automáticos por tiempo).
         # El backend notifica el fin de cada tentativa con un mensaje 'STATUS' y
         # la GUI decidirá si lanzar otra tentativa allí.
@@ -3064,76 +3293,23 @@ class BalanzaGUI(ttk.Window):
         small_screen = (screen_w == 1280 and screen_h == 800)
         dialog.lift()
         dialog.focus_force()
-        # Fix Z-order para el diálogo de configuración completo
-        def force_top(event=None):
-            try:
-                # Evitar elevar el diálogo si el foco actual pertenece a una ventana hija (p.ej. keypad)
-                focus_widget = self.focus_get()
-                if focus_widget:
-                    try:
-                        top = focus_widget.winfo_toplevel()
-                    except Exception:
-                        top = None
-                    if top is not None and getattr(top, 'master', None) is dialog:
-                        return
-                dialog.lift()
-                dialog.attributes('-topmost', True)
-            except Exception:
-                pass
+        # Hacer modal con grab_set — permite teclado incluso con overrideredirect
         try:
-            self.bind('<FocusIn>', force_top)
+            dialog.grab_set()
         except Exception:
             pass
-
-        # Watchdog para mantener el diálogo encima si pierde z-order
-        def _watch_cfg():
+        # Asegurar que el diálogo reciba foco de teclado al hacer click en él
+        def _on_dialog_click(event):
             try:
-                if dialog.winfo_exists():
-                    # Si hay una bandera que suprime el watchdog (un diálogo hijo abierto), no forzar lift
-                    if getattr(self, '_suppress_cfg_watch', False):
-                        dialog.after(1000, _watch_cfg)
-                        return
-                    try:
-                        # Comprueba si el foco está en otro Toplevel (p.ej. keypad).
-                        focus_widget = self.focus_get()
-                        if focus_widget:
-                            try:
-                                top = focus_widget.winfo_toplevel()
-                            except Exception:
-                                top = None
-                            # Si el toplevel con foco es hijo del diálogo, darle topmost y lift
-                            if top is not None and getattr(top, 'master', None) is dialog:
-                                try:
-                                    top.attributes('-topmost', True)
-                                    top.lift()
-                                except Exception:
-                                    pass
-                                dialog.after(1000, _watch_cfg)
-                                return
-                            # Si el foco está en otra ventana distinta, no forzar lift del diálogo
-                            if top is not None and top is not dialog:
-                                dialog.after(1000, _watch_cfg)
-                                return
-                        # Si no hay otro foco relevante, asegurar topmost del diálogo
-                        try:
-                            dialog.lift()
-                            dialog.attributes('-topmost', True)
-                        except Exception:
-                            pass
-                    except Exception:
-                        pass
-                    dialog.after(1000, _watch_cfg)
+                widget = event.widget
+                # Si el click fue en un widget que acepta input, darle foco
+                if isinstance(widget, (ttk.Entry, ttk.Combobox)):
+                    widget.focus_set()
                 else:
-                    try:
-                        self.unbind('<FocusIn>')
-                    except Exception:
-                        pass
+                    dialog.focus_force()
             except Exception:
                 pass
-        try:
-            dialog.after(1000, _watch_cfg)
-        except Exception:
-            pass
+        dialog.bind("<Button-1>", _on_dialog_click)
         # No usar fullscreen para facilitar multitarea — diálogo centralizado
 
         # Estilos para abas grandes (touch-friendly) y CENTRADAS (simulado com padding o fill)
@@ -3359,15 +3535,195 @@ class BalanzaGUI(ttk.Window):
             pass
         # ==================== FIN BOTONES ABAJO (COMPACTOS) ====================
         
-        # Header: Solo Tabs (ocupa solo el ancho, no debe expandir verticalmente)
-        header_frame = ttk.Frame(main_frame)
-        # Permitir que el header y el notebook se expandan para rellenar verticalmente
-        header_frame.pack(fill=BOTH, expand=True, pady=(0, 5))
-        # Nota: el logo2 se mostrará junto al botón FECHAR en la esquina inferior derecha.
+        # === NOTEBOOK (TABS) ===
+        notebook = ttk.Notebook(main_frame)
+        notebook.pack(fill=BOTH, expand=True, pady=(0, 5))
 
-        # Usar un solo contenedor en lugar de pestañas: toda la configuración se muestra aquí
-        tab_nodes = ttk.Frame(header_frame, padding=10)
-        tab_nodes.pack(fill=BOTH, expand=True)
+        # --- TAB 1: Configuração (Existing) ---
+        tab_config = ttk.Frame(notebook, padding=10)
+        notebook.add(tab_config, text="Configuração")
+        
+        # Legacy variable name mapping to preserve existing logic below
+        tab_nodes = tab_config
+
+        # --- TAB 2: Manutenção (New) ---
+        tab_maint = ttk.Frame(notebook, padding=10)
+        notebook.add(tab_maint, text="Manutenção")
+        
+        # === MAINTENANCE TAB UI & LOGIC ===
+        maint_cols = ttk.Frame(tab_maint)
+        maint_cols.pack(fill=BOTH, expand=True)
+        maint_cols.columnconfigure(0, weight=1) # List
+        maint_cols.columnconfigure(1, weight=1) # Editor
+
+        # Estilo de fuente para campos de mantenimiento
+        maint_font = ("Segoe UI", 16)
+        maint_font_bold = ("Segoe UI", 16, "bold")
+
+        # Left: Lista de Perfis
+        frame_list = ttk.Labelframe(maint_cols, text="Perfis", padding=10)
+        frame_list.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+        
+        # Treeview for profiles
+        cols = ("status", "name", "min", "max")
+        tv = ttk.Treeview(frame_list, columns=cols, show='headings', height=5)
+        tv.heading("status", text="Ativo")
+        tv.heading("name", text="Nome")
+        tv.heading("min", text="Mín (kg)")
+        tv.heading("max", text="Máx (kg)")
+        # Columnas iguales, se ajustan al espacio disponible
+        for c in cols:
+            tv.column(c, width=80, minwidth=60, anchor="center", stretch=True)
+        
+        # Aumentar fuente del Treeview para coincidir con labels del editor
+        try:
+            style = ttk.Style()
+            style.configure("Treeview", font=("Segoe UI", 16), rowheight=self.scaled(40))
+            style.configure("Treeview.Heading", font=("Segoe UI", 16, "bold"))
+        except Exception:
+            pass
+
+        tv.pack(fill=BOTH, expand=True)
+        self.tree_profiles = tv
+
+        # Right: Editor de Perfis
+        frame_editor = ttk.Labelframe(maint_cols, text="Editor de Perfil", padding=15)
+        frame_editor.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
+        
+        ttk.Label(frame_editor, text="Nome do Perfil:", font=maint_font_bold).pack(anchor="w")
+        e_pname = ttk.Entry(frame_editor, font=maint_font)
+        e_pname.pack(fill=X, pady=(2, 8))
+        
+        vcmd = (self.register(self._validate_numeric_input), '%P')
+
+        ttk.Label(frame_editor, text="Peso Mínimo (kg):", font=maint_font_bold).pack(anchor="w")
+        e_pmin = ttk.Entry(frame_editor, font=maint_font, validate="key", validatecommand=vcmd)
+        e_pmin.pack(fill=X, pady=(2, 8))
+
+        ttk.Label(frame_editor, text="Peso Máximo (kg):", font=maint_font_bold).pack(anchor="w")
+        e_pmax = ttk.Entry(frame_editor, font=maint_font, validate="key", validatecommand=vcmd)
+        e_pmax.pack(fill=X, pady=(2, 8))
+
+
+
+        # Asignar a self para acceso en callbacks
+        self.entry_name = e_pname
+        self.entry_min = e_pmin
+        self.entry_max = e_pmax
+
+        # Bindings para actualización inmediata
+        self.entry_name.bind("<KeyRelease>", self._update_profile_field)
+        self.entry_min.bind("<KeyRelease>", self._update_profile_field)
+        self.entry_max.bind("<KeyRelease>", self._update_profile_field)
+
+        # Rótulo do perfil ativo
+        lbl_active_status = ttk.Label(frame_editor, text="Perfil Ativo: -", font=("Segoe UI", 14, "bold"), foreground="#16a34a")
+        lbl_active_status.pack(pady=(10, 5))
+
+        def load_profiles_to_ui():
+            # Clear tree
+            for item in tv.get_children():
+                tv.delete(item)
+            
+            data = self._load_profiles()
+            profiles = data.get("profiles", {})
+            active_slot = data.get("active_profile")
+            
+            # Load fixed slots 1-5
+            for i in range(1, 6):
+                slot_id = f"slot_{i}"
+                if slot_id in profiles:
+                    prof = profiles[slot_id]
+                    p_name = prof.get("name", f"Perfil {i}")
+                    p_min = prof.get("min", 0)
+                    p_max = prof.get("max", 0)
+                    
+                    is_active = (slot_id == active_slot)
+                    status_indicator = "✔" if is_active else ""
+                    
+                    tags = ('active',) if is_active else ()
+                    tv.insert("", "end", iid=slot_id, values=(status_indicator, p_name, p_min, p_max), tags=tags)
+            
+            # Update tag style
+            tv.tag_configure('active', font=("Segoe UI", 16, "bold"), background="#dcfce7") # Light green bg, same size
+
+            # Update active label status
+            act_name = profiles.get(active_slot, {}).get("name", "Nenhum") if active_slot else "Nenhum"
+            if 'lbl_active_status' in locals():
+                lbl_active_status.configure(text=f"Perfil Ativo: {act_name}")
+
+        def on_tv_select(event):
+            """Seleccionar perfil para edición (NO activa automáticamente)."""
+            sel = tv.selection()
+            if not sel: return
+            slot_id = sel[0]
+            self.current_profile_id = slot_id
+            
+            # Get data from profiles
+            data = self._load_profiles()
+            profiles_dict = data.get("profiles", {})
+            prof = profiles_dict.get(slot_id, {})
+            
+            # Fill editor fields only — no activation
+            self.entry_name.delete(0, END)
+            self.entry_name.insert(0, prof.get("name", ""))
+            self.entry_min.delete(0, END)
+            self.entry_min.insert(0, str(prof.get("min", 0)))
+            self.entry_max.delete(0, END)
+            self.entry_max.insert(0, str(prof.get("max", 0)))
+
+        tv.bind("<<TreeviewSelect>>", on_tv_select)
+
+        def activate_selected_profile():
+            """Activar el perfil seleccionado actualmente."""
+            sel = tv.selection()
+            if not sel:
+                try:
+                    self.show_alert("Aviso", "Selecione um perfil na lista primeiro.", parent=dialog)
+                except Exception:
+                    pass
+                return
+            slot_id = sel[0]
+            data = self._load_profiles()
+            profiles_dict = data.get("profiles", {})
+            prof = profiles_dict.get(slot_id, {})
+            
+            data["active_profile"] = slot_id
+            self._save_profiles(data)
+            
+            self.log_message(f"Perfil '{prof.get('name')}' ativado.")
+            
+            # Update Treeview tags visually
+            for child in tv.get_children():
+                if child == slot_id:
+                    tv.item(child, tags=('active',), values=("✔", tv.item(child, 'values')[1], tv.item(child, 'values')[2], tv.item(child, 'values')[3]))
+                else:
+                    tv.item(child, tags=(), values=("", tv.item(child, 'values')[1], tv.item(child, 'values')[2], tv.item(child, 'values')[3]))
+            
+            # Update active label
+            act_name = prof.get("name", "Nenhum")
+            lbl_active_status.configure(text=f"Perfil Ativo: {act_name}")
+            
+            # Refresh main display
+            try:
+                self._update_display(self._last_sensor_data)
+            except Exception:
+                pass
+
+        # === BOTÃO ATIVAR PERFIL ===
+        btn_activate = ttk.Button(
+            frame_editor,
+            text="✔  ATIVAR PERFIL",
+            bootstyle="success",
+            command=activate_selected_profile,
+            padding=(20, 12)
+        )
+        btn_activate.pack(fill=X, pady=(10, 5))
+
+        try:
+            load_profiles_to_ui()
+        except Exception:
+            pass
         
         
         # Preparar lista de puertos COM disponibles (se usará tanto para nodos como para transmisión)
@@ -4748,6 +5104,10 @@ class BalanzaGUI(ttk.Window):
         # Main Split
         main = ttk.Frame(wizard, padding=15)
         main.pack(fill=BOTH, expand=YES)
+        try:
+            main.pack_propagate(False)
+        except:
+            pass
         main.columnconfigure(0, weight=5)
         main.columnconfigure(1, weight=5)
         main.rowconfigure(0, weight=1)

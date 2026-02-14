@@ -53,6 +53,7 @@ def resource_path(relative_path):
 
 # Rutas específicas para archivos (lectura y escritura JUNTO AL EJECUTABLE o script)
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
+PROFILES_FILE = os.path.join(DATA_DIR, "profiles.json")
 CALIBRATIONS_DIR = os.path.join(DATA_DIR, "calibrations")
 
 # Asegurar que la subcarpeta 'calibrations' exista
