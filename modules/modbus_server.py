@@ -1,25 +1,8 @@
 """
 Modbus data server helper
 
-Esta clase crea un servidor Modbus TCP (PC como servidor) que mantiene una cola
-de datos y un bit de confirmación para que el PLC (cliente) indique que leyó
-el dato antes de descartarlo.
-
-Uso básico:
-  server = ModbusDataServer(host='0.0.0.0', port=5020)
-  server.start()
-  server.push_data([10, 20, 30])  # envía una lista de enteros (registros)
-
-Protocolo acordado con PLC:
-- Coil 0 (addr 0): data_available — el servidor la pone en 1 cuando hay dato.
-- Coil 1 (addr 1): data_ack — el PLC debe escribir 1 para confirmar lectura.
-- Holding registers a partir de `holding_start` contienen los datos.
-
-El PLC debe hacer: leer Coil0; si 1 -> leer HoldingRegisters (desde holding_start);
-luego escribir Coil1=1 para confirmar lectura; el servidor entonces descartará
-el dato y pasará al siguiente si existiera.
-
-Nota: requiere `pymodbus`. El módulo intenta usar la API "sync" de pymodbus.
+Servidor Modbus orientado a baja latencia: publica siempre el último valor
+directamente en los holding registers (sin handshake ACK).
 """
 from __future__ import annotations
 
@@ -124,7 +107,7 @@ class ModbusDataServer:
         self._monitor_thread: Optional[threading.Thread] = None
         self._running = threading.Event()
 
-        # coil addresses
+        # coil addresses (compatibilidad)
         self.COIL_DATA_AVAILABLE = 0
         self.COIL_ACK = 1
 
@@ -193,9 +176,7 @@ class ModbusDataServer:
             self._server_thread = threading.Thread(target=_serve_tcp, daemon=True)
         self._server_thread.start()
 
-        # monitor de ack para vaciar la cola
-        self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
-        self._monitor_thread.start()
+        # Sin monitor ACK: modo low-latency con publicación directa
 
     def stop(self) -> None:
         # no hay API directa para detener StartTcpServer en todas las versiones;
@@ -203,76 +184,37 @@ class ModbusDataServer:
         self._running.clear()
 
     def push_data(self, regs: List[int]) -> bool:
-        """Añade una lista de enteros (0..65535) a la cola.
-
-        Devuelve True si se añadió, False si la cola está llena.
-        """
+        """Publica inmediatamente una lista de enteros (0..65535)."""
         with self._lock:
-            if len(self._queue) >= self.max_queue:
-                return False
-            # truncar cada valor a 16-bit
             safe = [int(x) & 0xFFFF for x in regs]
-            self._queue.append(safe)
-
-            # si era la única entrada, publicar inmediatamente
-            if len(self._queue) == 1:
-                self._publish_first()
-
+            self._publish_values(safe)
             return True
 
+    def _publish_values(self, values: List[int]) -> None:
+        if not self._context:
+            return
+        if not values:
+            return
+        try:
+            self._context[0x00].setValues(3, self.holding_start, values)
+            # Mantener coil data_available=1 para clientes legados que la revisan
+            self._context[0x00].setValues(1, self.COIL_DATA_AVAILABLE, [1])
+        except Exception:
+            log.exception("Error publicando registros Modbus")
+
     def _publish_first(self) -> None:
+        # Método legado (sin uso en modo low-latency)
         if not self._context:
             return
         if not self._queue:
             return
         first = self._queue[0]
-        try:
-            # escribir holding registers
-            self._context[0x00].setValues(3, self.holding_start, first)
-            # poner bit data available
-            self._context[0x00].setValues(1, self.COIL_DATA_AVAILABLE, [1])
-            # asegurar ack en 0
-            self._context[0x00].setValues(1, self.COIL_ACK, [0])
-            log.debug("Publicado dato en holding[%s] len=%s", self.holding_start, len(first))
-        except Exception:
-            log.exception("Error publicando registros Modbus")
+        self._publish_values(first)
 
     def _monitor_loop(self) -> None:
-        # ciclo que vigila la coil de ACK escrita por el PLC
+        # Método legado (ACK deshabilitado)
         while self._running.is_set():
-            try:
-                if not self._context:
-                    time.sleep(0.02)
-                    continue
-
-                # leer coil ack
-                vals = self._context[0x00].getValues(1, self.COIL_ACK, count=1)
-                ack = bool(vals[0]) if vals else False
-                if ack:
-                    with self._lock:
-                        if self._queue:
-                            popped = self._queue.popleft()
-                            log.debug("PLC confirmó lectura, descartando dato: len=%s", len(popped))
-                            # si hay siguiente, publicarlo
-                            if self._queue:
-                                self._publish_first()
-                            else:
-                                # limpiar bit data_available y registros
-                                try:
-                                    self._context[0x00].setValues(1, self.COIL_DATA_AVAILABLE, [0])
-                                    self._context[0x00].setValues(3, self.holding_start, [0] * 10)
-                                except Exception:
-                                    log.exception("Error limpiando registros after ack")
-                        # limpiar ack
-                        try:
-                            self._context[0x00].setValues(1, self.COIL_ACK, [0])
-                        except Exception:
-                            log.exception("Error limpiando coil ACK")
-
-                time.sleep(0.02)
-            except Exception:
-                log.exception("Error en monitor Modbus")
-                time.sleep(0.1)
+            time.sleep(0.1)
 
 
 if __name__ == "__main__":

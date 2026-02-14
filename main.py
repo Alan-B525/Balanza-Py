@@ -106,6 +106,7 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
     last_modbus_retry_ts = 0.0
     modbus_retry_interval_s = 2.0
     modbus_last_not_started_reason = None
+    last_modbus_sample_ts = None
     
     def _start_modbus_if_needed():
         nonlocal modbus_server, modbus_last_not_started_reason
@@ -550,11 +551,29 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
 
                 # Empujar datos al servidor Modbus (si está activo)
                 try:
-                    if modbus_server is not None:
-                        # Enviar el total neto como int32 (2 registros) escalado x1000
-                        total = float(datos_procesados.get('total', 0.0) or 0.0)
-                        regs = _float_to_int32_registers(total, scale=1000)
-                        modbus_server.push_data(regs)
+                    if modbus_server is not None and raw_data:
+                        # Publicar sólo ante nueva muestra recibida del sensor
+                        latest_ts = None
+                        try:
+                            last_frame = raw_data[-1] if isinstance(raw_data, list) and raw_data else {}
+                            if isinstance(last_frame, dict):
+                                latest_ts = last_frame.get('timestamp_ns', None)
+                                if latest_ts is None:
+                                    latest_ts = last_frame.get('timestamp', None)
+                        except Exception:
+                            latest_ts = None
+
+                        should_publish = True
+                        if latest_ts is not None and latest_ts == last_modbus_sample_ts:
+                            should_publish = False
+
+                        if should_publish:
+                            # Enviar el total neto como int32 (2 registros) escalado x1000
+                            total = float(datos_procesados.get('total', 0.0) or 0.0)
+                            regs = _float_to_int32_registers(total, scale=1000)
+                            modbus_server.push_data(regs)
+                            if latest_ts is not None:
+                                last_modbus_sample_ts = latest_ts
                 except Exception:
                     pass
                 
