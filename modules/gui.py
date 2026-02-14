@@ -48,7 +48,11 @@ class BalanzaGUI(ttk.Window):
             self.log_message(f"Erro ao carregar sessão de calibração: {e}")
 
     def _load_profiles(self):
-        """Carrega perfis de manutenção. Garante que existam exatamente 5 perfis fixos (slots)."""
+        """Carrega perfis de manutenção a partir de settings.json.
+        Garante que existam exatamente 5 perfis fixos (slots).
+        Migra dados de profiles.json (legado) se encontrados."""
+        from config import SETTINGS_FILE, PROFILES_FILE, load_settings, save_settings
+        
         # Estructura base con keys estables
         base_profiles = {
             "slot_1": {"name": "Perfil 1", "min": 400, "max": 800},
@@ -61,23 +65,33 @@ class BalanzaGUI(ttk.Window):
         data = {"profiles": base_profiles, "active_profile": "slot_1"}
         
         try:
-            if os.path.exists(PROFILES_FILE):
-                with open(PROFILES_FILE, 'r', encoding='utf-8') as f:
-                    loaded = json.load(f)
-                    if isinstance(loaded, dict):
-                        loaded_profs = loaded.get("profiles", {})
-                        if isinstance(loaded_profs, dict):
-                            for k in base_profiles.keys():
-                                if k in loaded_profs:
-                                    # Merge fields (name, min, max)
-                                    base_profiles[k].update(loaded_profs[k])
-                            
-                            act = loaded.get("active_profile")
-                            if act in base_profiles:
-                                data["active_profile"] = act
-                        
-                        data["profiles"] = base_profiles
+            # Leer settings.json
+            settings = load_settings()
+            loaded_profs = settings.get("profiles_data", {}).get("profiles", {})
+            loaded_active = settings.get("profiles_data", {}).get("active_profile")
             
+            # Si no hay perfiles en settings.json, intentar migrar del archivo legado
+            if not loaded_profs and os.path.exists(PROFILES_FILE):
+                try:
+                    with open(PROFILES_FILE, 'r', encoding='utf-8') as f:
+                        legacy = json.load(f)
+                        if isinstance(legacy, dict):
+                            loaded_profs = legacy.get("profiles", {})
+                            loaded_active = legacy.get("active_profile")
+                except Exception:
+                    pass
+            
+            if isinstance(loaded_profs, dict):
+                for k in base_profiles.keys():
+                    if k in loaded_profs:
+                        base_profiles[k].update(loaded_profs[k])
+                
+                if loaded_active and loaded_active in base_profiles:
+                    data["active_profile"] = loaded_active
+                    
+            data["profiles"] = base_profiles
+            
+            # Guardar de vuelta en settings.json
             self._save_profiles(data)
             
         except Exception as e:
@@ -86,10 +100,12 @@ class BalanzaGUI(ttk.Window):
         return data
 
     def _save_profiles(self, profiles_data):
-        """Salva perfis de manutenção no arquivo JSON."""
+        """Salva perfis de manutenção dentro de settings.json."""
+        from config import load_settings, save_settings
         try:
-            with open(PROFILES_FILE, 'w', encoding='utf-8') as f:
-                json.dump(profiles_data, f, indent=4, ensure_ascii=False)
+            settings = load_settings()
+            settings["profiles_data"] = profiles_data
+            save_settings(settings)
             return True
         except Exception as e:
             print(f"Erro ao salvar perfis: {e}")
