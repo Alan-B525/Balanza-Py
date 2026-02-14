@@ -3277,10 +3277,9 @@ class BalanzaGUI(ttk.Window):
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
         try:
-            # Aplicar reducción adicional del 15% solicitada por el usuario
-            dlg_w = int(screen_w * 0.8 * 0.85)
-            # Reducir verticalmente el diálogo de CONFIG para hacerlo más compacto (15% menos)
-            dlg_h = int(screen_h * 0.83 * 0.85)
+            # usar ~80% del ancho y alto de la pantalla
+            dlg_w = int(screen_w * 0.80)
+            dlg_h = int(screen_h * 0.80)
             x = (screen_w - dlg_w) // 2
             y = (screen_h - dlg_h) // 2
             dialog.geometry(f"{dlg_w}x{dlg_h}+{x}+{y}")
