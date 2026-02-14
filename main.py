@@ -86,7 +86,7 @@ def _float_to_int32_registers(value: float, scale: int = 1000) -> list:
     return [hi, lo]
 
 
-def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modbus_params=None, modbus_server=None):
+def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modbus_params=None, modbus_server=None, execution_mode=None):
     """
     Thread secundaria (Backend) que gerencia o hardware e o processamento.
     Incluye manejo de desconexión de sensores y reconexión automática.
@@ -103,26 +103,22 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
     # Variables para conexión asíncrona
     connection_thread = None
     connection_in_progress = False
+    last_modbus_retry_ts = 0.0
+    modbus_retry_interval_s = 2.0
+    modbus_last_not_started_reason = None
     
     def _start_modbus_if_needed():
-        nonlocal modbus_server
+        nonlocal modbus_server, modbus_last_not_started_reason
         if modbus_server is not None:
             return
         if not modbus_params:
             return
         serial_port = modbus_params.get('serial_port')
         if not serial_port:
-            data_queue.put({'type': 'LOG', 'payload': "Modbus RTU não iniciado: porta serial não configurada."})
-            return
-        port_ok = True
-        try:
-            from serial.tools import list_ports
-            ports = {p.device for p in list_ports.comports()}
-            port_ok = serial_port in ports
-        except Exception:
-            port_ok = True
-        if not port_ok:
-            data_queue.put({'type': 'LOG', 'payload': f"Modbus RTU não iniciado: porta {serial_port} indisponível."})
+            reason = "porta serial não configurada"
+            if modbus_last_not_started_reason != reason:
+                data_queue.put({'type': 'LOG', 'payload': "Modbus RTU não iniciado: porta serial não configurada."})
+                modbus_last_not_started_reason = reason
             return
         try:
             modbus_server = ModbusDataServer(
@@ -134,12 +130,26 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                 timeout=modbus_params.get('timeout', 0.05),
             )
             modbus_server.start()
-            data_queue.put({'type': 'LOG', 'payload': f"Modbus RTU iniciado en {serial_port}"})
+            data_queue.put({'type': 'LOG', 'payload': f"Modbus RTU iniciado em {serial_port}"})
+            modbus_last_not_started_reason = None
         except Exception as e:
             modbus_server = None
-            data_queue.put({'type': 'LOG', 'payload': f"Modbus RTU no iniciado: {e}"})
+            reason = f"{type(e).__name__}: {e}"
+            if modbus_last_not_started_reason != reason:
+                data_queue.put({'type': 'LOG', 'payload': f"Modbus RTU não iniciado: {e}"})
+                modbus_last_not_started_reason = reason
 
     while running:
+        # Em modo MOCK, iniciar automaticamente o servidor Modbus RTU na porta virtual configurada
+        try:
+            if str(execution_mode or '').upper() == 'MOCK' and modbus_server is None:
+                now_modbus = time.monotonic()
+                if (now_modbus - last_modbus_retry_ts) >= modbus_retry_interval_s:
+                    last_modbus_retry_ts = now_modbus
+                    _start_modbus_if_needed()
+        except Exception:
+            pass
+
         # 1. Processar Comandos da GUI
         try:
             while True:
@@ -222,6 +232,7 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                         except Exception:
                             pass
                         modbus_server = None
+                    modbus_last_not_started_reason = None
                 
                 elif cmd == 'PAUSE_ACQUISITION':
                     acquisition_paused = True
@@ -299,6 +310,7 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                     payload = cmd_msg.get('payload', {}) or {}
                     new_port = payload.get('serial_port')
                     new_nodes = payload.get('nodes')
+                    new_transmissao = payload.get('transmissao')
                     try:
                         global ACTIVE_COM, ACTIVE_NODOS
                         if new_port:
@@ -322,6 +334,41 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                                 data_queue.put({'type': 'LOG', 'payload': f"Erro ao atualizar driver: {e}"})
 
                             data_queue.put({'type': 'LOG', 'payload': f"Mapeamento de nós atualizado ({len(ACTIVE_NODOS)} nós)"})
+
+                        # Actualizar parámetros de Modbus RTU en caliente
+                        if isinstance(new_transmissao, dict):
+                            if modbus_params is None:
+                                modbus_params = {}
+                            porta_conf = new_transmissao.get('porta')
+                            if isinstance(porta_conf, str) and porta_conf.strip():
+                                modbus_params['serial_port'] = porta_conf.strip()
+                            try:
+                                modbus_params['baudrate'] = int(new_transmissao.get('velocidade', modbus_params.get('baudrate', 3000000)))
+                            except Exception:
+                                pass
+                            p = new_transmissao.get('paridade', modbus_params.get('parity', 'Nenhuma'))
+                            if isinstance(p, str):
+                                mp = p.lower()
+                                if 'par' in mp and 'impar' not in mp:
+                                    modbus_params['parity'] = 'E'
+                                elif 'impar' in mp or 'ímpar' in mp:
+                                    modbus_params['parity'] = 'O'
+                                else:
+                                    modbus_params['parity'] = 'N'
+                            try:
+                                modbus_params['stopbits'] = int(new_transmissao.get('stopbits', modbus_params.get('stopbits', 1)))
+                            except Exception:
+                                pass
+                            try:
+                                modbus_params['bytesize'] = int(new_transmissao.get('bytesize', modbus_params.get('bytesize', 8)))
+                            except Exception:
+                                pass
+                            try:
+                                modbus_params['timeout'] = float(new_transmissao.get('timeout', modbus_params.get('timeout', 0.05)))
+                            except Exception:
+                                pass
+                            data_queue.put({'type': 'LOG', 'payload': "Configuração de transmissão Modbus atualizada."})
+                            modbus_last_not_started_reason = None
 
                         # Si ya estamos conectados, desconectar y reconectar usando la nueva configuración
                         def do_reconnect():
@@ -391,6 +438,7 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                         except Exception:
                             pass
                         modbus_server = None
+                    modbus_last_not_started_reason = None
                     
         except queue.Empty:
             pass
@@ -618,7 +666,7 @@ def main():
 
     backend_thread = threading.Thread(
         target=hilo_adquisicion,
-        args=(data_queue, command_queue, sistema_pesaje, procesador, modbus_params, modbus_server),
+        args=(data_queue, command_queue, sistema_pesaje, procesador, modbus_params, modbus_server, ACTIVE_MODE),
         daemon=True
     )
     backend_thread.start()

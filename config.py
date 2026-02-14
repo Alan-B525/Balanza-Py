@@ -156,6 +156,7 @@ DEFAULT_SETTINGS = {
     "timeout": TRANSMISSAO.get("timeout", 0.05),
     "id_escravo_pc": TRANSMISSAO.get("id_escravo_pc", 1),
     "swap_words": TRANSMISSAO.get("swap_words", False),
+    "mock_sample_rate_hz": 20,
     "nodes": NODOS_CONFIG,
     "transmissao": TRANSMISSAO,
 }

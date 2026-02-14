@@ -42,9 +42,16 @@ except Exception:  # pragma: no cover - optional dependency
     try:
         # pymodbus >=3.x
         from pymodbus.server import StartTcpServer, StartSerialServer
-        from pymodbus.datastore import ModbusSlaveContext, ModbusServerContext
+        try:
+            from pymodbus.datastore import ModbusSlaveContext
+        except Exception:
+            from pymodbus.datastore import ModbusDeviceContext as ModbusSlaveContext
+        from pymodbus.datastore import ModbusServerContext
         from pymodbus.datastore import ModbusSequentialDataBlock
-        from pymodbus.device import ModbusDeviceIdentification
+        try:
+            from pymodbus.device import ModbusDeviceIdentification
+        except Exception:
+            from pymodbus import ModbusDeviceIdentification
         try:
             from pymodbus.framer import ModbusRtuFramer
         except Exception:
@@ -56,9 +63,16 @@ except Exception:  # pragma: no cover - optional dependency
         try:
             # pymodbus >=3.x (startstop module)
             from pymodbus.server.startstop import StartTcpServer, StartSerialServer
-            from pymodbus.datastore import ModbusSlaveContext, ModbusServerContext
+            try:
+                from pymodbus.datastore import ModbusSlaveContext
+            except Exception:
+                from pymodbus.datastore import ModbusDeviceContext as ModbusSlaveContext
+            from pymodbus.datastore import ModbusServerContext
             from pymodbus.datastore import ModbusSequentialDataBlock
-            from pymodbus.device import ModbusDeviceIdentification
+            try:
+                from pymodbus.device import ModbusDeviceIdentification
+            except Exception:
+                from pymodbus import ModbusDeviceIdentification
             try:
                 from pymodbus.framer import ModbusRtuFramer
             except Exception:
@@ -121,12 +135,21 @@ class ModbusDataServer:
         # preparar datastore
         hr_block = ModbusSequentialDataBlock(0, [0] * 2000)
         co_block = ModbusSequentialDataBlock(0, [0] * 100)
-        store = ModbusSlaveContext(di=ModbusSequentialDataBlock(0, [0] * 100),
-                                  co=co_block,
-                                  hr=hr_block,
-                                  ir=ModbusSequentialDataBlock(0, [0] * 100),
-                                  zero_mode=True)
-        context = ModbusServerContext(slaves=store, single=True)
+        try:
+            store = ModbusSlaveContext(di=ModbusSequentialDataBlock(0, [0] * 100),
+                                      co=co_block,
+                                      hr=hr_block,
+                                      ir=ModbusSequentialDataBlock(0, [0] * 100),
+                                      zero_mode=True)
+        except TypeError:
+            store = ModbusSlaveContext(di=ModbusSequentialDataBlock(0, [0] * 100),
+                                      co=co_block,
+                                      hr=hr_block,
+                                      ir=ModbusSequentialDataBlock(0, [0] * 100))
+        try:
+            context = ModbusServerContext(slaves=store, single=True)
+        except TypeError:
+            context = ModbusServerContext(devices=store, single=True)
         identity = ModbusDeviceIdentification()
         identity.VendorName = "Balanza-Py"
         identity.ProductCode = "BP"
@@ -148,8 +171,18 @@ class ModbusDataServer:
             log.info("Arrancando servidor Modbus RTU en %s @%s,%s%s", self.serial_port, self.baudrate, self.parity, '')
             try:
                 # StartSerialServer espera argumentos similares a pyserial: port, baudrate, parity, stopbits, bytesize, timeout
-                StartSerialServer(context, framer=ModbusRtuFramer, port=self.serial_port, baudrate=self.baudrate,
-                                  parity=self.parity, stopbits=self.stopbits, bytesize=self.bytesize, timeout=self.timeout)
+                try:
+                    # pymodbus 3.12+: espera nombre de framer
+                    StartSerialServer(context, framer="rtu", port=self.serial_port, baudrate=self.baudrate,
+                                      parity=self.parity, stopbits=self.stopbits, bytesize=self.bytesize, timeout=self.timeout)
+                except Exception:
+                    if ModbusRtuFramer is not None:
+                        # fallback para variantes legacy
+                        StartSerialServer(context, framer=ModbusRtuFramer, port=self.serial_port, baudrate=self.baudrate,
+                                          parity=self.parity, stopbits=self.stopbits, bytesize=self.bytesize, timeout=self.timeout)
+                    else:
+                        StartSerialServer(context, port=self.serial_port, baudrate=self.baudrate,
+                                          parity=self.parity, stopbits=self.stopbits, bytesize=self.bytesize, timeout=self.timeout)
             except Exception as e:
                 log.exception("Error en Modbus Serial server: %s", e)
 

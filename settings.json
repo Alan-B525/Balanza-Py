@@ -9,6 +9,7 @@
     "timeout": 0.05,
     "id_escravo_pc": 1,
     "swap_words": false,
+    "mock_sample_rate_hz": 20,
     "nodes": {
         "celda_1": {
             "id": 4248,
@@ -20,12 +21,9 @@
         }
     },
     "transmissao": {
-        "porta": "COM4",
+        "porta": "COM10",
         "velocidade": 3000000,
         "paridade": "Nenhuma",
-        "stopbits": 1,
-        "bytesize": 8,
-        "timeout": 0.05,
         "id_escravo_pc": 1,
         "swap_words": false
     },

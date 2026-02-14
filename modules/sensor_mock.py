@@ -16,6 +16,13 @@ class MockDriver(ISistemaPesaje):
     def __init__(self, nodos_config: Optional[Dict[str, Any]] = None, use_sensor_config: bool = False):
         self.nodos_config = nodos_config or {}
         self.use_sensor_config = use_sensor_config
+
+        self._stair_min = 0.0
+        self._stair_max = 1200.0
+        self._stair_step = 10.0
+        self._stair_value = self._stair_min
+        self._stair_direction = 1
+        self._mock_frequency_hz = self._resolve_mock_frequency_hz()
         
         self._running = False
         self._thread = None
@@ -36,8 +43,8 @@ class MockDriver(ISistemaPesaje):
         return True
 
     def _producer_loop(self):
-        # Generar frames a 1 Hz
-        period = 1
+        # Gerar frames com frequência configurável
+        period = 1.0 / max(self._mock_frequency_hz, 0.1)
         while self._running:
             ts_ns = int(time.time() * 1e9)
             readings = {}
@@ -61,13 +68,13 @@ class MockDriver(ISistemaPesaje):
                     ch_angle = 'ch2'
 
                 for channel in channels:
-                    # Valores simulados según canal (usando config)
+                    # Valores simulados por canal (escada na carga)
                     if channel == ch_angle:
-                        # Ángulo: 0 a 10 grados
-                        val = random.uniform(0.0, 10.0)
+                        # Ângulo fixo para não interferir na visualização da escada
+                        val = 0.0
                     else:
-                        # Carga: -50 a 1250 (con margen para tare)
-                        val = random.uniform(-50.0, 1250.0)
+                        # Carga em escada: 0 -> 1200 -> 0
+                        val = self._next_stair_value()
                     
                     key = f"{nid}:{channel}"
                     readings[key] = val
@@ -86,6 +93,48 @@ class MockDriver(ISistemaPesaje):
             while len(self._frames) > 200:
                 self._frames.popleft()
             time.sleep(period)
+
+    def _next_stair_value(self) -> float:
+        value = self._stair_value
+        next_value = self._stair_value + (self._stair_step * self._stair_direction)
+        if next_value >= self._stair_max:
+            next_value = self._stair_max
+            self._stair_direction = -1
+        elif next_value <= self._stair_min:
+            next_value = self._stair_min
+            self._stair_direction = 1
+        self._stair_value = next_value
+        return value
+
+    def _resolve_mock_frequency_hz(self) -> float:
+        # Prioridade 1: configuração do primeiro nó lógico
+        try:
+            if isinstance(self.nodos_config, dict) and self.nodos_config:
+                first_logical = next(iter(self.nodos_config))
+                cfg = self.nodos_config.get(first_logical) or {}
+                val = cfg.get('mock_frequency_hz')
+                if val is not None:
+                    hz = float(val)
+                    if hz > 0:
+                        return hz
+        except Exception:
+            pass
+
+        # Prioridade 2: settings.json global
+        try:
+            import config
+            settings = config.load_settings()
+            if isinstance(settings, dict):
+                val = settings.get('mock_sample_rate_hz')
+                if val is not None:
+                    hz = float(val)
+                    if hz > 0:
+                        return hz
+        except Exception:
+            pass
+
+        # Default
+        return 20.0
 
     def esta_conectado(self) -> bool:
         return self._state in ('connected', 'sampling')
@@ -195,6 +244,9 @@ class MockDriver(ISistemaPesaje):
             self._logical_to_id[first_logical] = nid
             self._expected_node_ids.add(nid)
             self._node_channels[nid] = {ch_load, ch_angle}
+
+        # Recalcular frequência após atualização de config
+        self._mock_frequency_hz = self._resolve_mock_frequency_hz()
 
 
 RealPesajeMock = MockDriver
