@@ -3146,7 +3146,7 @@ class BalanzaGUI(ttk.Window):
             title_lbl.pack(pady=(0, 12))
 
             # Fuente base para la ventana CONFIG — mantener tamaños consistentes
-            base_font_size = 13
+            base_font_size = 14
             base_font = ("Segoe UI", self.scaled_font(base_font_size))
 
             # Mensaje
@@ -3555,14 +3555,14 @@ class BalanzaGUI(ttk.Window):
         maint_cols.pack(fill=BOTH, expand=True)
         maint_cols.columnconfigure(0, weight=1) # List
         maint_cols.columnconfigure(1, weight=1) # Editor
+        maint_cols.rowconfigure(0, weight=1)     # Stretch vertically
 
         # Estilo de fuente para campos de mantenimiento
         maint_font = ("Segoe UI", 16)
         maint_font_bold = ("Segoe UI", 16, "bold")
 
-        # Left: Lista de Perfis
-        frame_list = ttk.Labelframe(maint_cols, text="Perfis", padding=10)
-        frame_list.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+        frame_list = ttk.Labelframe(maint_cols, text="Perfis", padding=15, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Panel.TLabelframe')
+        frame_list.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=8)
         
         # Treeview for profiles
         cols = ("status", "name", "min", "max")
@@ -3587,8 +3587,8 @@ class BalanzaGUI(ttk.Window):
         self.tree_profiles = tv
 
         # Right: Editor de Perfis
-        frame_editor = ttk.Labelframe(maint_cols, text="Editor de Perfil", padding=15)
-        frame_editor.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
+        frame_editor = ttk.Labelframe(maint_cols, text="Editor de Perfil", padding=15, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Panel.TLabelframe')
+        frame_editor.grid(row=0, column=1, sticky="nsew", padx=(8, 0), pady=8)
         
         ttk.Label(frame_editor, text="Nome do Perfil:", font=maint_font_bold).pack(anchor="w")
         e_pname = ttk.Entry(frame_editor, font=maint_font)
@@ -3710,15 +3710,13 @@ class BalanzaGUI(ttk.Window):
             except Exception:
                 pass
 
-        # === BOTÃO ATIVAR PERFIL ===
         btn_activate = ttk.Button(
             frame_editor,
             text="✔  ATIVAR PERFIL",
             bootstyle="success",
             command=activate_selected_profile,
-            padding=(20, 12)
         )
-        btn_activate.pack(fill=X, pady=(10, 5))
+        btn_activate.pack(fill=X, ipadx=self.scaled(10), ipady=self.scaled(8), pady=(10, 5))
 
         try:
             load_profiles_to_ui()
@@ -3791,9 +3789,9 @@ class BalanzaGUI(ttk.Window):
         main_content.rowconfigure(0, weight=0)
         main_content.rowconfigure(1, weight=1)
 
-        # === COLUMNA IZQUIERDA: Búsqueda de Nodos ===
-        discover_frame = ttk.Labelframe(main_content, text="TRANSMISSÃO PLC / MODBUS", padding=12, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Panel.TLabelframe')
-        discover_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 8))
+        # === COLUMNA IZQUIERDA: Transmissão de Dados ===
+        discover_frame = ttk.Labelframe(main_content, text="Transmissão de Dados", padding=15, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Panel.TLabelframe')
+        discover_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 8), pady=8)
         try:
             discover_frame.grid_propagate(True)
         except Exception:
@@ -3816,65 +3814,37 @@ class BalanzaGUI(ttk.Window):
             except Exception:
                 pass
         
-        # ==================== Seção de Transmissão PLC/MODBUS ====================
-        # Reutilizamos el espacio donde antes estaba la descoberta de nodos
-        ttk.Label(discover_frame, text='[ SEÇÃO PLC / MODBUS ]', font=("Segoe UI", 12, "bold")).pack(anchor="w", pady=(0, 6))
+        # ==================== Seção de Transmissão Modbus ====================
 
         trans_grid = ttk.Frame(discover_frame)
         trans_grid.pack(fill=X, pady=(2, 6))
         trans_grid.columnconfigure(1, weight=1)
 
-        ttk.Label(trans_grid, text="Porta:", font=base_font).grid(row=0, column=0, sticky="w", padx=(0, 20))
+        ttk.Label(trans_grid, text="Porta:", font=base_font).grid(row=0, column=0, sticky="w", padx=(0, 20), pady=6)
         # Campo COM para la sección de transmissão
         try:
-            entry_trans = ttk.Combobox(trans_grid, font=base_font, width=12, values=com_values)
+            entry_trans = ttk.Combobox(trans_grid, font=base_font, values=com_values)
             entry_trans.set(current_port)
         except Exception:
-            entry_trans = ttk.Entry(trans_grid, font=base_font, width=12)
+            entry_trans = ttk.Entry(trans_grid, font=base_font)
             entry_trans.insert(0, current_port)
-        entry_trans.grid(row=0, column=1, sticky="w", ipady=self.scaled(6))
+        entry_trans.grid(row=0, column=1, sticky="ew", ipady=self.scaled(6), pady=6)
 
-        def refresh_trans_ports():
-            try:
-                import serial.tools.list_ports
-                ports = serial.tools.list_ports.comports()
-                new_values = [p.device for p in ports]
-                if new_values:
-                    try:
-                        new_values.sort(key=lambda x: int(x.replace('COM', '')) if x.startswith('COM') and x[3:].isdigit() else x)
-                    except Exception:
-                        pass
-                    try:
-                        entry_trans['values'] = new_values
-                        entry_trans.set(new_values[0])
-                    except Exception:
-                        try:
-                            entry_trans.delete(0, 'end')
-                            entry_trans.insert(0, new_values[0])
-                        except Exception:
-                            pass
-            except Exception:
-                try:
-                    self.show_alert("Aviso", "Instale 'pyserial' para deteccao automatica.", parent=dialog)
-                except Exception:
-                    pass
 
-        ttk.Button(trans_grid, text="Atualizar", command=refresh_trans_ports, bootstyle="secondary-outline", width=10).grid(row=0, column=2, padx=(15, 0))
-
-        ttk.Label(trans_grid, text="Velocidade:", font=base_font).grid(row=1, column=0, sticky="w", padx=(0, 20), pady=(8,0))
-        entry_baud = ttk.Combobox(trans_grid, font=base_font, width=12, values=["9600", "19200", "38400", "57600", "115200"])
+        ttk.Label(trans_grid, text="Velocidade:", font=base_font).grid(row=1, column=0, sticky="w", padx=(0, 20), pady=6)
+        entry_baud = ttk.Combobox(trans_grid, font=base_font, values=["9600", "19200", "38400", "57600", "115200"])
         entry_baud.set(str(current_config.get("baudrate", current_config.get("velocidade", 9600))))
-        entry_baud.grid(row=1, column=1, sticky="w", ipady=self.scaled(4), pady=(8,0))
+        entry_baud.grid(row=1, column=1, sticky="ew", ipady=self.scaled(5), pady=6)
 
-        ttk.Label(trans_grid, text="Paridade:", font=base_font).grid(row=2, column=0, sticky="w", padx=(0, 20), pady=(8,0))
-        combo_parity = ttk.Combobox(trans_grid, font=base_font, width=12, values=["Nenhuma", "Par", "Ímpar"])
+        ttk.Label(trans_grid, text="Paridade:", font=base_font).grid(row=2, column=0, sticky="w", padx=(0, 20), pady=6)
+        combo_parity = ttk.Combobox(trans_grid, font=base_font, values=["Nenhuma", "Par", "Ímpar"])
         combo_parity.set(current_config.get("transmissao", {}).get("paridade", current_config.get("paridade", "Nenhuma")))
-        combo_parity.grid(row=2, column=1, sticky="w", ipady=self.scaled(4), pady=(8,0))
+        combo_parity.grid(row=2, column=1, sticky="ew", ipady=self.scaled(5), pady=6)
 
-        ttk.Label(trans_grid, text="ID Escravo PC:", font=base_font).grid(row=3, column=0, sticky="w", padx=(0, 20), pady=(8,0))
-        e_slave = ttk.Entry(trans_grid, font=base_font, width=12)
+        ttk.Label(trans_grid, text="ID Escravo:", font=base_font).grid(row=3, column=0, sticky="w", padx=(0, 20), pady=6)
+        e_slave = ttk.Entry(trans_grid, font=base_font)
         e_slave.insert(0, str(current_config.get("transmissao", {}).get("id_escravo_pc", current_config.get("id_escravo_pc", 1))))
-        e_slave.grid(row=3, column=1, sticky="w", ipady=self.scaled(4), pady=(8,0))
+        e_slave.grid(row=3, column=1, sticky="ew", ipady=self.scaled(5), pady=6)
 
         swap_var = tk.BooleanVar(value=current_config.get("transmissao", {}).get("swap_words", current_config.get("swap_words", False)))
         try:
@@ -3891,8 +3861,8 @@ class BalanzaGUI(ttk.Window):
         except Exception:
             pass
         
-        # === COLUMNA DERECHA: Asignación de Células ===
-        panel1 = ttk.Labelframe(main_content, text="NÓ", padding=12, borderwidth=self.scaled(2), relief='solid', labelanchor='n', style='Panel.TLabelframe')
+        # === COLUMNA DERECHA: Configuração do Nó ===
+        panel1 = ttk.Labelframe(main_content, text="Configuração do Nó", padding=15, borderwidth=self.scaled(2), relief='solid', labelanchor='n', style='Panel.TLabelframe')
         panel1.grid(row=1, column=1, rowspan=1, sticky="nsew", padx=(8, 0), pady=8)
         panel1.columnconfigure(0, weight=1)
         panel1.rowconfigure(0, weight=1)
@@ -3907,29 +3877,14 @@ class BalanzaGUI(ttk.Window):
             key = f"celda_{celda_num}"
             current_node_data = current_config["nodes"].get(key, {"id": 0, "ch": "ch1", "nombre": f"Celda {celda_num}", "serial": ""})
             
-            # Frame de cada celda con borde más visible, dentro del panel correspondiente
-            parent_panel = panel1
-            # Mostrar sólo la etiqueta simple CÉLULA N (no mostrar posición frente/atrás/izq/der)
-            cell_frame = ttk.Labelframe(parent_panel, text=f"CÉLULA {celda_num}", padding=15)
-            cell_frame.grid(row=row, column=0, sticky="nsew", padx=8, pady=8)
-            # Permitir que el frame propague cambios de tamaño para evitar recortes
-            try:
-                cell_frame.grid_propagate(True)
-            except Exception:
-                pass
-            try:
-                cell_frame.pack_propagate(True)
-            except Exception:
-                pass
+            # Layout directamente dentro de panel1 (sin Labelframe anidado)
+            cell_grid = ttk.Frame(panel1)
+            cell_grid.grid(row=row, column=0, sticky="nsew", padx=8, pady=8)
             
-            # Layout interno usando grid para alinear labels y campos
-            cell_grid = ttk.Frame(cell_frame)
-            cell_grid.pack(fill=BOTH, expand=True)
-            
-            field_width = 12
+            field_width = 16
             # Configurar dos columnas: etiqueta y campo
             try:
-                cell_grid.columnconfigure(0, weight=0, minsize=self.scaled(100))
+                cell_grid.columnconfigure(0, weight=0, minsize=self.scaled(140))
                 cell_grid.columnconfigure(1, weight=1)
             except Exception:
                 pass
@@ -3937,58 +3892,70 @@ class BalanzaGUI(ttk.Window):
             row_idx = 0
 
             # Porta COM para o nó (usar lista de portas detectadas) - colocar primero
-            ttk.Label(cell_grid, text="Porta COM:", font=base_font).grid(row=row_idx, column=0, sticky='w', padx=(0,12), pady=4)
+            ttk.Label(cell_grid, text="Porta COM:", font=base_font).grid(row=row_idx, column=0, sticky='w', padx=(0,12), pady=6)
             try:
-                e_com = ttk.Combobox(cell_grid, font=base_font, width=12, values=com_values)
+                e_com = ttk.Combobox(cell_grid, font=base_font, width=16, values=com_values)
                 node_port = current_node_data.get("com_port", current_node_data.get("serial_port", ""))
                 if node_port:
                     e_com.set(node_port)
                 elif com_values:
                     e_com.set(com_values[0])
             except Exception:
-                e_com = ttk.Entry(cell_grid, font=base_font, width=12)
+                e_com = ttk.Entry(cell_grid, font=base_font, width=16)
                 e_com.insert(0, current_node_data.get("com_port", ""))
-            e_com.grid(row=row_idx, column=1, sticky='w', pady=4)
+            e_com.grid(row=row_idx, column=1, sticky='ew', pady=6)
             row_idx += 1
 
             # Node ID
-            ttk.Label(cell_grid, text="ID:", font=base_font).grid(row=row_idx, column=0, sticky='w', padx=(0,12), pady=4)
+            ttk.Label(cell_grid, text="ID do Nó:", font=base_font).grid(row=row_idx, column=0, sticky='w', padx=(0,12), pady=6)
             e_id = ttk.Entry(cell_grid, font=base_font, width=field_width)
             e_id.insert(0, str(current_node_data.get("id", 0)))
-            e_id.grid(row=row_idx, column=1, sticky='w', pady=4)
+            e_id.grid(row=row_idx, column=1, sticky='ew', pady=6)
             self._bind_numeric_keypad(e_id, f"ID do Nó - Célula {celda_num}")
             row_idx += 1
 
             # Número de Série
-            ttk.Label(cell_grid, text="Número de Série:", font=base_font).grid(row=row_idx, column=0, sticky='w', padx=(0,12), pady=4)
+            ttk.Label(cell_grid, text="Nº de Série:", font=base_font).grid(row=row_idx, column=0, sticky='w', padx=(0,12), pady=6)
             e_serial = ttk.Entry(cell_grid, font=base_font, width=field_width)
             e_serial.insert(0, str(current_node_data.get("serial", "")))
-            e_serial.grid(row=row_idx, column=1, sticky='w', pady=4)
+            e_serial.grid(row=row_idx, column=1, sticky='ew', pady=6)
             self._bind_numeric_keypad(e_serial, f"Nº Série - Célula {celda_num}")
             row_idx += 1
             
             # Channel Load - RadioButtons
-            ttk.Label(cell_grid, text="Canal Carga:", font=base_font).grid(row=row_idx, column=0, sticky='w', padx=(0,12), pady=4)
+            ttk.Label(cell_grid, text="Canal Carga:", font=base_font).grid(row=row_idx, column=0, sticky='w', padx=(0,12), pady=6)
             ch_load_var = tk.StringVar(value=current_node_data.get("ch_load", current_node_data.get("ch", "ch1")))
             ch_load_frame = ttk.Frame(cell_grid)
-            ch_load_frame.grid(row=row_idx, column=1, sticky='w', pady=4)
+            ch_load_frame.grid(row=row_idx, column=1, sticky='w', pady=6)
             for ch_opt in ["ch1", "ch2", "ch3"]:
                 ttk.Radiobutton(
-                    ch_load_frame, text=ch_opt[-1], variable=ch_load_var, value=ch_opt,
-                    bootstyle="info-toolbutton", width=3, padding=(8, 5)
-                ).pack(side=LEFT, padx=2)
+                    ch_load_frame, text=f" {ch_opt[-1]} ", variable=ch_load_var, value=ch_opt,
+                    bootstyle="info-toolbutton", width=5, padding=(14, 8)
+                ).pack(side=LEFT, padx=3)
+            ch_load_font = ("Segoe UI", self.scaled_font(15), "bold")
+            try:
+                for rb in ch_load_frame.winfo_children():
+                    rb.configure(font=ch_load_font)
+            except Exception:
+                pass
             row_idx += 1
 
             # Channel Angle - RadioButtons
-            ttk.Label(cell_grid, text="Canal Ângulo:", font=base_font).grid(row=row_idx, column=0, sticky='w', padx=(0,12), pady=4)
+            ttk.Label(cell_grid, text="Canal Ângulo:", font=base_font).grid(row=row_idx, column=0, sticky='w', padx=(0,12), pady=6)
             ch_angle_var = tk.StringVar(value=current_node_data.get("ch_angle", "ch2"))
             ch_angle_frame = ttk.Frame(cell_grid)
-            ch_angle_frame.grid(row=row_idx, column=1, sticky='w', pady=4)
+            ch_angle_frame.grid(row=row_idx, column=1, sticky='w', pady=6)
             for ch_opt in ["ch1", "ch2", "ch3"]:
                 ttk.Radiobutton(
-                    ch_angle_frame, text=ch_opt[-1], variable=ch_angle_var, value=ch_opt,
-                    bootstyle="warning-toolbutton", width=3, padding=(8, 5)
-                ).pack(side=LEFT, padx=2)
+                    ch_angle_frame, text=f" {ch_opt[-1]} ", variable=ch_angle_var, value=ch_opt,
+                    bootstyle="warning-toolbutton", width=5, padding=(14, 8)
+                ).pack(side=LEFT, padx=3)
+            ch_angle_font = ("Segoe UI", self.scaled_font(15), "bold")
+            try:
+                for rb in ch_angle_frame.winfo_children():
+                    rb.configure(font=ch_angle_font)
+            except Exception:
+                pass
             row_idx += 1
             
             node_entries[key] = {
