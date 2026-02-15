@@ -371,8 +371,9 @@ class BalanzaGUI(ttk.Window):
         # Reducir tamaño del título para que no ocupe tanto espacio en el footer
         self.style.configure('HeaderTitle.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_MAIN, sf(16), "bold"))
         self.style.configure('HeaderSub.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, sf(12)))
-        self.style.configure('LedChip.TFrame', background=BG_CARD, relief="solid", borderwidth=1)
-        self.style.configure('LedChipLabel.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, sf(10), "bold"))
+        # Status Badge styles — fondo neutro, solo el LED cambia de color
+        self.style.configure('StatusBadge.TFrame', background=BG_CARD, relief='flat')
+        self.style.configure('StatusBadgeLabel.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, sf(13), "bold"))
         self.style.configure('HeaderStatus.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, sf(16), "bold"))
         # Logo label style to ensure visibility
         self.style.configure('Logo.TLabel', background=BG_CARD)
@@ -497,38 +498,40 @@ class BalanzaGUI(ttk.Window):
             status_frame = ttk.Frame(brand_frame, style='Header.TFrame')
             status_frame.pack(side=LEFT, padx=(0, 0))
 
-            led_size = max(12, self.scaled(16))
+            # --- Indicadores de estado (dots profesionales) ---
+            dot_size = max(16, self.scaled(22))
             chip_pad_x = self.scaled(8)
-            chip_pad_y = self.scaled(4)
+            chip_pad_y = self.scaled(5)
 
-            self._status_text = ttk.Label(status_frame, text="Desconectado", style='HeaderStatus.TLabel', font=("Segoe UI", self.scaled_font(18), "bold"))
+            self._status_text = ttk.Label(status_frame, text="Desconectado", style='HeaderStatus.TLabel', font=("Segoe UI", self.scaled_font(18), "bold"), width=14, anchor='w')
             self._status_text.pack(side=LEFT, padx=(0, self.scaled(10)))
 
             led_group = ttk.Frame(status_frame, style='Header.TFrame')
             led_group.pack(side=LEFT, padx=(0, 0))
 
-            node_chip = ttk.Frame(led_group, style='LedChip.TFrame', padding=(chip_pad_x, chip_pad_y))
-            node_chip.pack(side=LEFT, padx=(0, self.scaled(6)))
+            # --- NÓ ---
+            node_chip = ttk.Frame(led_group, style='Header.TFrame', padding=(chip_pad_x, chip_pad_y))
+            node_chip.pack(side=LEFT, padx=(0, self.scaled(4)))
 
-            self._node_led_label = ttk.Label(node_chip, text="NÓ", style='LedChipLabel.TLabel')
-            self._node_led_label.pack(side=LEFT, padx=(0, self.scaled(6)))
+            dot = self._create_status_dot(node_chip, dot_size)
+            self._status_led = dot['canvas']
+            self._status_led_outer = dot['ring']
+            self._status_led_inner = dot['fill']
 
-            self._status_led = tk.Canvas(node_chip, width=led_size, height=led_size, highlightthickness=0, bd=0, bg="#ffffff")
-            self._status_led.pack(side=LEFT)
-            ring_w = max(1, self.scaled(1))
-            self._status_led_outer = self._status_led.create_oval(ring_w, ring_w, led_size - ring_w, led_size - ring_w, outline="#cbd5e1", width=ring_w)
-            inset = max(2, self.scaled(3))
-            self._status_led_inner = self._status_led.create_oval(inset, inset, led_size - inset, led_size - inset, fill="#94a3b8", outline="")
+            self._node_led_label = ttk.Label(node_chip, text="NÓ", style='StatusBadgeLabel.TLabel')
+            self._node_led_label.pack(side=LEFT)
 
-            modbus_chip = ttk.Frame(led_group, style='LedChip.TFrame', padding=(chip_pad_x, chip_pad_y))
+            # --- MB ---
+            modbus_chip = ttk.Frame(led_group, style='Header.TFrame', padding=(chip_pad_x, chip_pad_y))
             modbus_chip.pack(side=LEFT)
-            self._modbus_led_label = ttk.Label(modbus_chip, text="MB", style='LedChipLabel.TLabel')
-            self._modbus_led_label.pack(side=LEFT, padx=(0, self.scaled(6)))
 
-            self._modbus_status_led = tk.Canvas(modbus_chip, width=led_size, height=led_size, highlightthickness=0, bd=0, bg="#ffffff")
-            self._modbus_status_led.pack(side=LEFT)
-            self._modbus_led_outer = self._modbus_status_led.create_oval(ring_w, ring_w, led_size - ring_w, led_size - ring_w, outline="#cbd5e1", width=ring_w)
-            self._modbus_led_inner = self._modbus_status_led.create_oval(inset, inset, led_size - inset, led_size - inset, fill="#94a3b8", outline="")
+            mb_dot = self._create_status_dot(modbus_chip, dot_size)
+            self._modbus_status_led = mb_dot['canvas']
+            self._modbus_led_outer = mb_dot['ring']
+            self._modbus_led_inner = mb_dot['fill']
+
+            self._modbus_led_label = ttk.Label(modbus_chip, text="MB", style='StatusBadgeLabel.TLabel')
+            self._modbus_led_label.pack(side=LEFT)
 
             try:
                 self._update_status_led('disconnected')
@@ -966,8 +969,24 @@ class BalanzaGUI(ttk.Window):
         y = self.winfo_y() + deltay
         self.geometry(f"+{x}+{y}")
 
+    def _create_status_dot(self, parent, size):
+        """Crea un indicador de estado profesional: punto sólido con borde fino."""
+        bg = '#ffffff'
+        canvas = tk.Canvas(parent, width=size, height=size, highlightthickness=0, bd=0, bg=bg)
+        canvas.pack(side=LEFT, padx=(0, self.scaled(6)))
+
+        # Anillo exterior fino
+        bw = max(1, int(size * 0.07))
+        ring = canvas.create_oval(bw, bw, size - bw, size - bw, outline='#cbd5e1', width=bw, fill='')
+
+        # Relleno sólido
+        inset = max(3, int(size * 0.18))
+        fill = canvas.create_oval(inset, inset, size - inset, size - inset, fill='#94a3b8', outline='')
+
+        return {'canvas': canvas, 'ring': ring, 'fill': fill}
+
     def _update_status_led(self, state):
-        """Actualiza el color del LED del header según estado simple: 'connected'/'disconnected'/'error'."""
+        """Actualiza el indicador de estado del nodo."""
         try:
             if not hasattr(self, '_status_led') or not self._status_led:
                 return
@@ -987,28 +1006,28 @@ class BalanzaGUI(ttk.Window):
         except Exception:
             pass
 
-    def _set_led_canvas_state(self, canvas, outer_item, inner_item, state):
-        """Pinta un LED de Canvas con anillo y núcleo según el estado."""
+    def _set_led_canvas_state(self, canvas, ring_item, fill_item, state):
+        """Actualiza colores del indicador de estado."""
         try:
             if not canvas:
                 return
             s = (state or '').lower()
             if s in ('connected', 'ok', 'on'):
-                inner_color = '#22c55e'
+                fill_color = '#22c55e'
                 ring_color = '#16a34a'
             elif s in ('error', 'fail', 'failed', 'alarm'):
-                inner_color = '#ef4444'
+                fill_color = '#ef4444'
                 ring_color = '#b91c1c'
             else:
-                inner_color = '#94a3b8'
+                fill_color = '#94a3b8'
                 ring_color = '#cbd5e1'
-            canvas.itemconfigure(outer_item, outline=ring_color)
-            canvas.itemconfigure(inner_item, fill=inner_color)
+            canvas.itemconfigure(ring_item, outline=ring_color)
+            canvas.itemconfigure(fill_item, fill=fill_color)
         except Exception:
             pass
 
     def _update_modbus_led(self, state):
-        """Actualiza el LED de estado Modbus usando la misma paleta visual."""
+        """Actualiza el indicador de estado Modbus."""
         try:
             if not hasattr(self, '_modbus_status_led') or not self._modbus_status_led:
                 return
@@ -1055,6 +1074,11 @@ class BalanzaGUI(ttk.Window):
                 elif msg['type'] == 'ERROR':
                     self.show_alert("Erro", msg['payload'], "error")
                     self.log_message(f"[ERRO] {msg['payload']}")
+                elif msg['type'] == 'MODBUS_STATUS':
+                    try:
+                        self._update_modbus_led(msg['payload'])
+                    except Exception:
+                        pass
                 elif msg['type'] == 'LOG':
                     self.log_message(msg['payload'])
                     try:

@@ -9,7 +9,7 @@
     "timeout": 0.05,
     "id_escravo_pc": 1,
     "swap_words": false,
-    "mock_sample_rate_hz": 20,
+    "mock_sample_rate_hz": 300,
     "nodes": {
         "celda_1": {
             "id": 4248,

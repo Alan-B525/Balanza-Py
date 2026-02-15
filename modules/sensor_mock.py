@@ -19,7 +19,7 @@ class MockDriver(ISistemaPesaje):
 
         self._stair_min = 0.0
         self._stair_max = 1200.0
-        self._stair_step = 10.0
+        self._stair_step = 1
         self._stair_value = self._stair_min
         self._stair_direction = 1
         self._mock_frequency_hz = self._resolve_mock_frequency_hz()

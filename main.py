@@ -132,18 +132,20 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
             )
             modbus_server.start()
             data_queue.put({'type': 'LOG', 'payload': f"Modbus RTU iniciado em {serial_port}"})
+            data_queue.put({'type': 'MODBUS_STATUS', 'payload': 'connected'})
             modbus_last_not_started_reason = None
         except Exception as e:
             modbus_server = None
             reason = f"{type(e).__name__}: {e}"
             if modbus_last_not_started_reason != reason:
                 data_queue.put({'type': 'LOG', 'payload': f"Modbus RTU não iniciado: {e}"})
+                data_queue.put({'type': 'MODBUS_STATUS', 'payload': 'error'})
                 modbus_last_not_started_reason = reason
 
     while running:
-        # Em modo MOCK, iniciar automaticamente o servidor Modbus RTU na porta virtual configurada
+        # Iniciar automaticamente o servidor Modbus RTU se o sistema está conectado
         try:
-            if str(execution_mode or '').upper() == 'MOCK' and modbus_server is None:
+            if modbus_server is None and sistema_pesaje.esta_conectado() and not acquisition_paused:
                 now_modbus = time.monotonic()
                 if (now_modbus - last_modbus_retry_ts) >= modbus_retry_interval_s:
                     last_modbus_retry_ts = now_modbus
@@ -234,6 +236,7 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                             pass
                         modbus_server = None
                     modbus_last_not_started_reason = None
+                    data_queue.put({'type': 'MODBUS_STATUS', 'payload': 'idle'})
                 
                 elif cmd == 'PAUSE_ACQUISITION':
                     acquisition_paused = True
@@ -571,9 +574,18 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                             # Enviar el total neto como int32 (2 registros) escalado x1000
                             total = float(datos_procesados.get('total', 0.0) or 0.0)
                             regs = _float_to_int32_registers(total, scale=1000)
-                            modbus_server.push_data(regs)
-                            if latest_ts is not None:
-                                last_modbus_sample_ts = latest_ts
+                            if not modbus_server.push_data(regs):
+                                # push_data retornó False: server roto
+                                try:
+                                    modbus_server.stop()
+                                except Exception:
+                                    pass
+                                modbus_server = None
+                                data_queue.put({'type': 'MODBUS_STATUS', 'payload': 'error'})
+                                data_queue.put({'type': 'LOG', 'payload': 'Modbus RTU: erro ao publicar dados, servidor parado.'})
+                            else:
+                                if latest_ts is not None:
+                                    last_modbus_sample_ts = latest_ts
                 except Exception:
                     pass
                 
