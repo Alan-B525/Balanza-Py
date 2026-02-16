@@ -317,6 +317,26 @@ class MSCLDriver(ISistemaPesaje):
         except Exception:
             return 0
 
+    def _set_node_idle(self, node, node_id: int, timeout_ms: int = 300) -> bool:
+        """Envía setToIdle y espera confirmación del SetToIdleStatus."""
+        try:
+            status = node.setToIdle()
+            while not status.complete(timeout_ms):
+                pass
+            result = status.result()
+            if result == mscl.SetToIdleStatus.setToIdleResult_success:
+                self._log(f"[{node_id}] setToIdle: éxito")
+                return True
+            elif result == mscl.SetToIdleStatus.setToIdleResult_canceled:
+                self._log(f"[{node_id}] setToIdle: cancelado")
+                return False
+            else:
+                self._log(f"[{node_id}] setToIdle: falló (resultado={result})")
+                return False
+        except Exception as e:
+            self._log(f"[{node_id}] setToIdle excepción: {e}")
+            return False
+
     def _recuperar_y_preparar_nodo(self, node_id: int) -> bool:
         """
         Busca, detiene y agrega el nodo a la red.
@@ -334,45 +354,36 @@ class MSCLDriver(ISistemaPesaje):
             attempts += 1
             try:
                 # Mandar Idle aunque no responda ping
-                try:
-                    node.setToIdle()
-                except Exception:
-                    pass
+                self._set_node_idle(node, node_id)
 
                 # Verificar si está vivo mediante ping
                 try:
                     if node.ping().success():
                         self._log(f"[{node_id}] CONTATO! Nó parado.")
-                        try:
-                            node.setToIdle() # Asegurar estado Idle
-                        except Exception:
-                            pass
+                        self._set_node_idle(node, node_id)  # Asegurar estado Idle
                         encontrado = True
                         break
                 except Exception:
                     # ping falló; seguiremos intentando y usaremos fallback discovery cada cierto número de intentos
                     pass
 
-                # Fallback: cada 8 intentos ejecutar NodeDiscovery breve
+                # Fallback: cada 8 intentos verificar descubrimientos pasivos
                 if attempts % 8 == 0:
                     try:
-                        self._log(f"[{node_id}] Ping falló; intentando NodeDiscovery como fallback...")
-                        discovery = mscl.NodeDiscovery(self._base_station)
-                        discovery.start()
-                        time.sleep(0.5)
-                        discovery.stop()
-                        for n in discovery.foundNodes():
+                        self._log(f"[{node_id}] Ping falló; verificando descubrimientos pendientes...")
+                        discoveries = self._base_station.getNodeDiscoveries()
+                        for disc in discoveries:
                             try:
-                                if n.nodeAddress() == node_id:
-                                    self._log(f"[{node_id}] NodeDiscovery encontrou o nó (fallback).")
+                                if disc.nodeAddress() == node_id:
+                                    self._log(f"[{node_id}] Nodo detectado via getNodeDiscoveries().")
                                     encontrado = True
                                     break
                             except Exception:
                                 continue
                         if encontrado:
                             break
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        self._log(f"[{node_id}] getNodeDiscoveries falló: {e}")
 
             except Exception:
                 pass
@@ -383,26 +394,8 @@ class MSCLDriver(ISistemaPesaje):
             self._log(f"[{node_id}] ERRO: Não respondeu após {self.RECOVERY_TIMEOUT_S}s.")
             return False
 
-        # Configuración
-        try:
-            self._log(f"[{node_id}] Verificando configuração...")
-            config = mscl.WirelessNodeConfig(node)
-            
-            # SampleRate.Seconds(2) = 0.5 Hz (1 muestra cada 2s)
-            target = mscl.SampleRate.Seconds(2)
-            
-            if config.sampleRate().prettyStr() != target.prettyStr():
-                self._log(f"[{node_id}] Ajustando para 0.5Hz...")
-                config.sampleRate(target)
-                config.apply()
-                self._log(f"[{node_id}] Configuración aplicada.")
-            else:
-                self._log(f"[{node_id}] Configuración correcta.")
-                
-        except Exception as e:
-            # Si es el bug de la librería v67, logueamos y continuamos
-            self._log(f"[{node_id}] Aviso: Falha leitura/gravação de config (Bug MSCL?). Pulando passo.")
-            # Continuamos, asumiendo que la configuración previa sirve o que es mejor medir mal que no medir.
+        # Configuración gestionada por SensorConnect — no re-configurar desde aquí
+        self._log(f"[{node_id}] Configuración gestionada por SensorConnect. Saltando re-configuración.")
 
         # Agregar a la red
         try:
