@@ -22,6 +22,29 @@ ACTIVE_COM = DEFAULT_COM
 ACTIVE_NODOS = DEFAULT_NODOS
 ACTIVE_MODE = MODO_EJECUCION
 USE_SENSOR_CONFIG = True
+_SINGLE_INSTANCE_MUTEX = None
+
+
+def _acquire_single_instance() -> bool:
+    """Evita ejecutar más de una instancia simultánea en Windows."""
+    global _SINGLE_INSTANCE_MUTEX
+    if os.name != 'nt':
+        return True
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        mutex_name = "Global\\BalanzaPyMainMutex"
+        handle = kernel32.CreateMutexW(None, False, mutex_name)
+        if not handle:
+            return True
+        already_exists = (kernel32.GetLastError() == 183)  # ERROR_ALREADY_EXISTS
+        if already_exists:
+            print("[ERRO] Ya existe una instancia activa de la aplicación.")
+            return False
+        _SINGLE_INSTANCE_MUTEX = handle
+        return True
+    except Exception:
+        return True
 
 
 def load_custom_settings():
@@ -115,6 +138,7 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
     modbus_fail_count = 0
     modbus_fail_threshold = 3
     modbus_waiting_config_change = False
+    modbus_state_lock = threading.Lock()
 
     def _is_serial_port_available(port_name):
         try:
@@ -129,60 +153,65 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
     
     def _start_modbus_if_needed():
         nonlocal modbus_server, modbus_last_not_started_reason, modbus_start_ts, modbus_fail_count, last_modbus_status, modbus_waiting_config_change
-        if modbus_server is not None:
-            return
-        if not modbus_params:
-            return
-        if modbus_waiting_config_change:
-            return
-        if not bool(modbus_params.get('enabled', True)):
-            return
-        serial_port = modbus_params.get('serial_port')
-        if not serial_port:
-            reason = "porta serial não configurada"
-            if modbus_last_not_started_reason != reason:
-                data_queue.put({'type': 'LOG', 'payload': "Modbus RTU não iniciado: porta serial não configurada."})
-                modbus_last_not_started_reason = reason
-            return
-        if not _is_serial_port_available(serial_port):
-            reason = f"porta serial indisponível: {serial_port}"
-            if modbus_last_not_started_reason != reason:
-                data_queue.put({'type': 'LOG', 'payload': f"Modbus RTU em espera: porta {serial_port} não disponível. Altere em Configuração para tentar novamente."})
-                modbus_last_not_started_reason = reason
-            modbus_waiting_config_change = True
-            modbus_start_ts = None
-            modbus_fail_count = 0
-            if last_modbus_status != 'idle':
-                data_queue.put({'type': 'MODBUS_STATUS', 'payload': 'idle'})
-                last_modbus_status = 'idle'
-            return
-        try:
-            modbus_server = ModbusDataServer(
-                serial_port=serial_port,
-                baudrate=modbus_params.get('baudrate', 3000000),
-                parity=modbus_params.get('parity', 'N'),
-                stopbits=modbus_params.get('stopbits', 1),
-                bytesize=modbus_params.get('bytesize', 8),
-                timeout=modbus_params.get('timeout', 0.05),
-            )
-            modbus_server.start()
-            modbus_start_ts = time.monotonic()
-            modbus_fail_count = 0
-            modbus_waiting_config_change = False
-            data_queue.put({'type': 'LOG', 'payload': f"Modbus RTU iniciado em {serial_port}"})
-            # Status update removed here; handled in main loop by checking push_data result
-            modbus_last_not_started_reason = None
-        except Exception as e:
-            modbus_server = None
-            modbus_start_ts = None
-            modbus_fail_count = 0
-            modbus_waiting_config_change = False
-            reason = f"{type(e).__name__}: {e}"
-            if modbus_last_not_started_reason != reason:
-                data_queue.put({'type': 'LOG', 'payload': f"Modbus RTU não iniciado: {e}"})
-                data_queue.put({'type': 'MODBUS_STATUS', 'payload': 'error'})
-                last_modbus_status = 'error'
-                modbus_last_not_started_reason = reason
+        with modbus_state_lock:
+            if modbus_server is not None:
+                return
+            if not modbus_params:
+                return
+            if not bool(modbus_params.get('enabled', True)):
+                return
+            serial_port = modbus_params.get('serial_port')
+            if not serial_port:
+                reason = "porta serial não configurada"
+                if modbus_last_not_started_reason != reason:
+                    data_queue.put({'type': 'LOG', 'payload': "Modbus RTU não iniciado: porta serial não configurada."})
+                    modbus_last_not_started_reason = reason
+                return
+            if modbus_waiting_config_change:
+                if not _is_serial_port_available(serial_port):
+                    return
+                modbus_waiting_config_change = False
+                modbus_last_not_started_reason = None
+                data_queue.put({'type': 'LOG', 'payload': f"Modbus RTU: porta {serial_port} voltou a ficar disponível, tentando reconectar..."})
+            if not _is_serial_port_available(serial_port):
+                reason = f"porta serial indisponível: {serial_port}"
+                if modbus_last_not_started_reason != reason:
+                    data_queue.put({'type': 'LOG', 'payload': f"Modbus RTU em espera: porta {serial_port} não disponível. Altere em Configuração para tentar novamente."})
+                    modbus_last_not_started_reason = reason
+                modbus_waiting_config_change = True
+                modbus_start_ts = None
+                modbus_fail_count = 0
+                if last_modbus_status != 'idle':
+                    data_queue.put({'type': 'MODBUS_STATUS', 'payload': 'idle'})
+                    last_modbus_status = 'idle'
+                return
+            try:
+                modbus_server = ModbusDataServer(
+                    serial_port=serial_port,
+                    baudrate=modbus_params.get('baudrate', 3000000),
+                    parity=modbus_params.get('parity', 'N'),
+                    stopbits=modbus_params.get('stopbits', 1),
+                    bytesize=modbus_params.get('bytesize', 8),
+                    timeout=modbus_params.get('timeout', 0.05),
+                )
+                modbus_server.start()
+                modbus_start_ts = time.monotonic()
+                modbus_fail_count = 0
+                modbus_waiting_config_change = False
+                data_queue.put({'type': 'LOG', 'payload': f"Modbus RTU iniciado em {serial_port}"})
+                # Status update removed here; handled in main loop by checking push_data result
+                modbus_last_not_started_reason = None
+            except Exception as e:
+                modbus_server = None
+                modbus_start_ts = None
+                modbus_fail_count = 0
+                modbus_waiting_config_change = False
+                reason = f"{type(e).__name__}: {e}"
+                if modbus_last_not_started_reason != reason:
+                    data_queue.put({'type': 'LOG', 'payload': f"Modbus RTU não iniciado: {e}"})
+                    data_queue.put({'type': 'MODBUS_STATUS', 'payload': 'error'})
+                    last_modbus_status = 'error'
+                    modbus_last_not_started_reason = reason
 
     while running:
         # Iniciar automaticamente o servidor Modbus RTU se o sistema está conectado
@@ -685,10 +714,37 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                                 if not in_start_grace:
                                     modbus_fail_count += 1
                                     if modbus_fail_count >= modbus_fail_threshold:
+                                        last_mb_error = ""
+                                        try:
+                                            if hasattr(modbus_server, 'get_last_error'):
+                                                last_mb_error = str(modbus_server.get_last_error() or "")
+                                        except Exception:
+                                            last_mb_error = ""
+
+                                        err_lower = last_mb_error.lower()
+                                        port_blocked = (
+                                            'permissionerror' in err_lower
+                                            or 'acceso denegado' in err_lower
+                                            or 'access is denied' in err_lower
+                                            or 'could not open port' in err_lower
+                                        )
+
                                         if last_modbus_status != 'error':
                                             data_queue.put({'type': 'MODBUS_STATUS', 'payload': 'error'})
                                             data_queue.put({'type': 'LOG', 'payload': 'Modbus RTU inativo; aquisição seguirá sem Modbus.'})
                                             last_modbus_status = 'error'
+                                        if port_blocked:
+                                            modbus_waiting_config_change = True
+                                            try:
+                                                serial_conf = (modbus_params or {}).get('serial_port', '')
+                                            except Exception:
+                                                serial_conf = ''
+                                            data_queue.put({'type': 'LOG', 'payload': f"Modbus RTU em espera: porta {serial_conf} ocupada/sem acesso. Altere em Configuração para tentar novamente."})
+                                        try:
+                                            if modbus_server is not None:
+                                                modbus_server.stop()
+                                        except Exception:
+                                            pass
                                         modbus_server = None
                                         modbus_start_ts = None
                                         modbus_fail_count = 0
@@ -843,4 +899,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if _acquire_single_instance():
+        main()

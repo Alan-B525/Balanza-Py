@@ -790,23 +790,28 @@ class BalanzaGUI(ttk.Window):
         ticks_frame.pack(fill=X, padx=40, pady=(0, 20)) # More bottom padding
         
         # Ticks: 0, 200, 400 ... 1200
-        # Usamos place relativo para distribuir equitativamente
-        for i in range(0, 1201, 200):
-            lbl = ttk.Label(ticks_frame, text=str(i), style='TotalTick.TLabel')
-            rel_x = i / 1200.0
-            
-            # Ajustar anchor para que no se corten los extremos
-            if i == 0:
-                anchor_val = "nw"
-            elif i == 1200:
-                anchor_val = "ne"
-            else:
-                anchor_val = "n"
-                
-            lbl.place(relx=rel_x, y=0, anchor=anchor_val)
+        # Usar grid evita artefactos de render subpíxel en el centro (ej. "600")
+        tick_values = list(range(0, 1201, 200))
+        for idx in range(len(tick_values)):
+            try:
+                ticks_frame.columnconfigure(idx, weight=1)
+            except Exception:
+                pass
+
+        for idx, value in enumerate(tick_values):
+            lbl = ttk.Label(ticks_frame, text=str(value), style='TotalTick.TLabel')
+            sticky = 'n'
+            if idx == 0:
+                sticky = 'nw'
+            elif idx == len(tick_values) - 1:
+                sticky = 'ne'
+            lbl.grid(row=0, column=idx, sticky=sticky)
         
         # Espacio para los ticks - Aumentado
-        ttk.Frame(ticks_frame, height=self.scaled(40), style='TotalPanel.TFrame').pack()
+        try:
+            ticks_frame.rowconfigure(1, minsize=self.scaled(40))
+        except Exception:
+            pass
 
         # --- SECCIÓN ÁNGULO (REEMPLAZA TARA) ---
         # Aumentar padding vertical drásticamente para evitar cortes
@@ -1087,10 +1092,6 @@ class BalanzaGUI(ttk.Window):
                         pass
                 elif msg['type'] == 'LOG':
                     self.log_message(msg['payload'])
-                    try:
-                        self._update_modbus_status_from_log(msg['payload'])
-                    except Exception:
-                        pass
                 elif msg['type'] == 'CONNECTION_PROGRESS':
                     # Actualizar dialogo de conexion con progreso
                     payload = msg['payload']
@@ -3676,21 +3677,9 @@ class BalanzaGUI(ttk.Window):
                     try:
                         logo2_btn_lbl = ttk.Label(right_frame, image=self.config_logo2_img, style='Logo.TLabel')
                         logo2_btn_lbl.grid(row=0, column=4, padx=(8, 0), pady=(6, 6))
-                        try:
-                            import webbrowser
-                            logo2_btn_lbl.configure(cursor='hand2')
-                            logo2_btn_lbl.bind("<Button-1>", lambda e: webbrowser.open('https://baristecno.com/'))
-                        except Exception:
-                            pass
                     except Exception:
                         logo2_btn_lbl = ttk.Label(right_frame, image=self.config_logo2_img, style='Logo.TLabel')
                         logo2_btn_lbl.pack(side=RIGHT, padx=(8, 0), pady=(6, 6))
-                        try:
-                            import webbrowser
-                            logo2_btn_lbl.configure(cursor='hand2')
-                            logo2_btn_lbl.bind("<Button-1>", lambda e: webbrowser.open('https://baristecno.com/'))
-                        except Exception:
-                            pass
                 except Exception:
                     pass
         except Exception:

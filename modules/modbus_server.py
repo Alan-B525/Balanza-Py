@@ -63,6 +63,7 @@ class ModbusDataServer:
         self.COIL_DATA_AVAILABLE = 0
 
         self.is_running = False
+        self.last_error_msg: Optional[str] = None
 
     # ------------------------------------------------------------------ #
     #  Start / Stop
@@ -95,6 +96,7 @@ class ModbusDataServer:
 
             async def _async_serve():
                 """Crear y ejecutar el server dentro del loop activo."""
+                self.last_error_msg = None
                 self._server = ModbusSerialServer(
                     context,
                     framer=FramerType.RTU,
@@ -116,8 +118,8 @@ class ModbusDataServer:
                 self._loop.run_until_complete(_async_serve())
             except Exception as exc:
                 self.is_running = False
+                self.last_error_msg = str(exc)
                 log.error("Failed to start server %s", exc)
-                print(f"Failed to start server {exc}")
             finally:
                 self.is_running = False
                 try:
@@ -141,6 +143,12 @@ class ModbusDataServer:
         self._server = None
         self._context = None
         self.is_running = False
+
+    def get_last_error(self) -> str:
+        try:
+            return str(self.last_error_msg or "")
+        except Exception:
+            return ""
 
     # ------------------------------------------------------------------ #
     #  Data publishing

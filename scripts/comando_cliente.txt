@@ -3,3 +3,9 @@ comando a ejecutar desde una consola en la misma dirección que el .exe:
 .\modbus_bench.exe COM3 3000000 1 1000 60
 
 parametros (port, baud, slave_id, register, duration_s)
+
+
+
+comando script modbus_client.py
+
+python modbus_client.py --port COM9 --baud 3000000 --parity N --unit 1 --mode live --interval 0 --plot-mode value --print-every 10
