@@ -98,7 +98,9 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
     MAX_AUTO_RECONNECT = 5          # Máximo intentos automáticos
     reconnect_check_counter = {}    # Contador para espaciar notificaciones
     GUI_PUBLISH_INTERVAL_S = 0.05   # Limitar refresco GUI (~20 Hz) para mantener UI responsiva
+    GUI_KEEPALIVE_S = 0.5           # Publicar aunque no haya nueva muestra cada 500ms
     last_gui_publish_ts = 0.0
+    last_gui_sample_ts = None
     
     # Variables para conexión asíncrona
     connection_thread = None
@@ -107,12 +109,33 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
     modbus_retry_interval_s = 2.0
     modbus_last_not_started_reason = None
     last_modbus_sample_ts = None
+    last_modbus_status = 'idle' # Track status to avoid spamming GUI updates
+    modbus_start_ts = None
+    modbus_start_grace_s = 1.5
+    modbus_fail_count = 0
+    modbus_fail_threshold = 3
+    modbus_waiting_config_change = False
+
+    def _is_serial_port_available(port_name):
+        try:
+            if not port_name:
+                return False
+            import serial.tools.list_ports
+            available = {str(p.device).strip().upper() for p in serial.tools.list_ports.comports()}
+            return str(port_name).strip().upper() in available
+        except Exception:
+            # Si no podemos listar puertos, no bloquear el arranque por este chequeo
+            return True
     
     def _start_modbus_if_needed():
-        nonlocal modbus_server, modbus_last_not_started_reason
+        nonlocal modbus_server, modbus_last_not_started_reason, modbus_start_ts, modbus_fail_count, last_modbus_status, modbus_waiting_config_change
         if modbus_server is not None:
             return
         if not modbus_params:
+            return
+        if modbus_waiting_config_change:
+            return
+        if not bool(modbus_params.get('enabled', True)):
             return
         serial_port = modbus_params.get('serial_port')
         if not serial_port:
@@ -120,6 +143,18 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
             if modbus_last_not_started_reason != reason:
                 data_queue.put({'type': 'LOG', 'payload': "Modbus RTU não iniciado: porta serial não configurada."})
                 modbus_last_not_started_reason = reason
+            return
+        if not _is_serial_port_available(serial_port):
+            reason = f"porta serial indisponível: {serial_port}"
+            if modbus_last_not_started_reason != reason:
+                data_queue.put({'type': 'LOG', 'payload': f"Modbus RTU em espera: porta {serial_port} não disponível. Altere em Configuração para tentar novamente."})
+                modbus_last_not_started_reason = reason
+            modbus_waiting_config_change = True
+            modbus_start_ts = None
+            modbus_fail_count = 0
+            if last_modbus_status != 'idle':
+                data_queue.put({'type': 'MODBUS_STATUS', 'payload': 'idle'})
+                last_modbus_status = 'idle'
             return
         try:
             modbus_server = ModbusDataServer(
@@ -131,15 +166,22 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                 timeout=modbus_params.get('timeout', 0.05),
             )
             modbus_server.start()
+            modbus_start_ts = time.monotonic()
+            modbus_fail_count = 0
+            modbus_waiting_config_change = False
             data_queue.put({'type': 'LOG', 'payload': f"Modbus RTU iniciado em {serial_port}"})
-            data_queue.put({'type': 'MODBUS_STATUS', 'payload': 'connected'})
+            # Status update removed here; handled in main loop by checking push_data result
             modbus_last_not_started_reason = None
         except Exception as e:
             modbus_server = None
+            modbus_start_ts = None
+            modbus_fail_count = 0
+            modbus_waiting_config_change = False
             reason = f"{type(e).__name__}: {e}"
             if modbus_last_not_started_reason != reason:
                 data_queue.put({'type': 'LOG', 'payload': f"Modbus RTU não iniciado: {e}"})
                 data_queue.put({'type': 'MODBUS_STATUS', 'payload': 'error'})
+                last_modbus_status = 'error'
                 modbus_last_not_started_reason = reason
 
     while running:
@@ -236,6 +278,10 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                             pass
                         modbus_server = None
                     modbus_last_not_started_reason = None
+                    modbus_start_ts = None
+                    modbus_fail_count = 0
+                    modbus_waiting_config_change = False
+                    last_modbus_status = 'idle'
                     data_queue.put({'type': 'MODBUS_STATUS', 'payload': 'idle'})
                 
                 elif cmd == 'PAUSE_ACQUISITION':
@@ -317,6 +363,13 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                     new_transmissao = payload.get('transmissao')
                     try:
                         global ACTIVE_COM, ACTIVE_NODOS
+                        # Fallback: si serial_port no viene o está vacío, leer com_port del primer nodo
+                        if not new_port and new_nodes:
+                            try:
+                                first_node = next(iter(new_nodes.values()), {})
+                                new_port = first_node.get('com_port', '')
+                            except Exception:
+                                pass
                         if new_port:
                             ACTIVE_COM = new_port
                             data_queue.put({'type': 'LOG', 'payload': f"Porta serial atualizada para {ACTIVE_COM}"})
@@ -343,9 +396,16 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                         if isinstance(new_transmissao, dict):
                             if modbus_params is None:
                                 modbus_params = {}
+                            old_modbus_port = str(modbus_params.get('serial_port') or '').strip()
                             porta_conf = new_transmissao.get('porta')
                             if isinstance(porta_conf, str) and porta_conf.strip():
                                 modbus_params['serial_port'] = porta_conf.strip()
+                            elif 'porta' in new_transmissao:
+                                modbus_params['serial_port'] = None
+                            if 'enabled' in new_transmissao:
+                                modbus_params['enabled'] = bool(new_transmissao.get('enabled'))
+                            else:
+                                modbus_params['enabled'] = bool(modbus_params.get('enabled', True) and modbus_params.get('serial_port'))
                             try:
                                 modbus_params['baudrate'] = int(new_transmissao.get('velocidade', modbus_params.get('baudrate', 3000000)))
                             except Exception:
@@ -371,8 +431,22 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                                 modbus_params['timeout'] = float(new_transmissao.get('timeout', modbus_params.get('timeout', 0.05)))
                             except Exception:
                                 pass
-                            data_queue.put({'type': 'LOG', 'payload': "Configuração de transmissão Modbus atualizada."})
+                            # Si cambia el puerto/config de Modbus, permitir nuevo intento de arranque
+                            new_modbus_port = str(modbus_params.get('serial_port') or '').strip()
+                            modbus_waiting_config_change = False
                             modbus_last_not_started_reason = None
+                            modbus_start_ts = None
+                            modbus_fail_count = 0
+                            if modbus_server is not None and new_modbus_port != old_modbus_port:
+                                try:
+                                    modbus_server.stop()
+                                except Exception:
+                                    pass
+                                modbus_server = None
+                                if last_modbus_status != 'idle':
+                                    data_queue.put({'type': 'MODBUS_STATUS', 'payload': 'idle'})
+                                    last_modbus_status = 'idle'
+                            data_queue.put({'type': 'LOG', 'payload': "Configuração de transmissão Modbus atualizada."})
 
                         # Si ya estamos conectados, desconectar y reconectar usando la nueva configuración
                         def do_reconnect():
@@ -443,6 +517,10 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                             pass
                         modbus_server = None
                     modbus_last_not_started_reason = None
+                    modbus_start_ts = None
+                    modbus_fail_count = 0
+                    modbus_waiting_config_change = False
+                    last_modbus_status = 'idle'
                     
         except queue.Empty:
             pass
@@ -546,11 +624,27 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                                 'payload': f"Fallo reconexion de sensor {node_id} despues de {MAX_AUTO_RECONNECT} intentos"
                             })
                 
-                # Enviar datos a GUI con tasa limitada para evitar congelamiento por cola
+                # Enviar datos a GUI sólo ante muestra nueva (o keepalive), evitando render redundante
                 now_ts = time.monotonic()
-                if (now_ts - last_gui_publish_ts) >= GUI_PUBLISH_INTERVAL_S:
+                latest_sample_ts = None
+                try:
+                    last_frame = raw_data[-1] if isinstance(raw_data, list) and raw_data else {}
+                    if isinstance(last_frame, dict):
+                        latest_sample_ts = last_frame.get('timestamp_ns', None)
+                        if latest_sample_ts is None:
+                            latest_sample_ts = last_frame.get('timestamp', None)
+                except Exception:
+                    latest_sample_ts = None
+
+                has_new_sample = latest_sample_ts is not None and latest_sample_ts != last_gui_sample_ts
+                periodic_keepalive = (now_ts - last_gui_publish_ts) >= GUI_KEEPALIVE_S
+                rate_ok = (now_ts - last_gui_publish_ts) >= GUI_PUBLISH_INTERVAL_S
+
+                if (has_new_sample and rate_ok) or periodic_keepalive:
                     data_queue.put({'type': 'DATA', 'payload': datos_procesados})
                     last_gui_publish_ts = now_ts
+                    if has_new_sample:
+                        last_gui_sample_ts = latest_sample_ts
 
                 # Empujar datos al servidor Modbus (si está activo)
                 try:
@@ -572,20 +666,32 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
 
                         if should_publish:
                             # Enviar el total neto como int32 (2 registros) escalado x1000
-                            total = float(datos_procesados.get('total', 0.0) or 0.0)
-                            regs = _float_to_int32_registers(total, scale=1000)
-                            if not modbus_server.push_data(regs):
-                                # push_data retornó False: server roto
-                                try:
-                                    modbus_server.stop()
-                                except Exception:
-                                    pass
-                                modbus_server = None
-                                data_queue.put({'type': 'MODBUS_STATUS', 'payload': 'error'})
-                                data_queue.put({'type': 'LOG', 'payload': 'Modbus RTU: erro ao publicar dados, servidor parado.'})
-                            else:
+                            total_val = float(datos_procesados.get('total', 0.0) or 0.0)
+                            regs = _float_to_int32_registers(total_val)
+                            
+                            modbus_ok = modbus_server.push_data(regs)
+                            if modbus_ok:
+                                modbus_fail_count = 0
+                                if last_modbus_status != 'connected':
+                                    data_queue.put({'type': 'MODBUS_STATUS', 'payload': 'connected'})
+                                    last_modbus_status = 'connected'
                                 if latest_ts is not None:
                                     last_modbus_sample_ts = latest_ts
+                            else:
+                                in_start_grace = (
+                                    modbus_start_ts is not None
+                                    and (time.monotonic() - modbus_start_ts) < modbus_start_grace_s
+                                )
+                                if not in_start_grace:
+                                    modbus_fail_count += 1
+                                    if modbus_fail_count >= modbus_fail_threshold:
+                                        if last_modbus_status != 'error':
+                                            data_queue.put({'type': 'MODBUS_STATUS', 'payload': 'error'})
+                                            data_queue.put({'type': 'LOG', 'payload': 'Modbus RTU inativo; aquisição seguirá sem Modbus.'})
+                                            last_modbus_status = 'error'
+                                        modbus_server = None
+                                        modbus_start_ts = None
+                                        modbus_fail_count = 0
                 except Exception:
                     pass
                 
@@ -640,6 +746,7 @@ def main():
         settings = config.load_settings()
 
         serial_port = None
+        modbus_enabled = False
         baudrate = 3000000
         parity = 'N'
         stopbits = 1
@@ -648,6 +755,10 @@ def main():
 
         if settings and isinstance(settings.get('transmissao'), dict):
             t = settings.get('transmissao')
+            if 'enabled' in t:
+                modbus_enabled = bool(t.get('enabled'))
+            else:
+                modbus_enabled = True
             porta_conf = t.get('porta')
             if isinstance(porta_conf, str) and porta_conf.strip():
                 serial_port = porta_conf.strip()
@@ -677,13 +788,8 @@ def main():
             except Exception:
                 pass
 
-        if not serial_port:
-            try:
-                serial_port = ACTIVE_COM
-            except Exception:
-                serial_port = None
-
         modbus_params = {
+            'enabled': bool(modbus_enabled and serial_port),
             'serial_port': serial_port,
             'baudrate': baudrate,
             'parity': parity,

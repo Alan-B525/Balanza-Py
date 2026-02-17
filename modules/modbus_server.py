@@ -62,6 +62,8 @@ class ModbusDataServer:
         # Legacy coil addresses (compatibilidad con clientes que revisan coils)
         self.COIL_DATA_AVAILABLE = 0
 
+        self.is_running = False
+
     # ------------------------------------------------------------------ #
     #  Start / Stop
     # ------------------------------------------------------------------ #
@@ -107,14 +109,17 @@ class ModbusDataServer:
                     "Modbus RTU server started on %s @%s,%s",
                     self.serial_port, self.baudrate, self.parity,
                 )
+                self.is_running = True
                 await self._server.serve_forever()
 
             try:
                 self._loop.run_until_complete(_async_serve())
             except Exception as exc:
+                self.is_running = False
                 log.error("Failed to start server %s", exc)
                 print(f"Failed to start server {exc}")
             finally:
+                self.is_running = False
                 try:
                     self._loop.close()
                 except Exception:
@@ -135,12 +140,15 @@ class ModbusDataServer:
                 log.warning("Error al detener Modbus server: %s", exc)
         self._server = None
         self._context = None
+        self.is_running = False
 
     # ------------------------------------------------------------------ #
     #  Data publishing
     # ------------------------------------------------------------------ #
     def push_data(self, regs: List[int]) -> bool:
         """Publica inmediatamente una lista de enteros (0..65535) en los holding registers."""
+        if not self.is_running:
+            return False
         if not self._context:
             return False
         try:

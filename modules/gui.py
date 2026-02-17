@@ -179,15 +179,24 @@ class BalanzaGUI(ttk.Window):
         
         # Control de visualización de decimales (por defecto: SIN decimales)
         self._show_decimals = False
+        # Throttle para ajuste dinámico de fuentes (operación costosa)
+        self._font_fit_interval_s = 0.20
+        self._last_total_font_fit_ts = 0.0
+        self._last_sensor_font_fit_ts = {}
         
         # Variables para conexin asncrona
         self._connection_thread = None
         self._cancel_connection = False
+        # Límite de mensajes procesados por tick para evitar congelar la UI
+        self._gui_max_msgs_per_tick = 80
         # Grace period after successful connection (seconds) to wait for sensors to send data
         self._post_connect_grace_s = 6.0
         self._conn_success_time = 0.0
         # Indica si ya recibimos la primera muestra tras conectar
         self._first_sample_received = False
+        # Throttle de logs repetidos para reducir I/O de disco en ráfagas
+        self._last_log_message = None
+        self._last_log_ts = 0.0
         
         # Handle window close event
         self.protocol("WM_DELETE_WINDOW", self.quit_app)
@@ -243,12 +252,6 @@ class BalanzaGUI(ttk.Window):
         """
         try:
             import tkinter.font as tkfont
-            # Forzar layout para obtener medidas reales
-            try:
-                self.update_idletasks()
-            except Exception:
-                pass
-
             # Determinar ancho disponible: preferir explicit_width si hay
             if explicit_width and isinstance(explicit_width, int) and explicit_width > 0:
                 avail_w = explicit_width
@@ -1060,15 +1063,18 @@ class BalanzaGUI(ttk.Window):
 
     def actualizar_gui(self):
         """Consume mensajes de la cola y actualiza la UI."""
+        latest_data = None
+        processed = 0
+        max_msgs = getattr(self, '_gui_max_msgs_per_tick', 80)
         try:
-            while True:
+            while processed < max_msgs:
                 # Leer de la cola sin bloquear
                 msg = self.data_queue.get_nowait()
+                processed += 1
                 
                 if msg['type'] == 'DATA':
-                    data = msg['payload']
-                    self._last_sensor_data = data  # Guardar para calibracin
-                    self._update_display(data)
+                    # Conservar solo la muestra más reciente para este tick
+                    latest_data = msg['payload']
                 elif msg['type'] == 'STATUS':
                     self._update_status(msg['payload'])
                 elif msg['type'] == 'ERROR':
@@ -1108,14 +1114,10 @@ class BalanzaGUI(ttk.Window):
         except queue.Empty:
             pass
         finally:
-            # Actualizar fecha/hora en el footer si existe
             try:
-                import datetime
-                if hasattr(self, 'lbl_footer_time') and self.lbl_footer_time:
-                    try:
-                        self.lbl_footer_time.configure(text=datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S'))
-                    except Exception:
-                        pass
+                if latest_data is not None:
+                    self._last_sensor_data = latest_data  # Guardar para calibración
+                    self._update_display(latest_data)
             except Exception:
                 pass
             # Reprogramar a atualizao
@@ -1124,11 +1126,25 @@ class BalanzaGUI(ttk.Window):
     def log_message(self, message):
         """Guarda mensajes y errores en el archivo log."""
         import datetime, os
+        import time
+        try:
+            msg = str(message)
+        except Exception:
+            msg = message
+        # Evitar escrituras duplicadas en ráfaga (mismo mensaje en <500ms)
+        try:
+            now_ts = time.time()
+            if msg == self._last_log_message and (now_ts - float(self._last_log_ts or 0.0)) < 0.5:
+                return
+            self._last_log_message = msg
+            self._last_log_ts = now_ts
+        except Exception:
+            pass
         log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'log.log')
         timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         try:
             with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(f"[{timestamp}] {message}\n")
+                f.write(f"[{timestamp}] {msg}\n")
         except Exception:
             pass
 
@@ -1285,7 +1301,10 @@ class BalanzaGUI(ttk.Window):
                     else:
                         tgt = normal_total
                     fixed_total_w = getattr(self.lbl_total, 'target_width', self.scaled(360))
-                    self._fit_label_font(self.lbl_total, str(total_text), 'Segoe UI', max_size=tgt, min_size=total_extra_small, explicit_width=fixed_total_w)
+                    now_fit = time.time()
+                    if (now_fit - float(getattr(self, '_last_total_font_fit_ts', 0.0) or 0.0)) >= float(getattr(self, '_font_fit_interval_s', 0.20)):
+                        self._fit_label_font(self.lbl_total, str(total_text), 'Segoe UI', max_size=tgt, min_size=total_extra_small, explicit_width=fixed_total_w)
+                        self._last_total_font_fit_ts = now_fit
                 except Exception:
                     # Fallback conservador
                     try:
@@ -1298,7 +1317,9 @@ class BalanzaGUI(ttk.Window):
                         try:
                             self.lbl_maint_total.configure(text=total_text, style='TotalValue.TLabel')
                             fw_m = getattr(self.lbl_maint_total, 'target_width', getattr(self.lbl_total, 'target_width', self.scaled(260)))
-                            self._fit_label_font(self.lbl_maint_total, str(total_text), 'Segoe UI', max_size=tgt, min_size=total_extra_small, explicit_width=fw_m)
+                            now_fit_m = time.time()
+                            if (now_fit_m - float(getattr(self, '_last_total_font_fit_ts', 0.0) or 0.0)) >= float(getattr(self, '_font_fit_interval_s', 0.20)):
+                                self._fit_label_font(self.lbl_maint_total, str(total_text), 'Segoe UI', max_size=tgt, min_size=total_extra_small, explicit_width=fw_m)
                         except Exception:
                             try:
                                 self.lbl_maint_total.configure(text=total_text)
@@ -1510,7 +1531,11 @@ class BalanzaGUI(ttk.Window):
                             tgt = normal_cell
 
                         fixed_w = getattr(val_widget, 'target_width', self.scaled(260))
-                        self._fit_label_font(val_widget, str(display_text), 'Segoe UI', max_size=tgt, min_size=cell_extra_small, explicit_width=fixed_w)
+                        now_sensor_fit = time.time()
+                        last_fit = float(self._last_sensor_font_fit_ts.get(key, 0.0) or 0.0)
+                        if (now_sensor_fit - last_fit) >= float(getattr(self, '_font_fit_interval_s', 0.20)):
+                            self._fit_label_font(val_widget, str(display_text), 'Segoe UI', max_size=tgt, min_size=cell_extra_small, explicit_width=fixed_w)
+                            self._last_sensor_font_fit_ts[key] = now_sensor_fit
                     except Exception:
                         pass
                     self._widget_last_seen[key] = incoming_last
@@ -4182,27 +4207,9 @@ class BalanzaGUI(ttk.Window):
                 except Exception:
                     slave_id_val = 1
 
-            new_config = {
-                "execution_mode": current_config.get('execution_mode', 'REAL'),
-                "connection_type": "SERIAL",
-                # Campo legacy/compatibilidad (puerto principal de transmissão)
-                "serial_port": entry_trans.get() if 'entry_trans' in locals() or 'entry_trans' in globals() else current_config.get('serial_port', 'COM3'),
-                "baudrate": baud_val,
-                "paridade": combo_parity.get() if 'combo_parity' in locals() or 'combo_parity' in globals() else current_config.get('paridade', 'Nenhuma'),
-                "id_escravo_pc": slave_id_val,
-                "swap_words": bool(swap_var.get()) if 'swap_var' in locals() or 'swap_var' in globals() else current_config.get('swap_words', False),
-                "tcp_ip": "",
-                "tcp_port": "",
-                "nodes": {},
-                "transmissao": {
-                    "porta": entry_trans.get() if 'entry_trans' in locals() or 'entry_trans' in globals() else current_config.get('serial_port', 'COM3'),
-                    "velocidade": baud_val,
-                    "paridade": combo_parity.get() if 'combo_parity' in locals() or 'combo_parity' in globals() else current_config.get('paridade', 'Nenhuma'),
-                    "id_escravo_pc": slave_id_val,
-                    "swap_words": bool(swap_var.get()) if 'swap_var' in locals() or 'swap_var' in globals() else current_config.get('swap_words', False),
-                }
-            }
-            
+            # --- Construir los datos de nodos primero para extraer el puerto del gateway ---
+            built_nodes = {}
+            gateway_port = ""
             for key, inputs in node_entries.items():
                 try:
                     nid = int(inputs["id"].get())
@@ -4219,7 +4226,7 @@ class BalanzaGUI(ttk.Window):
                         com_val = str(com_widget.get())
                     except Exception:
                         com_val = ""
-                new_config["nodes"][key] = {
+                built_nodes[key] = {
                     "id": nid,
                     "ch_load": inputs["ch_load"].get(),
                     "ch_angle": inputs["ch_angle"].get(),
@@ -4227,6 +4234,37 @@ class BalanzaGUI(ttk.Window):
                     "serial": serial_val,
                     "com_port": com_val
                 }
+                # Tomar el puerto del primer nodo como gateway (modo single-node)
+                if not gateway_port and com_val:
+                    gateway_port = com_val
+
+            # Fallback si no se pudo extraer el gateway del nodo
+            if not gateway_port:
+                gateway_port = current_config.get('serial_port', 'COM3')
+
+            # --- Partir de la config existente para preservar claves no editadas ---
+            # (mock_sample_rate_hz, profiles_data, stopbits, bytesize, timeout, etc.)
+            new_config = load_settings()
+            new_config.update({
+                "execution_mode": current_config.get('execution_mode', 'REAL'),
+                "connection_type": "SERIAL",
+                # Puerto del gateway USB (nodo), NO el de Modbus
+                "serial_port": gateway_port,
+                "baudrate": baud_val,
+                "paridade": combo_parity.get() if 'combo_parity' in locals() or 'combo_parity' in globals() else current_config.get('paridade', 'Nenhuma'),
+                "id_escravo_pc": slave_id_val,
+                "swap_words": bool(swap_var.get()) if 'swap_var' in locals() or 'swap_var' in globals() else current_config.get('swap_words', False),
+                "tcp_ip": "",
+                "tcp_port": "",
+                "nodes": built_nodes,
+                "transmissao": {
+                    "porta": entry_trans.get() if 'entry_trans' in locals() or 'entry_trans' in globals() else current_config.get('transmissao', {}).get('porta', 'COM3'),
+                    "velocidade": baud_val,
+                    "paridade": combo_parity.get() if 'combo_parity' in locals() or 'combo_parity' in globals() else current_config.get('paridade', 'Nenhuma'),
+                    "id_escravo_pc": slave_id_val,
+                    "swap_words": bool(swap_var.get()) if 'swap_var' in locals() or 'swap_var' in globals() else current_config.get('swap_words', False),
+                }
+            })
             
             try:
                 # Guardar usando el helper centralizado para persistencia

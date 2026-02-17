@@ -67,7 +67,7 @@ class MSCLDriver(ISistemaPesaje):
 
     # Configuración de Hardware
     BAUD_RATE = 3000000
-    DATA_TIMEOUT_MS = 100    # Timeout corto para lectura no bloqueante
+    DATA_TIMEOUT_MS = 30     # Timeout más corto para mejorar responsividad de UI/backend
     FRAME_TIMEOUT_S = 0.05   # Ventana de agregación
     TIMESTAMP_TOLERANCE_NS = 20_000_000 # 20ms tolerancia de sincronización
     
