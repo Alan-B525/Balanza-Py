@@ -44,8 +44,9 @@ class MockDriver(ISistemaPesaje):
 
     def _producer_loop(self):
         # Gerar frames com frequência configurável
-        period = 1.0 / max(self._mock_frequency_hz, 0.1)
         while self._running:
+            # Recalcular periodo para permitir cambios en caliente
+            period = 1.0 / max(self._mock_frequency_hz, 0.1)
             ts_ns = int(time.time() * 1e9)
             readings = {}
             rssi = {}

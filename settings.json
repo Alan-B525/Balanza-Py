@@ -1,15 +1,19 @@
 {
     "execution_mode": "MOCK",
-    "connection_type": "SERIAL",
-    "serial_port": "COM4",
-    "baudrate": 3000000,
-    "paridade": "Nenhuma",
-    "stopbits": 1,
-    "bytesize": 8,
-    "timeout": 0.05,
-    "id_escravo_pc": 1,
-    "swap_words": false,
+    "use_sensor_config": true,
     "mock_sample_rate_hz": 300,
+    "gateway": {
+        "porta": "COM3",
+        "velocidade": 115200,
+        "timeout": 0.05
+    },
+    "transmissao": {
+        "porta": "COM4",
+        "velocidade": 115200,
+        "paridade": "Nenhuma",
+        "id_escravo_pc": 1,
+        "swap_words": false
+    },
     "nodes": {
         "celda_1": {
             "id": 4248,
@@ -20,15 +24,6 @@
             "com_port": "COM4"
         }
     },
-    "transmissao": {
-        "porta": "COM10",
-        "velocidade": 3000000,
-        "paridade": "Nenhuma",
-        "id_escravo_pc": 1,
-        "swap_words": false
-    },
-    "tcp_ip": "",
-    "tcp_port": "",
     "profiles_data": {
         "profiles": {
             "slot_1": {

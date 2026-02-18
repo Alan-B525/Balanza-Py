@@ -65,7 +65,11 @@ def load_custom_settings():
             if "execution_mode" in settings:
                 ACTIVE_MODE = settings["execution_mode"]
 
-            ACTIVE_COM = settings.get("serial_port", DEFAULT_COM)
+            # Intentar leer desde el nuevo bloque 'gateway', con fallback al anterior
+            if "gateway" in settings and isinstance(settings["gateway"], dict):
+                ACTIVE_COM = settings["gateway"].get("porta", settings.get("serial_port", DEFAULT_COM))
+            else:
+                ACTIVE_COM = settings.get("serial_port", DEFAULT_COM)
                 
             # Configurar Nos
             if "nodes" in settings:
@@ -763,6 +767,14 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
 
 def main():
     """Funcao principal da aplicacao."""
+    # Otimizar temporizador no Windows para maior precisión de sleep (~1ms)
+    if os.name == 'nt':
+        try:
+            import ctypes
+            ctypes.windll.winmm.timeBeginPeriod(1)
+        except Exception:
+            pass
+
     # El modo de pantalla se determina por configuración
     # Si el modo es 'tablet', se usará pantalla completa sin barra
     # Si no, se usará ventana normal
@@ -773,7 +785,7 @@ def main():
     command_queue = queue.Queue()
     procesador = DataProcessor(ACTIVE_NODOS)
     if procesador.load_tara_state():
-        import datetime, os
+        import datetime
         try:
             from modules import logger
             logger.info('Estado de tara cargado de settings.json')

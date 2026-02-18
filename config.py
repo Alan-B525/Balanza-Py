@@ -123,42 +123,43 @@ NODOS_CONFIG = {
 }
 
 # =============================================================================
-# 4. TRANSMISSAO (Seção de transmissão de dados - Português)
+# 4. TRANSMISIÓN Y ADQUISICIÓN (Configuración por Defecto)
 # =============================================================================
-# Esta seção substitui a antiga parte de descoberta de nós na UI.
-# Campos esperados pela aplicação e pela interface de CONFIG:
-# - puerto: Puerto COM (string), ex: 'COM4'
-# - velocidad: Baudrate (int), ex: 9600
-# - paridad: Paridad como texto ('Nenhuma','Par','Ímpar')
-# - id_esclavo_pc: ID del esclavo del PC (int)
-# - swap_words: Booleano para invertir bytes (Swap Words)
 
+# Configuración del Gateway (Adquisición de sensores)
+GATEWAY = {
+    "porta": PUERTO_COM,
+    "velocidade": BAUDRATE,
+    "timeout": 0.05,
+}
+
+# Configuración de Transmisión (Modbus RTU)
 TRANSMISSAO = {
-    "porta": "COM4",
-    "velocidade": 3000000,
+    "porta": "COM10",
+    "velocidade": 115200,
     "paridade": "Nenhuma",
     "stopbits": 1,
     "bytesize": 8,
-    "timeout": 0.05,
+    "timeout": 0.005,
     "id_escravo_pc": 1,
     "swap_words": False,
 }
 
-# Default settings structure used for saving/initialization
+# Estructura completa de settings.json por defecto
 DEFAULT_SETTINGS = {
-    "execution_mode": "REAL",
-    "connection_type": "SERIAL",
-    "serial_port": PUERTO_COM,
-    "baudrate": BAUDRATE,
-    "paridade": TRANSMISSAO.get("paridade", "Nenhuma"),
-    "stopbits": TRANSMISSAO.get("stopbits", 1),
-    "bytesize": TRANSMISSAO.get("bytesize", 8),
-    "timeout": TRANSMISSAO.get("timeout", 0.05),
-    "id_escravo_pc": TRANSMISSAO.get("id_escravo_pc", 1),
-    "swap_words": TRANSMISSAO.get("swap_words", False),
-    "mock_sample_rate_hz": 20,
-    "nodes": NODOS_CONFIG,
+    "execution_mode": MODO_EJECUCION,
+    "use_sensor_config": True,
+    "mock_sample_rate_hz": 300,
+    "gateway": GATEWAY,
     "transmissao": TRANSMISSAO,
+    "nodes": NODOS_CONFIG,
+    "profiles_data": {
+        "profiles": {
+            f"slot_{i}": {"name": f"Perfil {i}", "min": 0.0, "max": 1000.0}
+            for i in range(1, 6)
+        },
+        "active_profile": "slot_1"
+    }
 }
 
 def load_settings():
@@ -171,6 +172,14 @@ def load_settings():
                 # Merge with defaults to ensure keys exist
                 merged = DEFAULT_SETTINGS.copy()
                 merged.update(data)
+                
+                # Migración/Limpieza: Si ya tenemos bloques nuevos, quitar basura del nivel superior
+                if "gateway" in merged:
+                    obsolete = ["serial_port", "baudrate", "connection_type", "paridade", "id_escravo_pc", "swap_words", "stopbits", "bytesize", "timeout", "tcp_ip", "tcp_port"]
+                    for k in obsolete:
+                        if k in merged:
+                            del merged[k]
+
                 # Ensure nodes key exists
                 if 'nodes' not in merged or not isinstance(merged['nodes'], dict):
                     merged['nodes'] = DEFAULT_SETTINGS['nodes']

@@ -3984,20 +3984,26 @@ class BalanzaGUI(ttk.Window):
 
         ttk.Label(trans_grid, text="Velocidade:", font=base_font).grid(row=1, column=0, sticky="w", padx=(0, 20), pady=6)
         entry_baud = ttk.Combobox(trans_grid, font=base_font, values=["9600", "19200", "38400", "57600", "115200"])
-        entry_baud.set(str(current_config.get("baudrate", current_config.get("velocidade", 9600))))
+        # Intentar leer del bloque transmissao
+        modbus_cfg = current_config.get("transmissao", {})
+        baud_val = modbus_cfg.get("velocidade", current_config.get("baudrate", 115200))
+        entry_baud.set(str(baud_val))
         entry_baud.grid(row=1, column=1, sticky="ew", ipady=self.scaled(5), pady=6)
 
         ttk.Label(trans_grid, text="Paridade:", font=base_font).grid(row=2, column=0, sticky="w", padx=(0, 20), pady=6)
         combo_parity = ttk.Combobox(trans_grid, font=base_font, values=["Nenhuma", "Par", "Ímpar"])
-        combo_parity.set(current_config.get("transmissao", {}).get("paridade", current_config.get("paridade", "Nenhuma")))
+        parity_val = modbus_cfg.get("paridade", current_config.get("paridade", "Nenhuma"))
+        combo_parity.set(parity_val)
         combo_parity.grid(row=2, column=1, sticky="ew", ipady=self.scaled(5), pady=6)
 
         ttk.Label(trans_grid, text="ID Escravo:", font=base_font).grid(row=3, column=0, sticky="w", padx=(0, 20), pady=6)
         e_slave = ttk.Entry(trans_grid, font=base_font)
-        e_slave.insert(0, str(current_config.get("transmissao", {}).get("id_escravo_pc", current_config.get("id_escravo_pc", 1))))
+        slave_val = modbus_cfg.get("id_escravo_pc", current_config.get("id_escravo_pc", 1))
+        e_slave.insert(0, str(slave_val))
         e_slave.grid(row=3, column=1, sticky="ew", ipady=self.scaled(5), pady=6)
 
-        swap_var = tk.BooleanVar(value=current_config.get("transmissao", {}).get("swap_words", current_config.get("swap_words", False)))
+        swap_val = modbus_cfg.get("swap_words", current_config.get("swap_words", False))
+        swap_var = tk.BooleanVar(value=bool(swap_val))
         try:
             style.configure('Trans.Check.TCheckbutton', font=base_font)
             ttk.Checkbutton(trans_grid, text="Inverter Bytes (Swap Words)", variable=swap_var, bootstyle="secondary", style='Trans.Check.TCheckbutton').grid(row=4, column=0, columnspan=2, sticky="w", pady=(10,0))
@@ -4232,26 +4238,32 @@ class BalanzaGUI(ttk.Window):
                 gateway_port = current_config.get('serial_port', 'COM3')
 
             # --- Partir de la config existente para preservar claves no editadas ---
-            # (mock_sample_rate_hz, profiles_data, stopbits, bytesize, timeout, etc.)
             new_config = load_settings()
+            
+            # Limpiar redundancias del nivel superior
+            keys_to_remove = ["serial_port", "baudrate", "paridade", "stopbits", "bytesize", "timeout", "id_escravo_pc", "swap_words", "connection_type"]
+            for k in keys_to_remove:
+                if k in new_config:
+                    del new_config[k]
+
             new_config.update({
                 "execution_mode": current_config.get('execution_mode', 'REAL'),
-                "connection_type": "SERIAL",
-                # Puerto del gateway USB (nodo), NO el de Modbus
-                "serial_port": gateway_port,
-                "baudrate": baud_val,
-                "paridade": combo_parity.get() if 'combo_parity' in locals() or 'combo_parity' in globals() else current_config.get('paridade', 'Nenhuma'),
-                "id_escravo_pc": slave_id_val,
-                "swap_words": bool(swap_var.get()) if 'swap_var' in locals() or 'swap_var' in globals() else current_config.get('swap_words', False),
-                "tcp_ip": "",
-                "tcp_port": "",
+                "use_sensor_config": current_config.get('use_sensor_config', True),
+                "gateway": {
+                    "porta": gateway_port,
+                    "velocidade": current_config.get('gateway', {}).get('velocidade', 3000000),
+                    "timeout": current_config.get('gateway', {}).get('timeout', 0.05)
+                },
                 "nodes": built_nodes,
                 "transmissao": {
-                    "porta": entry_trans.get() if 'entry_trans' in locals() or 'entry_trans' in globals() else current_config.get('transmissao', {}).get('porta', 'COM3'),
+                    "porta": entry_trans.get() if 'entry_trans' in locals() or 'entry_trans' in globals() else current_config.get('transmissao', {}).get('porta', 'COM10'),
                     "velocidade": baud_val,
-                    "paridade": combo_parity.get() if 'combo_parity' in locals() or 'combo_parity' in globals() else current_config.get('paridade', 'Nenhuma'),
+                    "paridade": combo_parity.get() if 'combo_parity' in locals() or 'combo_parity' in globals() else current_config.get('transmissao', {}).get('paridade', 'Nenhuma'),
                     "id_escravo_pc": slave_id_val,
-                    "swap_words": bool(swap_var.get()) if 'swap_var' in locals() or 'swap_var' in globals() else current_config.get('swap_words', False),
+                    "swap_words": bool(swap_var.get()) if 'swap_var' in locals() or 'swap_var' in globals() else current_config.get('transmissao', {}).get('swap_words', False),
+                    "stopbits": current_config.get('transmissao', {}).get('stopbits', 1),
+                    "bytesize": current_config.get('transmissao', {}).get('bytesize', 8),
+                    "timeout": current_config.get('transmissao', {}).get('timeout', 0.005)
                 }
             })
             

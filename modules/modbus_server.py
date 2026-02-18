@@ -39,7 +39,7 @@ class ModbusDataServer:
         parity: str = 'N',
         stopbits: int = 1,
         bytesize: int = 8,
-        timeout: float = 0.05,
+        timeout: float = 0.005,
         max_queue: int = 2000,
         holding_start: int = 1000,
     ) -> None:
