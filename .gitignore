@@ -11,6 +11,7 @@ env/
 # Distribution / Packaging
 build/
 dist/
+dist_test/
 *.spec
 *.exe
 
