@@ -221,7 +221,7 @@ class BalanzaGUI(ttk.Window):
         
         # Total Panel - MUY PROMINENTE para nfasis mximo
         self.style.configure('TotalPanel.TFrame', background=PRIMARY)
-        self.style.configure('TotalLabel.TLabel', background=PRIMARY, foreground="white", font=(FONT_MAIN, sf(28), "bold"))
+        self.style.configure('TotalLabel.TLabel', background=PRIMARY, foreground="white", font=(FONT_MAIN, sf(36), "bold"))
         self.style.configure('TotalValue.TLabel', background=PRIMARY, foreground="white", font=(FONT_NUMBERS, sf(72), "bold"))
         # Mantener una versión monoespaciada para el total de la pestaña de mantenimiento
         self.style.configure('MaintTotalValue.TLabel', background=PRIMARY, foreground="white", font=(FONT_MONO, sf(72), "bold"))
@@ -598,7 +598,7 @@ class BalanzaGUI(ttk.Window):
         # Aumentar peso de la fila 0 para que se expanda hacia abajo
         grid_area.rowconfigure(0, weight=4)
 
-        def create_static_beam_card(parent, title, col):
+        def create_static_beam_card(parent, title, col, sensor_nums=""):
             card = ttk.Frame(parent, style='Card.TFrame', padding=20)
             card.grid(row=0, column=col, sticky="nsew", padx=10, pady=10)
             # BLOQUEO DE TAMAÑO: Evita que el contenido estire la tarjeta
@@ -611,7 +611,15 @@ class BalanzaGUI(ttk.Window):
             except Exception:
                 pass
 
-            ttk.Label(card, text=title, style='CardTitle.TLabel', font=("Segoe UI", self.scaled_font(22), "bold")).pack(pady=(20, 30))
+            ttk.Label(card, text=title, style='CardTitle.TLabel', font=("Segoe UI", self.scaled_font(28), "bold")).pack(pady=(20, 4))
+            # ID(s) de nodo debajo del título
+            if sensor_nums:
+                ttk.Label(card, text=f"N°: {sensor_nums}", style='CardTitle.TLabel',
+                          font=("Segoe UI", self.scaled_font(16), "bold"),
+                          foreground="#6c757d").pack(pady=(0, 18))
+            else:
+                # Espacio equivalente si no hay ID de nodo configurado
+                ttk.Frame(card, height=self.scaled(18)).pack()
             val_lbl = ttk.Label(card, text="0", style='CardValue.TLabel', font=("Segoe UI", self.scaled_font(60), "bold"), anchor="center")
             val_lbl.pack(expand=YES, fill=X)
             # Guardar ancho objetivo para el auto-ajuste de fuente (calculado aprox)
@@ -623,7 +631,25 @@ class BalanzaGUI(ttk.Window):
             return val_lbl
 
         # 1. TARJETA VIGA 1 (Izquierda)
-        self.lbl_viga1_sum = create_static_beam_card(grid_area, "VIGA 1", 0)
+        # Leer IDs de nodo reales desde settings.json (NODOS_CONFIG tiene id=0 por defecto)
+        try:
+            import json as _json
+            from config import SETTINGS_FILE as _SETTINGS_FILE
+            with open(_SETTINGS_FILE, 'r', encoding='utf-8') as _f:
+                _saved = _json.load(_f)
+            _snodes = _saved.get('nodes', {})
+            # IDs únicos (preservando orden) de los nodos de Viga 1
+            _seen = set()
+            _v1_ids_list = []
+            for _k in ('celda_1', 'celda_3'):
+                _nid = _snodes.get(_k, {}).get('id', 0)
+                if _nid and _nid not in _seen:
+                    _seen.add(_nid)
+                    _v1_ids_list.append(str(_nid))
+            _v1_ids = ', '.join(_v1_ids_list) or None
+        except Exception:
+            _v1_ids = None
+        self.lbl_viga1_sum = create_static_beam_card(grid_area, "VIGA 1", 0, sensor_nums=_v1_ids)
         # Mantener compatibilidad con nombres anteriores
         self.lbl_viga1_total = self.lbl_viga1_sum
 
@@ -654,7 +680,18 @@ class BalanzaGUI(ttk.Window):
         self.lbl_total_unit.pack(pady=(0, 30))
 
         # 3. TARJETA VIGA 2 (Derecha)
-        self.lbl_viga2_sum = create_static_beam_card(grid_area, "VIGA 2", 2)
+        try:
+            _seen2 = set()
+            _v2_ids_list = []
+            for _k in ('celda_2', 'celda_4'):
+                _nid = _snodes.get(_k, {}).get('id', 0)
+                if _nid and _nid not in _seen2:
+                    _seen2.add(_nid)
+                    _v2_ids_list.append(str(_nid))
+            _v2_ids = ', '.join(_v2_ids_list) or None
+        except Exception:
+            _v2_ids = None
+        self.lbl_viga2_sum = create_static_beam_card(grid_area, "VIGA 2", 2, sensor_nums=_v2_ids)
         self.lbl_viga2_total = self.lbl_viga2_sum
 
         # Inicializar diccionario vacío de widgets de sensores individuales
@@ -2634,8 +2671,8 @@ class BalanzaGUI(ttk.Window):
         try:
             # Dialogo personalizado (mismo aspecto/tamaño que show_alert)
             dialog = ttk.Toplevel(self)
-            dialog.overrideredirect(True)
-            w_dlg, h_dlg = 550, 300
+            dialog.title("Acesso à Configuração")
+            w_dlg, h_dlg = 550, 320
             try:
                 x = self.winfo_x() + (self.winfo_width() // 2) - (w_dlg // 2)
                 y = self.winfo_y() + (self.winfo_height() // 2) - (h_dlg // 2)

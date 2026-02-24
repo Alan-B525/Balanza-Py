@@ -1,5 +1,5 @@
 {
-    "execution_mode": "REAL",
+    "execution_mode": "MOCK",
     "connection_type": "SERIAL",
     "serial_port": "COM4",
     "tcp_ip": "",
