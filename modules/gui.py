@@ -4343,9 +4343,18 @@ class BalanzaGUI(ttk.Window):
                     widget.configure(style='Card.TFrame')
                 except Exception:
                     pass
+                # CRÍTICO: resetear también los atributos directos que se forzaron al seleccionar
+                # (cambiar solo el 'style' no revierte el background/relief forzado directamente)
+                try:
+                    widget.configure(background=BG_CARD, relief='solid', borderwidth=1,
+                                     highlightthickness=0)
+                except Exception:
+                    pass
                 if content_frame:
                     try:
-                        content_frame.configure(background=BG_CARD)
+                        # Revertir el style del content_frame al original
+                        # (content_frame.configure(background=...) falla en ttk.Frame)
+                        content_frame.configure(style='CardNoBorder.TFrame')
                     except Exception:
                         pass
                     for sub in content_frame.winfo_children():

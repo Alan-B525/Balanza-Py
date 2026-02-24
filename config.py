@@ -22,11 +22,16 @@ def get_base_dir():
 def get_writable_dir():
     """
     Directorio de datos del usuario (LECTURA Y ESCRITURA).
-    Aquí guardaremos logs, json y configuraciones.
+    - Modo EXE: %LOCALAPPDATA%\\SistemaDePesagem  (siempre escribible, sin necesidad de admin)
+    - Modo desarrollo: carpeta del proyecto
     """
     if getattr(sys, 'frozen', False):
-        # MODO EXE: SIEMPRE junto al ejecutable
-        path = os.path.dirname(sys.executable)
+        # MODO EXE: Usar AppData\Local para evitar problemas de permisos en Program Files
+        local_app_data = os.environ.get('LOCALAPPDATA', '')
+        if not local_app_data:
+            # Fallback: junto al ejecutable si no existe LOCALAPPDATA
+            local_app_data = os.path.dirname(sys.executable)
+        path = os.path.join(local_app_data, APP_NAME)
     else:
         # MODO DESARROLLO: Usamos la carpeta del proyecto
         path = os.path.dirname(os.path.abspath(__file__))
