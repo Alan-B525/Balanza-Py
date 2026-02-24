@@ -3217,8 +3217,9 @@ class BalanzaGUI(ttk.Window):
         try:
             # Dialogo personalizado (mismo aspecto/tamaño que show_alert)
             dialog = ttk.Toplevel(self)
-            dialog.overrideredirect(True)
-            w_dlg, h_dlg = 550, 300
+            # SIN overrideredirect para que el teclado virtual de tablet funcione
+            dialog.title("Acesso à Configuração")
+            w_dlg, h_dlg = 550, 320
             try:
                 x = self.winfo_x() + (self.winfo_width() // 2) - (w_dlg // 2)
                 y = self.winfo_y() + (self.winfo_height() // 2) - (h_dlg // 2)
