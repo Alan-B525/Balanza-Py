@@ -1216,7 +1216,8 @@ class BalanzaGUI(ttk.Window):
         except Exception:
             pass
 
-    def _show_numeric_keypad(self, entry_widget, title="Inserir Valor"):
+    def _show_numeric_keypad(self, entry_widget, title="Inserir Valor",
+                              pin_mode=False, max_digits=None):
         """Teclado numérico virtual grande y funcional."""
         # Cerrar teclado anterior si existe
         if hasattr(self, '_active_keypad') and self._active_keypad:
@@ -1230,21 +1231,27 @@ class BalanzaGUI(ttk.Window):
             except:
                 pass
             self._active_keypad = None
-        
+
         # Valor actual del entry
-        current_value = entry_widget.get() if hasattr(entry_widget, 'get') else ""
-        
+        if entry_widget is not None:
+            current_value = entry_widget.get() if hasattr(entry_widget, 'get') else ""
+        else:
+            current_value = ""
+
         # Tamaño del teclado
         kp_width, kp_height = 480, 650
-        
+
         # Calcular posición centrada en pantalla
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
         x = (screen_w - kp_width) // 2
         y = (screen_h - kp_height) // 2
-        
+
         # Obtener la ventana padre (puede ser un diálogo)
-        parent = entry_widget.winfo_toplevel()
+        if entry_widget is not None:
+            parent = entry_widget.winfo_toplevel()
+        else:
+            parent = self
         try:
             # Indicar al watchdog que no eleve el diálogo principal mientras exista el keypad
             self._suppress_cfg_watch = True
@@ -1267,6 +1274,8 @@ class BalanzaGUI(ttk.Window):
         except Exception:
             pass
         keypad.configure(bg="#222222")
+        if pin_mode:
+            keypad.overrideredirect(True)
         self._active_keypad = keypad
         
         # Variable para el valor
@@ -1274,9 +1283,21 @@ class BalanzaGUI(ttk.Window):
         
         # Flag para saber si es la primera pulsación
         first_press = [True]
-        
+
+        # Variables para modo PIN
+        _real_digits = []               # dígitos reales cuando pin_mode=True
+        _pin_result   = {'value': None} # canal de retorno del modal
+
         # Funciones
         def press_digit(d):
+            if pin_mode:
+                if d in (".", "-"):
+                    return
+                if max_digits and len(_real_digits) >= max_digits:
+                    return
+                _real_digits.append(d)
+                kp_value.set('\u25cf' * len(_real_digits))  # ● por dígito
+                return
             current = kp_value.get()
             # Permitir solo un '-' al inicio
             if d == "-":
@@ -1297,8 +1318,13 @@ class BalanzaGUI(ttk.Window):
             if d == "." and "." in current:
                 return
             kp_value.set(current + d)
-        
+
         def press_backspace():
+            if pin_mode:
+                if _real_digits:
+                    _real_digits.pop()
+                kp_value.set('\u25cf' * len(_real_digits))
+                return
             kp_value.set(kp_value.get()[:-1])
         
         def press_clear():
@@ -1346,21 +1372,41 @@ class BalanzaGUI(ttk.Window):
         # Frame superior para layout grid
         keypad_frame = ttk.Frame(keypad)
         keypad_frame.pack(fill="both", expand=True)
-        keypad_frame.rowconfigure(0, weight=2)
-        keypad_frame.rowconfigure(1, weight=8)
+        if pin_mode:
+            keypad_frame.rowconfigure(0, weight=1)   # título
+            keypad_frame.rowconfigure(1, weight=2)   # entry
+            keypad_frame.rowconfigure(2, weight=8)   # botones
+        else:
+            keypad_frame.rowconfigure(0, weight=2)   # entry
+            keypad_frame.rowconfigure(1, weight=8)   # botones
         keypad_frame.columnconfigure(0, weight=1)
 
-        # Entry grande en la primera fila
-        entry_display = ttk.Entry(keypad_frame, textvariable=kp_value, font=("Segoe UI", 32), justify="center", state="readonly")
-        entry_display.grid(row=0, column=0, sticky="nsew", padx=40, pady=(40, 20))
+        # Título personalizado (solo en pin_mode, reemplaza la barra de Windows)
+        if pin_mode:
+            title_lbl = ttk.Label(
+                keypad_frame,
+                text=title,
+                font=("Segoe UI", 14, "bold"),
+                anchor="center"
+            )
+            title_lbl.grid(row=0, column=0, sticky="ew", padx=20, pady=(16, 4))
+            entry_row = 1
+            btns_row = 2
+        else:
+            entry_row = 0
+            btns_row = 1
 
-        # Frame de botones en la segunda fila
+        # Entry grande para mostrar el valor digitado
+        entry_display = ttk.Entry(keypad_frame, textvariable=kp_value, font=("Segoe UI", 32), justify="center", state="readonly")
+        entry_display.grid(row=entry_row, column=0, sticky="nsew", padx=40, pady=(10 if pin_mode else 40, 20))
+
+        # Frame de botones
         all_btns = ttk.Frame(keypad_frame)
-        all_btns.grid(row=1, column=0, sticky="nsew")
+        all_btns.grid(row=btns_row, column=0, sticky="nsew")
         for i in range(5):
             all_btns.rowconfigure(i, weight=1)
         for j in range(3):
-            all_btns.columnconfigure(j, weight=1)
+            all_btns.columnconfigure(j, weight=1, uniform="kp_col")
 
         pad_num = (18, 18)
         pad_act = (18, 22)
@@ -1384,8 +1430,15 @@ class BalanzaGUI(ttk.Window):
                 pass
 
         def confirm_and_close():
-            entry_widget.delete(0, tk.END)
-            entry_widget.insert(0, kp_value.get())
+            if pin_mode:
+                _pin_result['value'] = ''.join(_real_digits)
+            else:
+                entry_widget.delete(0, tk.END)
+                entry_widget.insert(0, kp_value.get())
+            _close_keypad()
+
+        def cancel_and_close():
+            # _pin_result['value'] permanece None → el caller interpreta como cancelación
             _close_keypad()
 
         # Fila 0: 7 8 9
@@ -1403,13 +1456,19 @@ class BalanzaGUI(ttk.Window):
         ttk.Button(all_btns, text="2", command=lambda: press_digit("2"), bootstyle="light", padding=pad_num).grid(row=2, column=1, sticky="nsew", padx=4, pady=4)
         ttk.Button(all_btns, text="3", command=lambda: press_digit("3"), bootstyle="light", padding=pad_num).grid(row=2, column=2, sticky="nsew", padx=4, pady=4)
 
-        # Fila 3: . 0 DEL
-        ttk.Button(all_btns, text=".", command=lambda: press_digit("."), bootstyle="secondary", padding=pad_num).grid(row=3, column=0, sticky="nsew", padx=4, pady=4)
+        # Fila 3: [./deshabilitado en PIN] 0 DEL
+        if not pin_mode:
+            ttk.Button(all_btns, text=".", command=lambda: press_digit("."), bootstyle="secondary", padding=pad_num).grid(row=3, column=0, sticky="nsew", padx=4, pady=4)
+        else:
+            ttk.Button(all_btns, text="", state="disabled", bootstyle="secondary", padding=pad_num).grid(row=3, column=0, sticky="nsew", padx=4, pady=4)
         ttk.Button(all_btns, text="0", command=lambda: press_digit("0"), bootstyle="light", padding=pad_num).grid(row=3, column=1, sticky="nsew", padx=4, pady=4)
         ttk.Button(all_btns, text="DEL", command=press_backspace, bootstyle="warning", padding=pad_act).grid(row=3, column=2, sticky="nsew", padx=4, pady=4)
 
-        # Fila 4: - | OK (OK ocupa 2 columnas)
-        ttk.Button(all_btns, text="-", command=lambda: press_digit("-"), bootstyle="secondary", padding=pad_act).grid(row=4, column=0, sticky="nsew", padx=4, pady=4)
+        # Fila 4: [-/CANCELAR] | OK (OK ocupa 2 columnas)
+        if not pin_mode:
+            ttk.Button(all_btns, text="-", command=lambda: press_digit("-"), bootstyle="secondary", padding=pad_act).grid(row=4, column=0, sticky="nsew", padx=4, pady=4)
+        else:
+            ttk.Button(all_btns, text="CANCELAR", command=cancel_and_close, bootstyle="danger", padding=pad_act).grid(row=4, column=0, sticky="nsew", padx=4, pady=4)
         ttk.Button(all_btns, text="OK", command=confirm_and_close, bootstyle="success", padding=pad_act).grid(row=4, column=1, columnspan=2, sticky="nsew", padx=4, pady=4)
 
         # Evitar grab_set() para no bloquear la app en tablets; usar focus/lift
@@ -1418,6 +1477,13 @@ class BalanzaGUI(ttk.Window):
             keypad.lift()
         except Exception:
             pass
+
+        if pin_mode:
+            try:
+                self.wait_window(keypad)  # bloquea hasta que _close_keypad llame keypad.destroy()
+            except Exception:
+                pass
+            return _pin_result.get('value')
 
     def _bind_numeric_keypad(self, entry_widget, title="Inserir Valor"):
         """Vincula un Entry para mostrar teclado numérico al hacer click."""
@@ -2666,211 +2732,19 @@ class BalanzaGUI(ttk.Window):
         """Abre um dilogo para configurar sensores e calibrao."""
         import json
         import os
-        # Solicitar contraseña simple antes de abrir la configuración
-        pwd = None
-        try:
-            # Dialogo personalizado (mismo aspecto/tamaño que show_alert)
-            dialog = ttk.Toplevel(self)
-            dialog.title("Acesso à Configuração")
-            w_dlg, h_dlg = 550, 320
-            try:
-                x = self.winfo_x() + (self.winfo_width() // 2) - (w_dlg // 2)
-                y = self.winfo_y() + (self.winfo_height() // 2) - (h_dlg // 2)
-            except Exception:
-                x = (self.winfo_screenwidth() // 2) - (w_dlg // 2)
-                y = (self.winfo_screenheight() // 2) - (h_dlg // 2)
-            dialog.geometry(f"{w_dlg}x{h_dlg}+{x}+{y}")
-            dialog.attributes('-topmost', True)
-
-            # Fix Z-order: bind a la ventana principal para forzar lift si recupera foco
-            def force_top(event=None):
-                try:
-                    # Si el foco está en una toplevel hija del diálogo (p.ej. keypad), no forzar lift
-                    focus_widget = self.focus_get()
-                    if focus_widget:
-                        try:
-                            top = focus_widget.winfo_toplevel()
-                        except Exception:
-                            top = None
-                        if top is not None and getattr(top, 'master', None) is dialog:
-                            return
-                    dialog.lift()
-                    dialog.attributes('-topmost', True)
-                except Exception:
-                    pass
-            try:
-                self.bind('<FocusIn>', force_top)
-            except Exception:
-                pass
-
-            # Watchdog para mantener el diálogo encima en caso de Alt+Tab u otros cambios de z-order
-            def _watch_pwd():
-                try:
-                    if dialog.winfo_exists():
-                        # Si hay una bandera que suprime el watchdog (un diálogo hijo abierto), no forzar lift
-                        if getattr(self, '_suppress_cfg_watch', False):
-                            dialog.after(1000, _watch_pwd)
-                            return
-                        try:
-                            # Si el foco está en otra toplevel, respetarlo.
-                            focus_widget = self.focus_get()
-                            if focus_widget:
-                                try:
-                                    top = focus_widget.winfo_toplevel()
-                                except Exception:
-                                    top = None
-                                # Si la ventana con foco es una ventana hija del diálogo,
-                                # asegurar que ella esté topmost y liftearla.
-                                if top is not None and getattr(top, 'master', None) is dialog:
-                                    try:
-                                        top.attributes('-topmost', True)
-                                        top.lift()
-                                    except Exception:
-                                        pass
-                                    dialog.after(1000, _watch_pwd)
-                                    return
-                                # Si el foco está en otra ventana distinta, no forzar el lift.
-                                if top is not None and top is not dialog:
-                                    dialog.after(1000, _watch_pwd)
-                                    return
-                            # Caso por defecto: levantar el diálogo
-                            try:
-                                dialog.lift()
-                                dialog.attributes('-topmost', True)
-                            except Exception:
-                                pass
-                        except Exception:
-                            pass
-                        dialog.after(1000, _watch_pwd)
-                    else:
-                        try:
-                            self.unbind('<FocusIn>')
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-            try:
-                dialog.after(1000, _watch_pwd)
-            except Exception:
-                pass
-
-            outer_frame = ttk.Frame(dialog, bootstyle="dark", padding=3)
-            outer_frame.pack(fill=BOTH, expand=YES)
-            frame = ttk.Frame(outer_frame, padding=20)
-            frame.pack(fill=BOTH, expand=YES)
-
-            # Título
-            title_lbl = ttk.Label(frame, text="ACESSO À CONFIGURAÇÃO", font=("Segoe UI", 16, "bold"), foreground="#1e293b")
-            title_lbl.pack(pady=(0, 12))
-
-            # Mensaje
-            msg_lbl = ttk.Label(frame, text="Insira a senha para acessar a Configuração:", font=("Segoe UI", 12), wraplength=480, justify="center")
-            msg_lbl.pack(pady=(0, 12))
-
-            # Entry
-            pwd_var = tk.StringVar()
-            entry = ttk.Entry(frame, textvariable=pwd_var, show='*', font=("Segoe UI", 14), justify='center')
-            # Más espacio debajo de la entrada para bajar los botones
-            entry.pack(pady=(0, 20), ipadx=10, ipady=6)
-            entry.focus_set()
-
-            btn_frame = ttk.Frame(frame)
-            # Mover botones más abajo dentro del cartel
-            btn_frame.pack(fill=X, pady=(16, 0))
-            try:
-                btn_frame.columnconfigure(0, weight=1)
-                btn_frame.columnconfigure(1, weight=1)
-            except Exception:
-                pass
-
-            result = {'ok': False}
-
-            def on_ok():
-                result['ok'] = True
-                try:
-                    self.unbind('<FocusIn>')
-                except Exception:
-                    pass
-                dialog.destroy()
-
-            def on_cancel():
-                try:
-                    self.unbind('<FocusIn>')
-                except Exception:
-                    pass
-                dialog.destroy()
-
-            btn_ok = ttk.Button(btn_frame, text="OK", bootstyle="success", command=on_ok)
-            btn_cancel = ttk.Button(btn_frame, text="CANCELAR", bootstyle="danger", command=on_cancel)
-            try:
-                btn_ok.grid(row=0, column=0, sticky='ew', padx=(0, 6), ipady=6)
-                btn_cancel.grid(row=0, column=1, sticky='ew', padx=(6, 0), ipady=6)
-            except Exception:
-                btn_ok.pack(side=LEFT, expand=YES, fill=X, padx=(0, 6))
-                btn_cancel.pack(side=RIGHT, expand=YES, fill=X, padx=(6, 0))
-
-            # Garantizar anchura uniforme entre botones y enlazar Enter/Escape
-            try:
-                # Calcular ancho en caracteres razonable (usar la longitud del texto más un padding)
-                t_ok = (btn_ok.cget('text') or 'OK')
-                t_cancel = (btn_cancel.cget('text') or 'CANCELAR')
-                width_chars = max(len(str(t_ok)), len(str(t_cancel))) + 2
-                btn_ok.configure(width=width_chars)
-                btn_cancel.configure(width=width_chars)
-            except Exception:
-                pass
-
-            try:
-                # Enter confirma, Escape cancela
-                dialog.bind('<Return>', lambda e: on_ok())
-                dialog.bind('<KP_Enter>', lambda e: on_ok())
-                dialog.bind('<Escape>', lambda e: on_cancel())
-                # También enlazar la entrada para que Enter funcione allí
-                try:
-                    entry.bind('<Return>', lambda e: on_ok())
-                except Exception:
-                    pass
-            except Exception:
-                pass
-
-            try:
-                dialog.grab_set()
-            except Exception:
-                pass
-            # Loop modal
-            while True:
-                try:
-                    dialog.update()
-                except Exception:
-                    break
-                if not dialog.winfo_exists():
-                    break
-            try:
-                self.unbind('<FocusIn>')
-            except Exception:
-                pass
-            try:
-                if result.get('ok'):
-                    pwd = pwd_var.get()
-                    canceled = False
-                else:
-                    pwd = None
-                    canceled = True
-            except Exception:
-                pwd = None
-                canceled = False
-        except Exception:
-            pwd = None
-
-        # Si el usuario canceló el diálogo, salir sin mostrar alerta
-        try:
-            if canceled:
-                return
-        except NameError:
-            pass
+        # Solicitar PIN de 4 dígitos usando o teclado numérico existente
+        pin = self._show_numeric_keypad(
+            None,
+            title="Inserir senha",
+            pin_mode=True,
+            max_digits=4
+        )
+        if pin is None:
+            return  # Usuário cancelou
+        pwd = pin
 
         # Contraseña básica hardcodeada (sin gestión adicional)
-        if not pwd or pwd != 'arbra321':
+        if not pwd or pwd != '2847':
             try:
                 # Usar el diálogo grande de alerta si está disponible
                 self.show_alert("Acesso negado", "Senha incorreta.", "error", parent=self)

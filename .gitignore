@@ -1,31 +1,25 @@
+# Archivos temporales de Claude Code
+tmpclaude-*-cwd
+
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
-
-# Virtual Environment
-venv/
-env/
-.env
-
-
-# Distribution / Packaging
-build/
+*.pyo
+*.pyd
+.Python
+*.egg-info/
 dist/
+build/
 *.spec
-*.exe
 
-# IDEs
-.vscode/
-.idea/
-*.swp
-.gemini/
-.github/
+# Entornos virtuales
+venv/
+.venv/
+env/
 
-dist_test/
 # Logs
 *.log
 
-# OS generated files
-Thumbs.db
-Desktop.ini
+.gemini/
+# Configuración local (si contiene datos sensibles)
+# settings.json  ← descomentá si no querés versionar la config
