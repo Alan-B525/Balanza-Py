@@ -192,7 +192,11 @@ class BalanzaGUI(ttk.Window):
         self._log_write_queue = _queue_mod.Queue()
         def _log_writer_worker():
             import datetime, os
-            log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'log.log')
+            try:
+                import config as _cfg_mod
+                log_path = os.path.join(_cfg_mod.get_writable_dir(), 'log.log')
+            except Exception:
+                log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'log.log')
             while True:
                 try:
                     entry = self._log_write_queue.get()
@@ -545,7 +549,7 @@ class BalanzaGUI(ttk.Window):
         
         # Header: mostrar título y estado en la parte superior (no en el footer)
         try:
-            title_text = "Control de Carga"
+            title_text = "Controle de Carga"
             title_lbl = ttk.Label(brand_frame, text=title_text, style='HeaderTitle.TLabel', font=("Segoe UI", self.scaled_font(19), "bold"))
             title_lbl.pack(side=LEFT, padx=(10, 14))
 
@@ -2708,7 +2712,6 @@ class BalanzaGUI(ttk.Window):
         
         # Crear janela secundria SIN BARRA DE TTULO
         dialog = ttk.Toplevel(parent)
-        dialog.withdraw()  # Ocultar hasta tener todos los widgets listos
         dialog.overrideredirect(True)  # Quitar barra de Windows
         
         # Centralizar em relao  la tela
@@ -2795,7 +2798,6 @@ class BalanzaGUI(ttk.Window):
         
         # Criar janela SIN BARRA DE TTULO
         dialog = ttk.Toplevel(target)
-        dialog.withdraw()  # Ocultar hasta tener todos los widgets listos
         dialog.overrideredirect(True)
         dialog.geometry("550x300")
 
@@ -2900,7 +2902,6 @@ class BalanzaGUI(ttk.Window):
         
         # Crear dialogo de alerta
         dialog = ttk.Toplevel(self)
-        dialog.withdraw()  # Ocultar hasta tener todos los widgets listos
         dialog.overrideredirect(True)
         dialog.geometry("700x480")
         
@@ -3120,7 +3121,6 @@ class BalanzaGUI(ttk.Window):
         
         # Criar janela
         dialog = ttk.Toplevel(self)
-        dialog.withdraw()  # Ocultar hasta que esté completamente construido
         dialog.overrideredirect(True)
         
         w_dlg = 700
@@ -3172,9 +3172,23 @@ class BalanzaGUI(ttk.Window):
         
         # NOTA: Remover transient cuando se usa overrideredirect en ambas ventanas para evitar conflictos
         # dialog.transient(self)
-        dialog.deiconify()  # Mostrar ahora que todos los widgets están listos
-        dialog.update_idletasks()  # Forzar renderizado inmediato
-        dialog.after(20, lambda: dialog.grab_set())
+        dialog.update_idletasks()
+        dialog.lift()
+        dialog.focus_force()
+
+        # Grab robusto: en EXE compilado el WM tarda más en registrar la ventana.
+        # Reintentar hasta que winfo_viewable() confirme que el dialogo está visible.
+        def _try_grab(dlg, attempts=0):
+            if not dlg.winfo_exists():
+                return
+            try:
+                if dlg.winfo_viewable():
+                    dlg.grab_set()
+                elif attempts < 20:          # máx ~1 s de reintentos
+                    dlg.after(50, lambda: _try_grab(dlg, attempts + 1))
+            except Exception:
+                pass
+        dialog.after(50, lambda: _try_grab(dialog))
         
         # Enviar primer intento de conexión (cada llamada es una tentativa)
         self._conn_attempt = 1
@@ -3235,7 +3249,6 @@ class BalanzaGUI(ttk.Window):
                         # Buscar la ventana Toplevel padre (diálogo de config)
                         parent = self.entry_min.winfo_toplevel()
                         alert = ttk.Toplevel(parent)
-                        alert.withdraw()  # Ocultar hasta estar listo
                         alert.overrideredirect(True)
 
                         # Centrar sobre el diálogo padre
@@ -4802,7 +4815,6 @@ class BalanzaGUI(ttk.Window):
             # Crear función modal de import/export que muestre SOLO tres botones grandes
             def show_import_export_choice_calib():
                 dlg = ttk.Toplevel(self)
-                dlg.withdraw()  # Ocultar hasta estar listo
                 dlg.overrideredirect(True)
                 dlg.transient(self)
 
