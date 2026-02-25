@@ -28,3 +28,6 @@ dist_test/
 # OS generated files
 Thumbs.db
 Desktop.ini
+# Archivos temporales de Claude Code
+tmpclaude-*-cwd
+nul

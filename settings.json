@@ -1,5 +1,5 @@
 {
-    "execution_mode": "MOCK",
+    "execution_mode": "REAL",
     "use_sensor_config": true,
     "mock_sample_rate_hz": 300,
     "gateway": {

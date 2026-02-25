@@ -7,7 +7,7 @@ import platform
 # 1. GESTIÓN DE RUTAS Y PERMISOS (CRÍTICO PARA EL EXE)
 # =============================================================================
 
-APP_NAME = "SistemaDePesagem"  # Nombre de la carpeta en AppData
+APP_NAME = "ControleDeCarga"  # Nombre de la carpeta en AppData
 
 def get_base_dir():
     """
@@ -22,11 +22,18 @@ def get_base_dir():
 def get_writable_dir():
     """
     Directorio de datos del usuario (LECTURA Y ESCRITURA).
-    Aquí guardaremos logs, json y configuraciones.
+    En modo EXE usa %LOCALAPPDATA%\\<APP_NAME> (C:\\Users\\<usuario>\\AppData\\Local\\ControleDeCarga),
+    que es escribible para el usuario actual sin requerir permisos especiales
+    en Program Files.
     """
     if getattr(sys, 'frozen', False):
-        # MODO EXE: SIEMPRE junto al ejecutable
-        path = os.path.dirname(sys.executable)
+        # MODO EXE: Usar AppData\Local del usuario actual
+        localappdata = os.environ.get('LOCALAPPDATA') or os.environ.get('APPDATA')
+        if localappdata:
+            path = os.path.join(localappdata, APP_NAME)
+        else:
+            # Fallback: junto al ejecutable (no debería ocurrir en Windows)
+            path = os.path.dirname(sys.executable)
     else:
         # MODO DESARROLLO: Usamos la carpeta del proyecto
         path = os.path.dirname(os.path.abspath(__file__))
@@ -53,7 +60,6 @@ def resource_path(relative_path):
 
 # Rutas específicas para archivos (lectura y escritura JUNTO AL EJECUTABLE o script)
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
-PROFILES_FILE = os.path.join(DATA_DIR, "profiles.json")
 CALIBRATIONS_DIR = os.path.join(DATA_DIR, "calibrations")
 
 # Asegurar que la subcarpeta 'calibrations' exista
@@ -165,6 +171,21 @@ DEFAULT_SETTINGS = {
 def load_settings():
     """Carga settings desde `SETTINGS_FILE`. Devuelve dict con defaults si no existe o falla."""
     try:
+        # Asegurar estructura de datos en cada lectura
+        try:
+            os.makedirs(DATA_DIR, exist_ok=True)
+            os.makedirs(CALIBRATIONS_DIR, exist_ok=True)
+        except Exception:
+            pass
+
+        # Si no existe, crear settings con defaults para evitar estados ambiguos
+        if not os.path.exists(SETTINGS_FILE):
+            try:
+                save_settings(DEFAULT_SETTINGS.copy())
+            except Exception:
+                pass
+            return DEFAULT_SETTINGS.copy()
+
         if os.path.exists(SETTINGS_FILE):
             import json
             with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
@@ -191,12 +212,35 @@ def load_settings():
 def save_settings(settings_dict):
     """Guarda el dict `settings_dict` en `SETTINGS_FILE` (JSON, UTF-8)."""
     try:
+        # Garantizar que la carpeta de datos exista antes de escribir
+        try:
+            os.makedirs(DATA_DIR, exist_ok=True)
+            os.makedirs(CALIBRATIONS_DIR, exist_ok=True)
+        except Exception:
+            pass
         import json
         with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
             json.dump(settings_dict, f, indent=4, ensure_ascii=False)
         return True
     except Exception:
         return False
+
+def ensure_runtime_data_files():
+    """Crea carpeta/archivos mínimos de runtime si faltan, sin romper el arranque."""
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        os.makedirs(CALIBRATIONS_DIR, exist_ok=True)
+    except Exception:
+        pass
+
+    try:
+        if not os.path.exists(SETTINGS_FILE):
+            save_settings(DEFAULT_SETTINGS.copy())
+    except Exception:
+        pass
+
+# Inicialización robusta al importar configuración (no bloqueante)
+ensure_runtime_data_files()
 
 RECONNECT_ATTEMPTS = 3
 NODE_TIMEOUT_SECONDS = 5.0
@@ -205,7 +249,7 @@ DATA_TIMEOUT_MS = 100
 CONNECTION_ATTEMPT_TIMEOUT_S = 12
 
 # Especificaciones del Display
-APP_TITLE = "Control de Carga ARBRA"
+APP_TITLE = "Controle de Carga"
 APP_SIZE = "1360x768"
 THEME_NAME = "litera"
 
