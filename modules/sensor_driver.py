@@ -169,6 +169,20 @@ class MSCLDriver(ISistemaPesaje):
             self._state = ConnectionState.CONNECTING
             self._emit_progress(f"Iniciando Conexão em {puerto} @ {self.BAUD_RATE}...")
 
+            # Validación temprana de puerto para evitar esperas innecesarias y estados confusos.
+            try:
+                import serial.tools.list_ports
+                available_ports = {str(p.device).strip().upper() for p in serial.tools.list_ports.comports()}
+                normalized = str(puerto or '').strip().upper()
+                if normalized and available_ports and normalized not in available_ports:
+                    self._emit_progress(f"Falha geral na conexão: Invalid Com Port ({puerto}).")
+                    self._emit_progress(f"Portas disponíveis: {', '.join(sorted(available_ports))}")
+                    self.desconectar()
+                    return False
+            except Exception:
+                # No bloquear la conexión si falla la detección de puertos.
+                pass
+
             try:
                 # 1. Conexión Física
                 self._connection = mscl.Connection.Serial(puerto, self.BAUD_RATE)
@@ -321,8 +335,15 @@ class MSCLDriver(ISistemaPesaje):
         """Envía setToIdle y espera confirmación del SetToIdleStatus."""
         try:
             status = node.setToIdle()
+            # Evitar bucles infinitos si la librería no completa el estado.
+            # complete(timeout_ms) ya espera internamente; limitamos intentos.
+            max_attempts = 10
+            attempts = 0
             while not status.complete(timeout_ms):
-                pass
+                attempts += 1
+                if attempts >= max_attempts:
+                    self._log(f"[{node_id}] setToIdle: timeout após {max_attempts} tentativas")
+                    return False
             result = status.result()
             if result == mscl.SetToIdleStatus.setToIdleResult_success:
                 self._log(f"[{node_id}] setToIdle: éxito")

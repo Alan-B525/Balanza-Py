@@ -3,7 +3,7 @@
     "use_sensor_config": true,
     "mock_sample_rate_hz": 300,
     "gateway": {
-        "porta": "COM3",
+        "porta": "COM4",
         "velocidade": 115200,
         "timeout": 0.05
     },
@@ -12,15 +12,18 @@
         "velocidade": 115200,
         "paridade": "Nenhuma",
         "id_escravo_pc": 1,
-        "swap_words": false
+        "swap_words": false,
+        "stopbits": 1,
+        "bytesize": 8,
+        "timeout": 0.005
     },
     "nodes": {
         "celda_1": {
-            "id": 4248,
+            "id": 5454,
             "ch_load": "ch1",
             "ch_angle": "ch2",
             "ch": "ch1",
-            "serial": "3012",
+            "serial": "1232",
             "com_port": "COM4"
         }
     },

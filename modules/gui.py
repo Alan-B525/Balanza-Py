@@ -1,5 +1,6 @@
 from config import APP_TITLE, APP_SIZE, THEME_NAME, NODOS_CONFIG, RECONNECT_ATTEMPTS, CONNECTION_ATTEMPT_TIMEOUT_S, load_settings, save_settings
 import os
+import sys
 import json
 import tkinter as tk
 import ttkbootstrap as ttk
@@ -168,7 +169,7 @@ class BalanzaGUI(ttk.Window):
         # Control de visualización de decimales (por defecto: SIN decimales)
         self._show_decimals = False
         # Throttle para ajuste dinámico de fuentes (operación costosa)
-        self._font_fit_interval_s = 0.20
+        self._font_fit_interval_s = 0.35
         self._last_total_font_fit_ts = 0.0
         self._last_sensor_font_fit_ts = {}
         
@@ -176,7 +177,7 @@ class BalanzaGUI(ttk.Window):
         self._connection_thread = None
         self._cancel_connection = False
         # Límite de mensajes procesados por tick para evitar congelar la UI
-        self._gui_max_msgs_per_tick = 80
+        self._gui_max_msgs_per_tick = 40
         # Grace period after successful connection (seconds) to wait for sensors to send data
         self._post_connect_grace_s = 6.0
         self._conn_success_time = 0.0
@@ -185,6 +186,29 @@ class BalanzaGUI(ttk.Window):
         # Throttle de logs repetidos para reducir I/O de disco en ráfagas
         self._last_log_message = None
         self._last_log_ts = 0.0
+        # Cola y hilo daemon para escribir logs sin bloquear el hilo GUI
+        import queue as _queue_mod
+        import threading as _threading_mod
+        self._log_write_queue = _queue_mod.Queue()
+        def _log_writer_worker():
+            import datetime, os
+            log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'log.log')
+            while True:
+                try:
+                    entry = self._log_write_queue.get()
+                    if entry is None:
+                        break
+                    try:
+                        with open(log_path, 'a', encoding='utf-8') as _f:
+                            _f.write(entry)
+                    except Exception:
+                        pass
+                    finally:
+                        self._log_write_queue.task_done()
+                except Exception:
+                    pass
+        _t = _threading_mod.Thread(target=_log_writer_worker, daemon=True, name="LogWriter")
+        _t.start()
         
         # Handle window close event
         self.protocol("WM_DELETE_WINDOW", self.quit_app)
@@ -199,7 +223,7 @@ class BalanzaGUI(ttk.Window):
         self._setup_ui()
         
         # Start update loop
-        self.after(50, self.actualizar_gui)
+        self.after(70, self.actualizar_gui)
         
         # Iniciar conexión automática al arrancar (mostrar diálogo de conexión)
         try:
@@ -232,6 +256,46 @@ class BalanzaGUI(ttk.Window):
     def scaled_font(self, size):
         """Escala el tamaño de fuente según la resolución."""
         return int(size * self.font_scale)
+
+    def _apply_window_icon(self, window):
+        """Aplica icono de la app a ventanas con barra de título."""
+        try:
+            base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            assets_path = os.path.join(base_path, "assets")
+            ico_path = os.path.join(assets_path, "icon.ico")
+            png_path = os.path.join(assets_path, "icon.png")
+
+            applied = False
+            if os.path.exists(ico_path):
+                try:
+                    window.iconbitmap(ico_path)
+                    applied = True
+                except Exception:
+                    applied = False
+
+            if not applied and os.path.exists(png_path):
+                try:
+                    if not hasattr(self, '_window_icon_photo') or self._window_icon_photo is None:
+                        self._window_icon_photo = tk.PhotoImage(file=png_path)
+                    window.iconphoto(False, self._window_icon_photo)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _center_toplevel(self, window, width, height):
+        """Centra una ventana con tamaño fijo de forma robusta."""
+        try:
+            sw = int(self.winfo_screenwidth())
+            sh = int(self.winfo_screenheight())
+            x = max(0, (sw - int(width)) // 2)
+            y = max(0, (sh - int(height)) // 2)
+            window.geometry(f"{int(width)}x{int(height)}+{x}+{y}")
+        except Exception:
+            try:
+                window.geometry(f"{int(width)}x{int(height)}+100+100")
+            except Exception:
+                pass
 
     def _fit_label_font(self, label, text, family, max_size, min_size=8, weight='bold', explicit_width=None):
         """Ajusta el tamaño de fuente de `label` para que `text` quepa en su ancho disponible.
@@ -936,7 +1000,7 @@ class BalanzaGUI(ttk.Window):
                 val_font = ("Consolas", self.scaled_font(32), 'bold')
             except Exception:
                 val_font = ("Consolas", 32, 'bold')
-            self.lbl_tare_value_main = ttk.Label(center_frame, text="0 t", style='TareMaintValue.TLabel', font=val_font, anchor='center')
+            self.lbl_tare_value_main = ttk.Label(center_frame, text="0 kg", style='TareMaintValue.TLabel', font=val_font, anchor='center')
             # Ocultar el valor de la tara en la vista principal (se mantiene el widget para compatibilidad)
             try:
                 # No grid() para mantener oculto en la vista principal
@@ -1110,11 +1174,11 @@ class BalanzaGUI(ttk.Window):
             except Exception:
                 pass
             # Reprogramar a atualizao
-            self.after(50, self.actualizar_gui)
+            self.after(70, self.actualizar_gui)
 
     def log_message(self, message):
-        """Guarda mensajes y errores en el archivo log."""
-        import datetime, os
+        """Guarda mensajes y errores en el archivo log (I/O en hilo de fondo)."""
+        import datetime
         import time
         try:
             msg = str(message)
@@ -1129,11 +1193,10 @@ class BalanzaGUI(ttk.Window):
             self._last_log_ts = now_ts
         except Exception:
             pass
-        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'log.log')
         timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        entry = f"[{timestamp}] {msg}\n"
         try:
-            with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(f"[{timestamp}] {msg}\n")
+            self._log_write_queue.put_nowait(entry)
         except Exception:
             pass
 
@@ -1244,19 +1307,19 @@ class BalanzaGUI(ttk.Window):
         
         # Mudar cor do painel TOTAL segundo estado de sensores - FAIL-SAFE
         if any_disconnected:
-            # VERMELHO - Há sensor(es) desconectado(s) - SISTEMA PARADO
+            # VERMELHO - UI simplificada: solo estado de error
             self.total_section.configure(style='TotalPanelDanger.TFrame')
-            self.lbl_total_title.configure(text="ERRO DE COMUNICAÇÃO", style='TotalLabelDanger.TLabel')
-            self.lbl_total.configure(text="---", style='TotalValueDanger.TLabel')
-            self.lbl_total_unit.configure(text="SISTEMA PARADO", style='TotalUnitDanger.TLabel')
+            self.lbl_total_title.configure(text="ERROR", style='TotalLabelDanger.TLabel')
+            self.lbl_total.configure(text="ERROR", style='TotalValueDanger.TLabel')
+            self.lbl_total_unit.configure(text="", style='TotalUnitDanger.TLabel')
             # Mantener paridad visual en la pestaña de mantenimiento si existe
             try:
                 if hasattr(self, 'lbl_maint_total') and self.lbl_maint_total:
-                    self.lbl_maint_total.configure(text="---", style='TotalValueDanger.TLabel')
+                    self.lbl_maint_total.configure(text="ERROR", style='TotalValueDanger.TLabel')
                 if hasattr(self, 'lbl_maint_total_title') and self.lbl_maint_total_title:
-                    self.lbl_maint_total_title.configure(text="ERRO DE COMUNICAÇÃO", style='TotalLabelDanger.TLabel')
+                    self.lbl_maint_total_title.configure(text="ERROR", style='TotalLabelDanger.TLabel')
                 if hasattr(self, 'lbl_maint_total_unit') and self.lbl_maint_total_unit:
-                    self.lbl_maint_total_unit.configure(text="SISTEMA PARADO", style='TotalUnitDanger.TLabel')
+                    self.lbl_maint_total_unit.configure(text="", style='TotalUnitDanger.TLabel')
             except Exception:
                 pass
         else:
@@ -1315,7 +1378,7 @@ class BalanzaGUI(ttk.Window):
                             except Exception:
                                 pass
                     if hasattr(self, 'lbl_maint_total_unit') and self.lbl_maint_total_unit:
-                        self.lbl_maint_total_unit.configure(text="t", style='TotalUnit.TLabel')
+                        self.lbl_maint_total_unit.configure(text="kg", style='TotalUnit.TLabel')
                     if hasattr(self, 'lbl_maint_total_title') and self.lbl_maint_total_title:
                         self.lbl_maint_total_title.configure(text="CARGA", style='TotalLabel.TLabel')
                 except Exception:
@@ -1691,6 +1754,32 @@ class BalanzaGUI(ttk.Window):
     def _show_numeric_keypad(self, entry_widget, title="Inserir Valor",
                               pin_mode=False, max_digits=None):
         """Teclado numérico virtual grande y funcional."""
+        try:
+            if hasattr(self, '_active_keypad') and self._active_keypad and not self._active_keypad.winfo_exists():
+                self._active_keypad = None
+                self._keypad_target_widget = None
+        except Exception:
+            self._active_keypad = None
+            self._keypad_target_widget = None
+
+        # Si ya existe para el mismo widget, no recrear (evita parpadeo/doble instancia)
+        try:
+            if (
+                entry_widget is not None
+                and hasattr(self, '_active_keypad')
+                and self._active_keypad
+                and self._active_keypad.winfo_exists()
+                and getattr(self, '_keypad_target_widget', None) is entry_widget
+            ):
+                try:
+                    self._active_keypad.lift()
+                    self._active_keypad.focus_force()
+                except Exception:
+                    pass
+                return
+        except Exception:
+            pass
+
         # Cerrar teclado anterior si existe
         if hasattr(self, '_active_keypad') and self._active_keypad:
             try:
@@ -1712,12 +1801,6 @@ class BalanzaGUI(ttk.Window):
         # Tamaño del teclado
         kp_width, kp_height = 480, 650
 
-        # Calcular posición centrada en pantalla
-        screen_w = self.winfo_screenwidth()
-        screen_h = self.winfo_screenheight()
-        x = (screen_w - kp_width) // 2
-        y = (screen_h - kp_height) // 2
-
         # Obtener la ventana padre
         if entry_widget is not None:
             parent = entry_widget.winfo_toplevel()
@@ -1730,23 +1813,19 @@ class BalanzaGUI(ttk.Window):
 
         # Crear ventana del teclado
         keypad = tk.Toplevel(parent)
+        keypad.withdraw()  # Ocultar inmediatamente para evitar flash de barra de título
         keypad.title(title)
-        keypad.geometry(f"{kp_width}x{kp_height}+{x}+{y}")
+        self._center_toplevel(keypad, kp_width, kp_height)
         keypad.resizable(False, False)
         keypad.transient(parent)
         keypad.attributes('-topmost', True)
-        try:
-            keypad.focus_force()
-        except Exception:
-            pass
-        try:
-            keypad.grab_set()
-        except Exception:
-            pass
+        if not pin_mode:
+            self._apply_window_icon(keypad)
         keypad.configure(bg="#222222")
         if pin_mode:
             keypad.overrideredirect(True)
         self._active_keypad = keypad
+        self._keypad_target_widget = entry_widget
 
         # Variable para el valor
         kp_value = tk.StringVar(value=current_value)
@@ -1857,6 +1936,10 @@ class BalanzaGUI(ttk.Window):
                 self._active_keypad = None
             except Exception:
                 pass
+            try:
+                self._keypad_target_widget = None
+            except Exception:
+                pass
 
         def confirm_and_close():
             if pin_mode:
@@ -1864,11 +1947,69 @@ class BalanzaGUI(ttk.Window):
             else:
                 entry_widget.delete(0, tk.END)
                 entry_widget.insert(0, kp_value.get())
+                try:
+                    entry_widget.focus_set()
+                except Exception:
+                    pass
             _close_keypad()
 
         def cancel_and_close():
             # _pin_result['value'] permanece None → el caller interpreta como cancelación
             _close_keypad()
+
+        def _handle_physical_key(event):
+            """Soporte de teclado físico cuando el keypad está abierto."""
+            try:
+                keysym = str(getattr(event, 'keysym', '') or '')
+                char = str(getattr(event, 'char', '') or '')
+
+                # Confirmar / cancelar
+                if keysym in ('Return', 'KP_Enter'):
+                    confirm_and_close()
+                    return "break"
+                if keysym == 'Escape':
+                    cancel_and_close()
+                    return "break"
+
+                # Edición
+                if keysym in ('BackSpace', 'Delete'):
+                    press_backspace()
+                    return "break"
+
+                # Digitos del teclado principal o numérico
+                if char.isdigit():
+                    press_digit(char)
+                    return "break"
+
+                # Signo negativo
+                if char == '-':
+                    press_digit('-')
+                    return "break"
+
+                # Separador decimal (permitir punto o coma)
+                if char in ('.', ',') or keysym in ('period', 'comma', 'KP_Decimal', 'decimal'):
+                    press_digit('.')
+                    return "break"
+            except Exception:
+                return None
+            return None
+
+        # Compatibilidad con teclado físico mientras el keypad está abierto
+        try:
+            keypad.bind('<KeyPress>', _handle_physical_key, add='+')
+            keypad.bind('<Return>', _handle_physical_key, add='+')
+            keypad.bind('<KP_Enter>', _handle_physical_key, add='+')
+            keypad.bind('<Escape>', _handle_physical_key, add='+')
+            keypad.bind('<BackSpace>', _handle_physical_key, add='+')
+            keypad.bind('<Delete>', _handle_physical_key, add='+')
+            entry_display.bind('<KeyPress>', _handle_physical_key, add='+')
+            entry_display.bind('<Return>', _handle_physical_key, add='+')
+            entry_display.bind('<KP_Enter>', _handle_physical_key, add='+')
+            entry_display.bind('<Escape>', _handle_physical_key, add='+')
+            entry_display.bind('<BackSpace>', _handle_physical_key, add='+')
+            entry_display.bind('<Delete>', _handle_physical_key, add='+')
+        except Exception:
+            pass
 
         # Fila 0: 7 8 9
         ttk.Button(all_btns, text="7", command=lambda: press_digit("7"), bootstyle="light", padding=pad_num).grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
@@ -1900,10 +2041,28 @@ class BalanzaGUI(ttk.Window):
             ttk.Button(all_btns, text="CANCELAR", command=cancel_and_close, bootstyle="danger", padding=pad_act).grid(row=4, column=0, sticky="nsew", padx=4, pady=4)
         ttk.Button(all_btns, text="OK", command=confirm_and_close, bootstyle="success", padding=pad_act).grid(row=4, column=1, columnspan=2, sticky="nsew", padx=4, pady=4)
 
+        # Mostrar la ventana solo ahora que todo está configurado (sin flash de barra de título)
+        try:
+            keypad.update_idletasks()
+            keypad.deiconify()
+        except Exception:
+            pass
+        if pin_mode:
+            try:
+                keypad.grab_set()
+            except Exception:
+                pass
+
         # Focus y lift
         try:
             keypad.focus_set()
             keypad.lift()
+        except Exception:
+            pass
+        try:
+            entry_display.focus_force()
+            keypad.after(30, entry_display.focus_force)
+            keypad.after(90, entry_display.focus_force)
         except Exception:
             pass
 
@@ -1912,6 +2071,21 @@ class BalanzaGUI(ttk.Window):
                 self.wait_window(keypad)  # bloquea hasta que _close_keypad llame keypad.destroy()
             except Exception:
                 pass
+            finally:
+                try:
+                    if keypad.winfo_exists():
+                        keypad.destroy()
+                except Exception:
+                    pass
+                try:
+                    self._suppress_cfg_watch = False
+                except Exception:
+                    pass
+                try:
+                    self._active_keypad = None
+                    self._keypad_target_widget = None
+                except Exception:
+                    pass
             return _pin_result.get('value')
 
 
@@ -1930,8 +2104,42 @@ class BalanzaGUI(ttk.Window):
             return False
 
     def _bind_numeric_keypad(self, entry_widget, title="Inserir Valor"):
-        """Deprecated: No operations."""
-        pass
+        """Vincula teclado numérico a un Entry sin bloquear teclado físico."""
+        if entry_widget is None:
+            return
+
+        def _open_keypad(_event=None):
+            try:
+                now_ts = time.monotonic()
+                last_ts = float(getattr(self, '_last_keypad_open_req_ts', 0.0) or 0.0)
+                last_widget = getattr(self, '_last_keypad_open_widget', None)
+                if last_widget is entry_widget and (now_ts - last_ts) < 0.18:
+                    return "break"
+                self._last_keypad_open_req_ts = now_ts
+                self._last_keypad_open_widget = entry_widget
+
+                if (
+                    getattr(self, '_active_keypad', None)
+                    and self._active_keypad.winfo_exists()
+                    and getattr(self, '_keypad_target_widget', None) is entry_widget
+                ):
+                    try:
+                        self._active_keypad.lift()
+                        self._active_keypad.focus_force()
+                    except Exception:
+                        pass
+                    return "break"
+                self.after(40, lambda: self._show_numeric_keypad(entry_widget, title))
+            except Exception:
+                pass
+            return "break"
+
+        try:
+            entry_widget.bind("<Button-1>", _open_keypad, add="+")
+        except Exception:
+            pass
+
+        # No enlazar FocusIn para permitir uso fluido del teclado físico.
 
     def _check_connection_status(self):
         """Monitora o status da conexão durante o diálogo de conexão."""
@@ -2500,6 +2708,7 @@ class BalanzaGUI(ttk.Window):
         
         # Crear janela secundria SIN BARRA DE TTULO
         dialog = ttk.Toplevel(parent)
+        dialog.withdraw()  # Ocultar hasta tener todos los widgets listos
         dialog.overrideredirect(True)  # Quitar barra de Windows
         
         # Centralizar em relao  la tela
@@ -2548,8 +2757,9 @@ class BalanzaGUI(ttk.Window):
 
         # Configurar cierre con protocolo
         dialog.protocol("WM_DELETE_WINDOW", on_no)
-        
+
         dialog.transient(parent)
+        dialog.deiconify()
         dialog.grab_set()
         dialog.lift()
         dialog.focus_force()
@@ -2585,9 +2795,10 @@ class BalanzaGUI(ttk.Window):
         
         # Criar janela SIN BARRA DE TTULO
         dialog = ttk.Toplevel(target)
+        dialog.withdraw()  # Ocultar hasta tener todos los widgets listos
         dialog.overrideredirect(True)
         dialog.geometry("550x300")
-        
+
         # Centralizar
         try:
             x = target.winfo_x() + (target.winfo_width() // 2) - 275
@@ -2595,9 +2806,6 @@ class BalanzaGUI(ttk.Window):
             dialog.geometry(f"+{x}+{y}")
         except:
             pass
-        
-        dialog.lift()
-        dialog.focus_force()
         
         # Estilo segn tipo
         if alert_type == "error":
@@ -2647,6 +2855,9 @@ class BalanzaGUI(ttk.Window):
         dialog.protocol("WM_DELETE_WINDOW", close_dialog)
         
         dialog.transient(target)
+        dialog.deiconify()
+        dialog.lift()
+        dialog.focus_force()
         try:
             dialog.grab_set()
         except:
@@ -2689,6 +2900,7 @@ class BalanzaGUI(ttk.Window):
         
         # Crear dialogo de alerta
         dialog = ttk.Toplevel(self)
+        dialog.withdraw()  # Ocultar hasta tener todos los widgets listos
         dialog.overrideredirect(True)
         dialog.geometry("700x480")
         
@@ -2700,9 +2912,8 @@ class BalanzaGUI(ttk.Window):
         except:
             pass
         
-        dialog.lift()
         dialog.attributes('-topmost', True)
-        
+
         # Guardar referencia
         self._disconnect_dialogs[node_id] = {
             'dialog': dialog,
@@ -2810,6 +3021,8 @@ class BalanzaGUI(ttk.Window):
         btn_continue.pack(side=LEFT, padx=10, expand=YES)
         
         dialog.transient(self)
+        dialog.deiconify()
+        dialog.lift()
         # No usar grab_set para permitir que otros eventos lleguen
     
     def _update_reconnect_progress(self, payload):
@@ -2907,26 +3120,14 @@ class BalanzaGUI(ttk.Window):
         
         # Criar janela
         dialog = ttk.Toplevel(self)
+        dialog.withdraw()  # Ocultar hasta que esté completamente construido
         dialog.overrideredirect(True)
         
         w_dlg = 700
         h_dlg = 480
         
-        # Centralizar de forma robusta
-        try:
-            # Se a janela principal ainda não está visível ou é muito pequena, usar a tela
-            if self.winfo_width() > 100:
-                x = self.winfo_x() + (self.winfo_width() // 2) - (w_dlg // 2)
-                y = self.winfo_y() + (self.winfo_height() // 2) - (h_dlg // 2)
-            else:
-                # Fallback para o centro da tela
-                x = (self.winfo_screenwidth() // 2) - (w_dlg // 2)
-                y = (self.winfo_screenheight() // 2) - (h_dlg // 2)
-        except:
-            x = 100
-            y = 100
-            
-        dialog.geometry(f"{w_dlg}x{h_dlg}+{x}+{y}")
+        # Centrar sempre en pantalla para evitar offsets raros tras minimizar/restaurar.
+        self._center_toplevel(dialog, w_dlg, h_dlg)
         dialog.lift()
         dialog.attributes("-topmost", True)
         
@@ -2970,7 +3171,8 @@ class BalanzaGUI(ttk.Window):
         self._conn_btn.pack(expand=YES, ipadx=20, ipady=5)
         
         # NOTA: Remover transient cuando se usa overrideredirect en ambas ventanas para evitar conflictos
-        # dialog.transient(self) 
+        # dialog.transient(self)
+        dialog.deiconify()  # Mostrar ahora que todos los widgets están listos
         dialog.update_idletasks()  # Forzar renderizado inmediato
         dialog.after(20, lambda: dialog.grab_set())
         
@@ -3033,9 +3235,9 @@ class BalanzaGUI(ttk.Window):
                         # Buscar la ventana Toplevel padre (diálogo de config)
                         parent = self.entry_min.winfo_toplevel()
                         alert = ttk.Toplevel(parent)
+                        alert.withdraw()  # Ocultar hasta estar listo
                         alert.overrideredirect(True)
-                        alert.grab_set()
-                        
+
                         # Centrar sobre el diálogo padre
                         aw, ah = 480, 200
                         px = parent.winfo_rootx() + (parent.winfo_width() - aw) // 2
@@ -3074,6 +3276,8 @@ class BalanzaGUI(ttk.Window):
                                    command=close_alert, padding=(30, 8)).pack()
                         
                         alert.protocol("WM_DELETE_WINDOW", close_alert)
+                        alert.deiconify()
+                        alert.grab_set()
                     except Exception:
                         self._range_alert_shown = False
                 
@@ -3300,6 +3504,28 @@ class BalanzaGUI(ttk.Window):
         """Abre um dilogo para configurar sensores e calibrao."""
         import json
         import os
+        import time
+
+        # Evitar doble apertura por doble click/toque o eventos duplicados.
+        try:
+            existing_dialog = getattr(self, '_config_dialog_active_ref', None)
+            if existing_dialog and existing_dialog.winfo_exists():
+                existing_dialog.lift()
+                existing_dialog.focus_force()
+                return
+        except Exception:
+            pass
+
+        try:
+            now_ts = time.monotonic()
+            last_ts = float(getattr(self, '_last_config_open_req_ts', 0.0) or 0.0)
+            if getattr(self, '_config_dialog_opening', False) and (now_ts - last_ts) < 1.0:
+                return
+            self._config_dialog_opening = True
+            self._last_config_open_req_ts = now_ts
+        except Exception:
+            pass
+
         # Solicitar PIN de 4 dígitos usando o teclado numérico existente
         pin = self._show_numeric_keypad(
             None,
@@ -3308,6 +3534,10 @@ class BalanzaGUI(ttk.Window):
             max_digits=4
         )
         if pin is None:
+            try:
+                self._config_dialog_opening = False
+            except Exception:
+                pass
             return  # Usuário cancelou
         pwd = pin
 
@@ -3322,6 +3552,10 @@ class BalanzaGUI(ttk.Window):
                     messagebox.showerror("Acesso negado", "Senha incorreta.")
                 except Exception:
                     pass
+            try:
+                self._config_dialog_opening = False
+            except Exception:
+                pass
             return
         
         # Cargar configuración actual usando helper (lee SETTINGS_FILE o devuelve defaults)
@@ -3344,9 +3578,29 @@ class BalanzaGUI(ttk.Window):
         except Exception:
             pass
 
-        # Crear ventana modal - FULLSCREEN (sin barra de título)
+        # Crear ventana de configuración (centrada, con barra de título)
         dialog = ttk.Toplevel(self)
-        dialog.overrideredirect(True)
+        try:
+            self._config_dialog_active_ref = dialog
+            self._config_dialog_opening = False
+        except Exception:
+            pass
+        try:
+            dialog.withdraw()
+        except Exception:
+            pass
+        try:
+            dialog.overrideredirect(False)
+        except Exception:
+            pass
+        try:
+            self._apply_window_icon(dialog)
+        except Exception:
+            pass
+        try:
+            dialog.transient(self)
+        except Exception:
+            pass
         # Pantalla completa real
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
@@ -3364,13 +3618,8 @@ class BalanzaGUI(ttk.Window):
                 pass
         # Detectar pantallas pequeñas (tablet 1280x800) para ajustar paddings
         small_screen = (screen_w == 1280 and screen_h == 800)
-        dialog.lift()
-        dialog.focus_force()
-        # Hacer modal con grab_set — permite teclado incluso con overrideredirect
-        try:
-            dialog.grab_set()
-        except Exception:
-            pass
+        # El deiconify se hace al final, luego de construir todos los widgets,
+        # para que la ventana aparezca completamente formada sin flash de contenido vacío.
         # Asegurar que el diálogo reciba foco de teclado al hacer click en él
         def _on_dialog_click(event):
             try:
@@ -3384,6 +3633,24 @@ class BalanzaGUI(ttk.Window):
                 pass
         dialog.bind("<Button-1>", _on_dialog_click)
         # No usar fullscreen para facilitar multitarea — diálogo centralizado
+
+        # Si la ventana principal se minimiza, cerrar el diálogo de configuración
+        # para evitar que quede oculto con foco capturado.
+        def _on_main_minimize(event=None):
+            try:
+                if str(self.state()) == 'iconic' and dialog.winfo_exists():
+                    try:
+                        dialog.destroy()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        _cfg_unmap_bind_id = None
+        try:
+            _cfg_unmap_bind_id = self.bind('<Unmap>', _on_main_minimize, add='+')
+        except Exception:
+            _cfg_unmap_bind_id = None
 
         # Estilos para abas grandes (touch-friendly) y CENTRADAS (simulado com padding o fill)
         # Nota: El estilo 'TNotebook.Tab' ya fue ajustado en _configure_styles,
@@ -3402,6 +3669,16 @@ class BalanzaGUI(ttk.Window):
         
         # Funo de fechamento seguro
         def safe_close_dialog():
+            try:
+                if _cfg_unmap_bind_id:
+                    self.unbind('<Unmap>', _cfg_unmap_bind_id)
+            except Exception:
+                pass
+            try:
+                self._config_dialog_active_ref = None
+                self._config_dialog_opening = False
+            except Exception:
+                pass
             try:
                 dialog.grab_release()
             except:
@@ -3574,15 +3851,16 @@ class BalanzaGUI(ttk.Window):
             logo2_h = self.scaled(40)
             if Image is not None and ImageTk is not None and os.path.exists(logo2_path):
                 try:
-                    pil = Image.open(logo2_path)
-                    w_percent = (logo2_h / float(pil.size[1]))
-                    w_size = int((float(pil.size[0]) * float(w_percent)))
-                    try:
-                        resample = getattr(Image, 'Resampling', Image).LANCZOS
-                        pil_resized = pil.resize((w_size, logo2_h), resample)
-                    except Exception:
-                        pil_resized = pil.resize((w_size, logo2_h))
-                    self.config_logo2_img = ImageTk.PhotoImage(pil_resized)
+                    if not hasattr(self, 'config_logo2_img') or self.config_logo2_img is None:
+                        pil = Image.open(logo2_path)
+                        w_percent = (logo2_h / float(pil.size[1]))
+                        w_size = int((float(pil.size[0]) * float(w_percent)))
+                        try:
+                            resample = getattr(Image, 'Resampling', Image).LANCZOS
+                            pil_resized = pil.resize((w_size, logo2_h), resample)
+                        except Exception:
+                            pil_resized = pil.resize((w_size, logo2_h))
+                        self.config_logo2_img = ImageTk.PhotoImage(pil_resized)
                     # Empaquetar en el frame derecho a la derecha
                     try:
                         logo2_btn_lbl = ttk.Label(right_frame, image=self.config_logo2_img, style='Logo.TLabel')
@@ -4325,11 +4603,24 @@ class BalanzaGUI(ttk.Window):
 
         # Modal behavior
         dialog.transient(self)
+        # Mostrar la ventana ahora que todos los widgets están construidos
+        try:
+            dialog.update_idletasks()
+            dialog.deiconify()
+            dialog.lift()
+            dialog.focus_force()
+        except Exception:
+            pass
         try:
             dialog.grab_set()
         except:
             pass
         self.wait_window(dialog)
+        try:
+            self._config_dialog_active_ref = None
+            self._config_dialog_opening = False
+        except Exception:
+            pass
 
     def _setup_calibration_tab(self, parent, current_config, close_config_dialog=None, config_dialog=None):
         """Configura a aba de calibração de sensores (Layout Tablet Grande)."""
@@ -4511,11 +4802,11 @@ class BalanzaGUI(ttk.Window):
             # Crear función modal de import/export que muestre SOLO tres botones grandes
             def show_import_export_choice_calib():
                 dlg = ttk.Toplevel(self)
+                dlg.withdraw()  # Ocultar hasta estar listo
                 dlg.overrideredirect(True)
                 dlg.transient(self)
 
                 dlg.resizable(False, False)
-                dlg.lift()
                 dlg.attributes('-topmost', True)
 
                 # Use the same bordered dialog structure as show_large_confirmation
@@ -4588,6 +4879,8 @@ class BalanzaGUI(ttk.Window):
                     pass
 
                 try:
+                    dlg.deiconify()
+                    dlg.lift()
                     dlg.grab_set()
                 except Exception:
                     pass
@@ -4881,6 +5174,10 @@ class BalanzaGUI(ttk.Window):
 
         # Crear Ventana - Pantalla completa con estado fullscreen
         wizard = ttk.Toplevel(self)
+        try:
+            wizard.withdraw()
+        except Exception:
+            pass
         # Obtener número de celda y número de serie para mostrar en el título
         celda_num = "?"
         serial_num = "?"
@@ -4898,6 +5195,10 @@ class BalanzaGUI(ttk.Window):
             except Exception:
                 pass
         wizard.title(f"Curva da Célula {celda_num} (Nº Série {serial_num})")
+        try:
+            self._apply_window_icon(wizard)
+        except Exception:
+            pass
         w, h = self.winfo_screenwidth(), self.winfo_screenheight()
         wizard.geometry(f"{w}x{h}+0+0")
         try:
@@ -4916,6 +5217,11 @@ class BalanzaGUI(ttk.Window):
         # Marcar topmost para asegurar stack correcto respecto al diálogo de config
         try:
             wizard.attributes('-topmost', True)
+        except Exception:
+            pass
+        try:
+            wizard.update_idletasks()
+            wizard.deiconify()
         except Exception:
             pass
         try:
@@ -4990,17 +5296,17 @@ class BalanzaGUI(ttk.Window):
             if unit == "Bits (Raw)":
                 return raw
 
-            # Si la unidad es peso (t o kg), intentar leer el valor procesado del sensor
+            # Si la unidad es peso (kg), intentar leer el valor procesado del sensor
             if unit == "t":
                 try:
                     proc = getattr(self, '_last_sensor_data', None)
                     if proc and 'sensores' in proc and selected in proc['sensores']:
                         val = proc['sensores'][selected].get('valor')
                         if val is not None:
-                            return val
+                            return float(val) / 1000.0
                 except Exception:
                     pass
-                # Fallback: intentar convertir la lectura CRUDA a toneladas
+                # Fallback: intentar convertir la lectura CRUDA a peso
                 try:
                     raw_f = float(self.data_processor.get_last_raw_for(selected))
                 except Exception:
@@ -5031,7 +5337,7 @@ class BalanzaGUI(ttk.Window):
 
                 raw_applied = raw_f * mult
 
-                # Aplicar coeficientes del sistema y convertir a toneladas
+                # Aplicar coeficientes del sistema
                 try:
                     slope = float(getattr(self.data_processor, 'system_slope', 1.0))
                     offset = float(getattr(self.data_processor, 'system_offset', 0.0))
@@ -5040,9 +5346,9 @@ class BalanzaGUI(ttk.Window):
                     peso = raw_applied
 
                 # El sistema ahora asume que las lecturas crudas y los coeficientes
-                # están en toneladas; por tanto `peso` ya está en toneladas.
+                # están en kilogramos; por tanto `peso` ya está en kg.
                 try:
-                    return float(peso)
+                    return float(peso) / 1000.0
                 except Exception:
                     return 0.0
 
@@ -5052,10 +5358,13 @@ class BalanzaGUI(ttk.Window):
                     if proc and 'sensores' in proc and selected in proc['sensores']:
                         val = proc['sensores'][selected].get('valor')
                         if val is not None:
-                            return val * 1000
+                            return float(val)
                 except Exception:
                     pass
-                return raw
+                try:
+                    return float(raw)
+                except Exception:
+                    return 0.0
 
             if unit == "mV/V":
                 # Conversión aproximada desde RAW bits a mV/V
@@ -5116,6 +5425,16 @@ class BalanzaGUI(ttk.Window):
             if len(points) < 2:
                 self.show_alert("Erro", "São necessários pelo menos 2 pontos para calibrar.", "error", parent=wizard)
                 return
+
+            # Requisito operativo: calibración lineal de 2 puntos para todo el rango.
+            # Si el usuario ingresó más puntos, se toman los extremos por lectura.
+            if len(points) > 2:
+                try:
+                    pts_sorted_for_line = sorted(points, key=lambda p: float(p[1]))
+                    points = [pts_sorted_for_line[0], pts_sorted_for_line[-1]]
+                    self.log_message("[CALIBRATION] Más de 2 puntos detectados: usando solo 2 extremos para recta global.")
+                except Exception:
+                    points = points[:2]
 
             # Crear modelo de interpolación por segmentos
             sorted_points = sorted(points, key=lambda p: p[1])  # Ordenar por lectura
@@ -5199,15 +5518,15 @@ class BalanzaGUI(ttk.Window):
                 cmd_add_point()
             return "break"
         
-        # Weight (en t)
+        # Weight (en kg)
         f_w = ttk.Frame(f_fields)
         f_w.grid(row=0, column=0, sticky="ew", padx=(0, 10))
-        ttk.Label(f_w, text="Peso Padrão (t):", font=("Segoe UI", 11)).pack(anchor="w")
+        ttk.Label(f_w, text="Peso Padrão (kg):", font=("Segoe UI", 11)).pack(anchor="w")
         e_weight = ttk.Entry(f_w, textvariable=self._cal_input_weight, font=("Consolas", 16))
         e_weight.pack(fill=X, ipady=8)
         e_weight.bind("<Return>", on_weight_enter)
         e_weight.bind("<KP_Enter>", on_weight_enter)
-        self._bind_numeric_keypad(e_weight, "Peso Padrão (t)")
+        self._bind_numeric_keypad(e_weight, "Peso Padrão (kg)")
         
         # Botón ADICIONAR debajo de Peso
         btn_add = ttk.Button(f_w, text="ADICIONAR PONTO", 
@@ -5240,7 +5559,7 @@ class BalanzaGUI(ttk.Window):
         h_frame.columnconfigure(0, weight=1)
         h_frame.columnconfigure(1, weight=1)
         h_frame.columnconfigure(2, weight=0)
-        ttk.Label(h_frame, text="PESO (t)", font=("Segoe UI", 10, "bold"), 
+        ttk.Label(h_frame, text="PESO (kg)", font=("Segoe UI", 10, "bold"), 
             bootstyle="inverse-dark", anchor="center").grid(row=0, column=0, sticky="ew")
         ttk.Label(h_frame, text="LEITURA", font=("Segoe UI", 10, "bold"),
             bootstyle="inverse-dark", anchor="center").grid(row=0, column=1, sticky="ew")
@@ -5280,7 +5599,7 @@ class BalanzaGUI(ttk.Window):
                 self._cal_ax = self._cal_fig.add_subplot(111)
                 self._cal_ax.set_facecolor('#ffffff')
                 self._cal_ax.set_xlabel("Leitura Sensor", fontsize=10)
-                self._cal_ax.set_ylabel("Peso (t)", fontsize=10)
+                self._cal_ax.set_ylabel("Peso (kg)", fontsize=10)
                 self._cal_ax.grid(True, linestyle='--', alpha=0.5)
                 self._cal_canvas = FigureCanvasTkAgg(self._cal_fig, master=g_frame)
                 self._cal_canvas.get_tk_widget().pack(fill=BOTH, expand=YES)
@@ -5294,68 +5613,17 @@ class BalanzaGUI(ttk.Window):
             ttk.Label(g_frame, text="Matplotlib não disponível\nInstale com: pip install matplotlib", 
                       font=("Segoe UI", 12), justify="center").pack(expand=YES)
 
+        ttk.Button(right, text="FINALIZAR E APLICAR CALIBRAÇÃO",
+                   command=cmd_apply_cal,
+                   bootstyle="success",
+                   padding=(20, 15)).pack(fill=X, pady=(10, 0))
+
         # Refrescar tabla y gráfico con puntos precargados (si existen)
         self._refresh_cal_wizard_table_ui()
         self._update_cal_wizard_graph()
         # Forzar refresco visual del gráfico tras inicialización completa
         if hasattr(self, '_cal_canvas') and self._cal_canvas:
             wizard.after(300, lambda: self._update_cal_wizard_graph())
-        
-        # === RIGHT: Graph & Config ===
-        right = ttk.Labelframe(main, text="Análise e Ajuste  ", padding=15, bootstyle="warning")
-        right.grid(row=0, column=1, sticky="nsew")
-        
-        # Config Frame - Solo unidad
-        f_cfg = ttk.Frame(right)
-        f_cfg.pack(fill=X, pady=(0, 10))
-        
-        # Forzar método internamente (sin mostrar texto)
-        self._cal_method_var.set("Interpolação Segmentos")
-        
-        # Unit selector
-        # Sección de selección de unidad OCULTA por requerimiento. La lógica y variable se mantienen para posible uso futuro.
-        # f_unit = ttk.Frame(f_cfg)
-        # f_unit.pack(fill=X)
-        # ttk.Label(f_unit, text="Unidade de Leitura:", font=("Segoe UI", 12)).pack(anchor="w")
-        # units = ["Bits (Raw)", "mV/V", "kg", "t"]
-        # ttk.Combobox(f_unit, textvariable=self._cal_unit_var, values=units, 
-        #              state="readonly", font=("Segoe UI", 14)).pack(fill=X, ipady=6)
-        
-        # Graph Frame
-        g_frame = ttk.Frame(right, bootstyle="light", padding=5)
-        g_frame.pack(fill=BOTH, expand=YES, pady=10)
-        
-        # Inicializar gráfico de forma segura
-        self._cal_fig = None
-        self._cal_ax = None
-        self._cal_canvas = None
-        
-        if MATPLOTLIB_AVAILABLE:
-            try:
-                self._cal_fig = Figure(figsize=(5, 4), dpi=100, facecolor='#f8f9fa')
-                self._cal_ax = self._cal_fig.add_subplot(111)
-                self._cal_ax.set_facecolor('#ffffff')
-                self._cal_ax.set_xlabel("Leitura Sensor", fontsize=10)
-                self._cal_ax.set_ylabel("Peso (t)", fontsize=10)
-                self._cal_ax.grid(True, linestyle='--', alpha=0.5)
-                
-                self._cal_canvas = FigureCanvasTkAgg(self._cal_fig, master=g_frame)
-                self._cal_canvas.get_tk_widget().pack(fill=BOTH, expand=YES)
-                
-                # Dibujo diferido para evitar bloqueo
-                wizard.after(100, lambda: self._cal_canvas.draw_idle() if self._cal_wizard_active else None)
-            except Exception as e:
-                print(f"[GUI] Error matplotlib: {e}")
-                ttk.Label(g_frame, text="Erro ao inicializar gráfico", 
-                          font=("Segoe UI", 12)).pack(expand=YES)
-        else:
-            ttk.Label(g_frame, text="Matplotlib não disponível\nInstale com: pip install matplotlib", 
-                      font=("Segoe UI", 12), justify="center").pack(expand=YES)
-        
-        ttk.Button(right, text="FINALIZAR E APLICAR CALIBRAÇÃO", 
-                   command=cmd_apply_cal, 
-                   bootstyle="success",
-                   padding=(20, 15)).pack(fill=X, pady=(10, 0))
         
     def _refresh_cal_wizard_table_ui(self):
         for w in self._cal_tbl_scroll.winfo_children(): 
@@ -5420,7 +5688,7 @@ class BalanzaGUI(ttk.Window):
             e_w = ttk.Entry(row, textvariable=v_w, font=("Consolas", 12), justify="center")
             e_w.grid(row=0, column=0, sticky="ew", padx=5)
             e_w.bind("<FocusOut>", lambda e, idx=i, var=v_w: update_model(idx, var, 'w'))
-            e_w.bind("<Button-1>", lambda e, ew=e_w: self.after(50, lambda: self._show_numeric_keypad(ew, "Peso (t)")))
+            e_w.bind("<Button-1>", lambda e, ew=e_w: self.after(50, lambda: self._show_numeric_keypad(ew, "Peso (kg)")))
 
             # Entry Leitura - con teclado numérico
             e_r = ttk.Entry(row, textvariable=v_r, font=("Consolas", 12), justify="center")
@@ -5445,7 +5713,7 @@ class BalanzaGUI(ttk.Window):
         # Mostrar confirmación con el estilo del programa
         if self.show_large_confirmation(
             "Eliminar Ponto", 
-            f"Tem certeza que deseja eliminar o ponto?\n\nPeso: {peso:.2f} t\nLeitura: {lectura:.2f}"
+            f"Tem certeza que deseja eliminar o ponto?\n\nPeso: {peso:.2f} kg\nLeitura: {lectura:.2f}"
         ):
             self._cal_manager.remove_point(idx)
             self._refresh_cal_wizard_table_ui()
@@ -5463,7 +5731,7 @@ class BalanzaGUI(ttk.Window):
         try:
             self._cal_ax.clear()
             self._cal_ax.set_xlabel("Leitura Sensor", fontsize=10)
-            self._cal_ax.set_ylabel("Peso (t)", fontsize=10)
+            self._cal_ax.set_ylabel("Peso (kg)", fontsize=10)
             self._cal_ax.grid(True, linestyle='--', alpha=0.5)
             self._cal_ax.set_facecolor('#ffffff')
 

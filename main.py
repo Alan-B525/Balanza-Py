@@ -128,6 +128,9 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
     GUI_KEEPALIVE_S = 0.5           # Publicar aunque no haya nueva muestra cada 500ms
     last_gui_publish_ts = 0.0
     last_gui_sample_ts = None
+    # Diagnóstico breve: registrar solo algunas muestras tras conectar (sin spam)
+    diag_samples_budget = 0
+    diag_last_log_ts = 0.0
     
     # Variables para conexión asíncrona
     connection_thread = None
@@ -239,7 +242,7 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                         connection_in_progress = True
                         
                         def do_connect():
-                            nonlocal connection_in_progress, acquisition_paused
+                            nonlocal connection_in_progress, acquisition_paused, diag_samples_budget, diag_last_log_ts
                             try:
                                 # Registrar callback de progreso si el driver lo soporta
                                 try:
@@ -264,6 +267,8 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                                     # Notify GUI progress finished
                                     data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'success', 'message': 'Conexão estabelecida'}})
                                     acquisition_paused = False
+                                    diag_samples_budget = 6
+                                    diag_last_log_ts = 0.0
                                     reconnecting_nodes.clear()
                                     reconnect_attempts.clear()
                                     _start_modbus_if_needed()
@@ -483,7 +488,7 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
 
                         # Si ya estamos conectados, desconectar y reconectar usando la nueva configuración
                         def do_reconnect():
-                            nonlocal connection_in_progress, acquisition_paused
+                            nonlocal connection_in_progress, acquisition_paused, diag_samples_budget, diag_last_log_ts
                             try:
                                 try:
                                     if hasattr(sistema_pesaje, 'set_progress_callback'):
@@ -510,6 +515,8 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                                     data_queue.put({'type': 'LOG', 'payload': f"Reconectado com sucesso em {ACTIVE_COM}"})
                                     data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'success', 'message': 'Reconexão estabelecida'}})
                                     acquisition_paused = False
+                                    diag_samples_budget = 6
+                                    diag_last_log_ts = 0.0
                                     _start_modbus_if_needed()
                                 else:
                                     if recovered > 0:
@@ -532,11 +539,21 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                                     pass
                                 connection_in_progress = False
 
-                        # Lanzar reconexión en hilo si ya conectado o intentar conectar si estaba desconectado
-                        if not connection_in_progress:
-                            connection_in_progress = True
-                            connection_thread = threading.Thread(target=do_reconnect, daemon=True)
-                            connection_thread.start()
+                        # Solo reconectar automáticamente si el sistema YA estaba conectado.
+                        # En primer guardado (instalación nueva) esto evita bloqueos percibidos
+                        # por intentos de conexión largos desde estado desconectado.
+                        try:
+                            was_connected = bool(sistema_pesaje.esta_conectado())
+                        except Exception:
+                            was_connected = False
+
+                        if was_connected:
+                            if not connection_in_progress:
+                                connection_in_progress = True
+                                connection_thread = threading.Thread(target=do_reconnect, daemon=True)
+                                connection_thread.start()
+                        else:
+                            data_queue.put({'type': 'LOG', 'payload': "Configuração salva. Reconexão automática ignorada (sistema desconectado)."})
 
                     except Exception as e:
                         data_queue.put({'type': 'LOG', 'payload': f"Erro ao aplicar configuração: {e}"})
@@ -678,6 +695,27 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                     last_gui_publish_ts = now_ts
                     if has_new_sample:
                         last_gui_sample_ts = latest_sample_ts
+
+                    # Diagnóstico resumido de muestras (primeras tras conectar)
+                    try:
+                        if has_new_sample and diag_samples_budget > 0:
+                            now_diag = time.monotonic()
+                            if (now_diag - diag_last_log_ts) >= 0.20:
+                                total_val = float(datos_procesados.get('total', 0.0) or 0.0)
+                                total_raw = float(datos_procesados.get('total_raw', 0.0) or 0.0)
+                                sensores = datos_procesados.get('sensores', {}) or {}
+                                connected_count = 0
+                                for info in sensores.values():
+                                    try:
+                                        if info.get('connected', False):
+                                            connected_count += 1
+                                    except Exception:
+                                        continue
+                                data_queue.put({'type': 'LOG', 'payload': f"[DIAG] sample ts={latest_sample_ts} total={total_val:.3f}kg raw={total_raw:.3f} sensores_on={connected_count}/{len(sensores)}"})
+                                diag_samples_budget -= 1
+                                diag_last_log_ts = now_diag
+                    except Exception:
+                        pass
 
                 # Empujar datos al servidor Modbus (si está activo)
                 try:
