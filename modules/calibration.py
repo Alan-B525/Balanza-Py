@@ -48,6 +48,8 @@ class CalibrationManager:
     Permite capturar puntos, gestionar sesión y calcular curvas.
     """
     
+    UNIFIED_CSV_NAME = "curva_celda.csv"
+
     def __init__(self, data_processor, celda_id=None, serial=None):
         self.dp = data_processor
         self.points: List[CalibrationPoint] = []
@@ -64,7 +66,7 @@ class CalibrationManager:
         else:
             self._log_to_file("Advertencia: serial no definido o vacío, no se cargará archivo de calibración.")
     def _get_csv_path(self):
-        return os.path.join(self._calib_dir, "curvas_celdas.csv")
+        return os.path.join(self._calib_dir, self.UNIFIED_CSV_NAME)
 
     def save_points(self):
         # Save into unified CSV. If CSV exists, merge columns; else create new CSV.
@@ -241,7 +243,7 @@ class CalibrationManager:
     # CSV helpers
     # -----------------------
     def _read_csv(self, path: str) -> Tuple[List[float], Dict[str, Dict[float, float]]]:
-        """Lee `curvas_celdas.csv` y retorna (weights_list, {serial: {weight: reading}}).
+        """Lee CSV unificado de calibración y retorna (weights_list, {serial: {weight: reading}}).
         Las celdas vacías se convierten en None.
         """
         weights: List[float] = []

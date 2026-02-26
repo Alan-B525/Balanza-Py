@@ -3,6 +3,7 @@ import os
 import time
 import threading
 import queue
+from collections import deque
 from typing import Dict
 
 
@@ -23,6 +24,9 @@ ACTIVE_NODOS = DEFAULT_NODOS
 ACTIVE_MODE = MODO_EJECUCION
 USE_SENSOR_CONFIG = True
 _SINGLE_INSTANCE_MUTEX = None
+
+RUNTIME_TUNING = getattr(config, 'RUNTIME_TUNING', {})
+DEBUG_PRINT_GETDATA_CALLS = bool(RUNTIME_TUNING.get('debug_print_getdata_calls', False))
 
 
 def _acquire_single_instance() -> bool:
@@ -124,8 +128,8 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
     reconnect_attempts = {}         # {node_id: intentos}
     MAX_AUTO_RECONNECT = 5          # Máximo intentos automáticos
     reconnect_check_counter = {}    # Contador para espaciar notificaciones
-    GUI_PUBLISH_INTERVAL_S = 0.05   # Limitar refresco GUI (~20 Hz) para mantener UI responsiva
-    GUI_KEEPALIVE_S = 0.5           # Publicar aunque no haya nueva muestra cada 500ms
+    GUI_PUBLISH_INTERVAL_S = float(RUNTIME_TUNING.get('gui_publish_interval_s', 0.05))
+    GUI_KEEPALIVE_S = float(RUNTIME_TUNING.get('gui_keepalive_s', 0.5))
     last_gui_publish_ts = 0.0
     last_gui_sample_ts = None
     # Diagnóstico breve: registrar solo algunas muestras tras conectar (sin spam)
@@ -136,16 +140,18 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
     connection_thread = None
     connection_in_progress = False
     last_modbus_retry_ts = 0.0
-    modbus_retry_interval_s = 2.0
+    modbus_retry_interval_s = float(RUNTIME_TUNING.get('modbus_retry_interval_s', 2.0))
     modbus_last_not_started_reason = None
     last_modbus_sample_ts = None
     last_modbus_status = 'idle' # Track status to avoid spamming GUI updates
     modbus_start_ts = None
-    modbus_start_grace_s = 1.5
+    modbus_start_grace_s = float(RUNTIME_TUNING.get('modbus_start_grace_s', 1.5))
     modbus_fail_count = 0
-    modbus_fail_threshold = 3
+    modbus_fail_threshold = int(RUNTIME_TUNING.get('modbus_fail_threshold', 3))
     modbus_waiting_config_change = False
     modbus_state_lock = threading.Lock()
+    modbus_block_size = max(1, int(RUNTIME_TUNING.get('modbus_net_window_size', 30)))
+    modbus_net_window = deque(maxlen=modbus_block_size)
 
     def _is_serial_port_available(port_name):
         try:
@@ -267,6 +273,7 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                                     # Notify GUI progress finished
                                     data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'success', 'message': 'Conexão estabelecida'}})
                                     acquisition_paused = False
+                                    modbus_net_window.clear()
                                     diag_samples_budget = 6
                                     diag_last_log_ts = 0.0
                                     reconnecting_nodes.clear()
@@ -309,6 +316,7 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                     data_queue.put({'type': 'STATUS', 'payload': False})
                     data_queue.put({'type': 'LOG', 'payload': "Sistema desconectado pelo usuário."})
                     acquisition_paused = True
+                    modbus_net_window.clear()
                     if modbus_server is not None:
                         try:
                             modbus_server.stop()
@@ -515,6 +523,7 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                                     data_queue.put({'type': 'LOG', 'payload': f"Reconectado com sucesso em {ACTIVE_COM}"})
                                     data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'success', 'message': 'Reconexão estabelecida'}})
                                     acquisition_paused = False
+                                    modbus_net_window.clear()
                                     diag_samples_budget = 6
                                     diag_last_log_ts = 0.0
                                     _start_modbus_if_needed()
@@ -731,23 +740,25 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                         except Exception:
                             latest_ts = None
 
-                        should_publish = True
-                        if latest_ts is not None and latest_ts == last_modbus_sample_ts:
-                            should_publish = False
+                        # Acumular sólo muestras nuevas en ventana por BLOQUES
+                        if latest_ts is None or latest_ts != last_modbus_sample_ts:
+                            total_neto = float(datos_procesados.get('total', 0.0) or 0.0)
+                            modbus_net_window.append(total_neto)
+                            if latest_ts is not None:
+                                last_modbus_sample_ts = latest_ts
 
-                        if should_publish:
-                            # Enviar el total neto como int32 (2 registros) escalado x1000
-                            total_val = float(datos_procesados.get('total', 0.0) or 0.0)
-                            regs = _float_to_int32_registers(total_val)
-                            
+                        # Publicar únicamente cuando se completa el bloque N
+                        if len(modbus_net_window) >= modbus_block_size:
+                            total_val_modbus = sum(modbus_net_window) / len(modbus_net_window)
+                            regs = _float_to_int32_registers(total_val_modbus)
+
                             modbus_ok = modbus_server.push_data(regs)
                             if modbus_ok:
+                                modbus_net_window.clear()
                                 modbus_fail_count = 0
                                 if last_modbus_status != 'connected':
                                     data_queue.put({'type': 'MODBUS_STATUS', 'payload': 'connected'})
                                     last_modbus_status = 'connected'
-                                if latest_ts is not None:
-                                    last_modbus_sample_ts = latest_ts
                             else:
                                 in_start_grace = (
                                     modbus_start_ts is not None
@@ -798,9 +809,9 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
         
         # Pausa dinámica para evitar saturar CPU y mantener UI responsiva
         if sistema_pesaje.esta_conectado() and not acquisition_paused:
-            time.sleep(0.003)
+            time.sleep(float(RUNTIME_TUNING.get('backend_sleep_connected_s', 0.003)))
         else:
-            time.sleep(0.05)
+            time.sleep(float(RUNTIME_TUNING.get('backend_sleep_idle_s', 0.05)))
 
 
 def main():

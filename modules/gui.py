@@ -2271,13 +2271,12 @@ class BalanzaGUI(ttk.Window):
         if not hasattr(self, 'data_processor') or not self.data_processor:
             return
 
-        # First: support single-file CSVs. Prefer `curvas_celdas.csv` (wide unified format)
+        # First: support single-file CSVs. Use `curva_celda.csv` (wide unified format)
         try:
             import csv as _csv
             applied = set()
-            # Prefer unified curvas_celdas.csv
-            unified_path = os.path.join(CALIBRATIONS_DIR, 'curvas_celdas.csv')
-            if os.path.exists(unified_path):
+            unified_path = os.path.join(CALIBRATIONS_DIR, 'curva_celda.csv')
+            if unified_path and os.path.exists(unified_path):
                 try:
                     with open(unified_path, 'r', encoding='utf-8') as f:
                         reader = _csv.reader(f)
@@ -2602,8 +2601,8 @@ class BalanzaGUI(ttk.Window):
 
             applied_report = []
             if is_wide:
-                # Replace curvas_celdas.csv and apply each column as a calibration
-                dest = os.path.join(CALIBRATIONS_DIR, 'curvas_celdas.csv')
+                # Replace curva_celda.csv and apply each column as a calibration
+                dest = os.path.join(CALIBRATIONS_DIR, 'curva_celda.csv')
                 shutil.copy2(path, dest)
                 self.log_message(f"CSV de curvas importado a {dest} (formato ancho)")
 
@@ -3594,6 +3593,10 @@ class BalanzaGUI(ttk.Window):
         # Crear ventana de configuración (centrada, con barra de título)
         dialog = ttk.Toplevel(self)
         try:
+            dialog.title("Configurações do Sistema")
+        except Exception:
+            pass
+        try:
             self._config_dialog_active_ref = dialog
             self._config_dialog_opening = False
         except Exception:
@@ -4364,6 +4367,10 @@ class BalanzaGUI(ttk.Window):
                     pass
                 try:
                     sensor_name = 'celda_1'
+                    try:
+                        dialog.grab_release()
+                    except Exception:
+                        pass
                     self._open_calibration_wizard(current_config, sensor_name, dialog)
                 except Exception as e:
                     try:
@@ -4760,7 +4767,7 @@ class BalanzaGUI(ttk.Window):
                             defaultextension=".csv",
                             filetypes=[("Archivos CSV", "*.csv")],
                             initialdir=calib_dir,
-                            initialfile="curvas_celdas.csv"
+                            initialfile="curva_celda.csv"
                         )
                     else:
                         out_path = filedialog.asksaveasfilename(
@@ -4768,7 +4775,7 @@ class BalanzaGUI(ttk.Window):
                             defaultextension=".csv",
                             filetypes=[("Archivos CSV", "*.csv")],
                             initialdir=calib_dir,
-                            initialfile="curvas_celdas.csv"
+                            initialfile="curva_celda.csv"
                         )
                 finally:
                     # Siempre intentar restaurar la ventana de configuración
@@ -5110,6 +5117,7 @@ class BalanzaGUI(ttk.Window):
 
         # Guardar referencia al diálogo de config para restaurar grab
         self._config_dialog_ref = config_dialog
+        config_dialog_hidden = False
 
         # Si se pasa un override de sensor, forzar la selección interna para que
         # el wizard muestre el número de célula y nº de serie correctamente.
@@ -5184,7 +5192,7 @@ class BalanzaGUI(ttk.Window):
         self._cal_input_reading = tk.StringVar(value="")
         self._cal_wizard_active = True
 
-        # Crear Ventana - Pantalla completa con estado fullscreen
+        # Crear ventana del wizard (con barra de título de Windows)
         wizard = ttk.Toplevel(self)
         try:
             wizard.withdraw()
@@ -5206,29 +5214,29 @@ class BalanzaGUI(ttk.Window):
                         serial_num = nodos_cfg[internal_name].get('serial', '?')
             except Exception:
                 pass
-        wizard.title(f"Curva da Célula {celda_num} (Nº Série {serial_num})")
+        wizard.title(f"Calibração - Célula {celda_num} (Série {serial_num})")
         try:
             self._apply_window_icon(wizard)
         except Exception:
             pass
         w, h = self.winfo_screenwidth(), self.winfo_screenheight()
-        wizard.geometry(f"{w}x{h}+0+0")
+        wiz_w = int(w * 0.88)
+        wiz_h = int(h * 0.88)
+        wiz_x = (w - wiz_w) // 2
+        wiz_y = (h - wiz_h) // 2
+        wizard.geometry(f"{wiz_w}x{wiz_h}+{wiz_x}+{wiz_y}")
         try:
-            wizard.attributes('-fullscreen', True)  # Fullscreen nativo de Windows
+            wizard.resizable(True, True)
         except Exception:
             pass
-        # Si venimos de un diálogo de configuración, hacemos transient con él
         try:
-            if config_dialog is not None and config_dialog.winfo_exists():
-                try:
-                    wizard.transient(config_dialog)
-                except Exception:
-                    pass
+            wizard.attributes('-fullscreen', False)
         except Exception:
             pass
-        # Marcar topmost para asegurar stack correcto respecto al diálogo de config
+        # Mantener el wizard asociado a la ventana principal para evitar
+        # conflictos de foco con el grab modal del diálogo de configuración.
         try:
-            wizard.attributes('-topmost', True)
+            wizard.transient(self)
         except Exception:
             pass
         try:
@@ -5237,9 +5245,18 @@ class BalanzaGUI(ttk.Window):
         except Exception:
             pass
         try:
-            wizard.grab_set()  # Capturar eventos para el wizard
+            wizard.state('zoomed')
         except Exception:
             pass
+        # Ocultar la ventana de configuración mientras el wizard esté activo
+        if self._config_dialog_ref:
+            try:
+                if self._config_dialog_ref.winfo_exists():
+                    self._config_dialog_ref.withdraw()
+                    config_dialog_hidden = True
+            except Exception:
+                pass
+        # Evitar grab_set aquí para no bloquear la UI en escenarios de primer guardado
         try:
             wizard.lift()
             wizard.focus_force()
@@ -5275,6 +5292,9 @@ class BalanzaGUI(ttk.Window):
             # Restaurar grab del diálogo de configuración
             if self._config_dialog_ref:
                 try:
+                    if config_dialog_hidden and self._config_dialog_ref.winfo_exists():
+                        self._config_dialog_ref.deiconify()
+                        self._config_dialog_ref.update_idletasks()
                     self._config_dialog_ref.grab_set()
                     self._config_dialog_ref.lift()
                     self._config_dialog_ref.focus_force()
@@ -5458,9 +5478,6 @@ class BalanzaGUI(ttk.Window):
                 "valid": True
             }
             self._cal_manager.apply_calibration(cal_data)
-            # Guardar puntos explícitamente al finalizar
-            if hasattr(self._cal_manager, 'save_points'):
-                self._cal_manager.save_points()
             self.show_alert("Sucesso", f"Calibração salva com {len(sorted_points)} pontos.", "success", parent=wizard)
             close_wizard()
 

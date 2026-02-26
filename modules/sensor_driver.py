@@ -32,6 +32,13 @@ except ImportError:
     mscl = None
     MSCL_AVAILABLE = False
 
+try:
+    import config as app_config
+except Exception:
+    app_config = None
+
+RUNTIME_TUNING = getattr(app_config, 'RUNTIME_TUNING', {}) if app_config is not None else {}
+
 # =============================================================================
 # ESTRUCTURAS DE DATOS (Compatibilidad Main App)
 # =============================================================================
@@ -66,14 +73,13 @@ except ImportError:
 class MSCLDriver(ISistemaPesaje):
 
     # Configuración de Hardware
-    BAUD_RATE = 3000000
-    DATA_TIMEOUT_MS = 30     # Timeout más corto para mejorar responsividad de UI/backend
-    FRAME_TIMEOUT_S = 0.05   # Ventana de agregación
-    TIMESTAMP_TOLERANCE_NS = 20_000_000 # 20ms tolerancia de sincronización
+    BAUD_RATE = int(getattr(app_config, 'BAUDRATE', 3000000))
+    DATA_TIMEOUT_MS = int(RUNTIME_TUNING.get('gateway_getdata_timeout_ms', 30))
+    FRAME_TIMEOUT_S = float(RUNTIME_TUNING.get('gateway_frame_timeout_s', 0.05))
+    TIMESTAMP_TOLERANCE_NS = int(RUNTIME_TUNING.get('gateway_timestamp_tolerance_ns', 20_000_000))
     
     # Configuración
     RECOVERY_TIMEOUT_S = 30  # Tiempo máx intentando despertar un nodo
-    SAMPLE_RATE_HZ = 0.5     # 1 muestra cada 2 segundos
 
     def __init__(self, nodos_config: Optional[Dict] = None, use_sensor_config: bool = True, avoid_eeprom: bool = True):
         if not MSCL_AVAILABLE: raise ImportError("Librería MSCL no encontrada.")

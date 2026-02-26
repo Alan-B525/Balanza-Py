@@ -117,14 +117,12 @@ BAUDRATE = 3000000
 
 NODOS_CONFIG = {
     "celda_1": {
-        "id": 0,
-        "ch": "ch1",
+        "id": 5454,
         "ch_load": "ch1",
         "ch_angle": "ch2",
-        "nombre": "Célula 1",
-        "posicion": "1",
-        "serial": "",
-        "com_port": ""
+        "ch": "ch1",
+        "serial": "1232",
+        "com_port": "COM4"
     },
 }
 
@@ -135,36 +133,85 @@ NODOS_CONFIG = {
 # Configuración del Gateway (Adquisición de sensores)
 GATEWAY = {
     "porta": PUERTO_COM,
-    "velocidade": BAUDRATE,
+    "velocidade": 115200,
     "timeout": 0.05,
 }
 
 # Configuración de Transmisión (Modbus RTU)
 TRANSMISSAO = {
-    "porta": "COM10",
+    "porta": "COM4",
     "velocidade": 115200,
     "paridade": "Nenhuma",
+    "id_escravo_pc": 1,
+    "swap_words": False,
     "stopbits": 1,
     "bytesize": 8,
     "timeout": 0.005,
-    "id_escravo_pc": 1,
-    "swap_words": False,
+}
+
+# Tuning centralizado de tiempos/cadencias del backend.
+# Ajustar aquí evita modificar múltiples archivos.
+RUNTIME_TUNING = {
+    # MSCL / Gateway
+    "gateway_getdata_timeout_ms": 30,          # Timeout (ms) de getData(): cuánto espera el gateway por datos antes de devolver.
+    "gateway_frame_timeout_s": 0.05,           # Tiempo máximo (s) para cerrar/publicar un frame parcial en el agregador.
+    "gateway_timestamp_tolerance_ns": 20_000_000,  # Tolerancia (ns) para considerar dos sweeps como el mismo instante de muestreo.
+
+    # Loop backend
+    "backend_sleep_connected_s": 0.003,        # Pausa (s) del loop cuando el sistema está conectado/adquiriendo.
+    "backend_sleep_idle_s": 0.05,              # Pausa (s) del loop cuando está desconectado o adquisición pausada.
+
+    # Publicación GUI
+    "gui_publish_interval_s": 0.05,            # Intervalo mínimo (s) entre envíos de DATA a la GUI (rate limit).
+    "gui_keepalive_s": 0.5,                    # Intervalo máximo (s) sin publicar a GUI aunque no haya muestra nueva.
+
+    # Modbus
+    "modbus_retry_interval_s": 2.0,            # Cada cuánto (s) reintentar iniciar/reconectar el servidor Modbus.
+    "modbus_start_grace_s": 1.5,               # Ventana de gracia (s) tras iniciar Modbus para no contar fallos transitorios.
+    "modbus_fail_threshold": 3,                # Cantidad de fallos consecutivos de push_data antes de marcar error y reiniciar Modbus.
+    "modbus_net_window_size": 30,              # Tamaño de bloque N (muestras procesadas): se promedia el bloque completo, se publica y se limpia.
+
+    # Diagnóstico
+    "debug_print_getdata_calls": False,        # True: imprime timestamps y delta_ms de llamadas a obtener_datos() en consola.
 }
 
 # Estructura completa de settings.json por defecto
 DEFAULT_SETTINGS = {
     "execution_mode": MODO_EJECUCION,
     "use_sensor_config": True,
-    "mock_sample_rate_hz": 300,
+    "mock_sample_rate_hz": 50,
     "gateway": GATEWAY,
     "transmissao": TRANSMISSAO,
     "nodes": NODOS_CONFIG,
     "profiles_data": {
         "profiles": {
-            f"slot_{i}": {"name": f"Perfil {i}", "min": 0.0, "max": 1000.0}
-            for i in range(1, 6)
+            "slot_1": {
+                "name": "Perfil 1",
+                "min": 200.0,
+                "max": 1000.0
+            },
+            "slot_2": {
+                "name": "Perfil 2",
+                "min": 300.0,
+                "max": 900.0
+            },
+            "slot_3": {
+                "name": "Perfil 3",
+                "min": 400.0,
+                "max": 800.0
+            },
+            "slot_4": {
+                "name": "Perfil 4",
+                "min": 500.0,
+                "max": 700.0
+            },
+            "slot_5": {
+                "name": "Perfil 5",
+                "min": 550.0,
+                "max": 650.0
+            }
         },
-        "active_profile": "slot_1"
+        "active_profile": "slot_2"
     }
 }
 
