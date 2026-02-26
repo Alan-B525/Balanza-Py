@@ -24,10 +24,13 @@ except ImportError:
     NUMPY_AVAILABLE = False
 
 try:
-    from scipy.interpolate import interp1d, UnivariateSpline, CubicSpline
+    from scipy.interpolate import interp1d, UnivariateSpline, CubicSpline  # type: ignore
     SCIPY_AVAILABLE = True
-except ImportError:
+except (ImportError, ModuleNotFoundError):
     SCIPY_AVAILABLE = False
+    interp1d = None
+    UnivariateSpline = None
+    CubicSpline = None
 
 @dataclass
 class CalibrationPoint:
