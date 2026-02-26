@@ -38,7 +38,7 @@ args = [
 ] + add_data_args
 
 # Directorio de salida deseado
-dist_out = os.path.join('dist')
+dist_out = os.path.join('dist\SISTEMA DE PESAJEM')
 args.append(f'--distpath={dist_out}')
 
 # Imports ocultos que a veces PyInstaller no detecta
