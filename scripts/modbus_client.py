@@ -1,24 +1,23 @@
 """
-Cliente Modbus RTU – benchmark de velocidad de adquisición.
-
-Modos de operación:
-  live:  lectura continua con gráfico en tiempo real
-  sweep: compara latencia en distintos intervalos de polling
-  bench: benchmark puro de velocidad máxima (sin gráfico, máxima eficiencia)
+Cliente Modbus RTU – visualizador en tiempo real.
+Abre una ventana de configuración simple y luego grafica la señal
+en una ventana deslizante de 2 minutos.
 """
-import argparse
-import json
-import os
-import sys
-import time
-import statistics
+import json, os, sys, time, statistics
 from collections import deque
 from typing import List, Tuple
-
 from pymodbus.client import ModbusSerialClient
+from pymodbus.framer import FramerType
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
+
+def _list_ports() -> List[str]:
+    try:
+        import serial.tools.list_ports
+        return sorted([p.device for p in serial.tools.list_ports.comports()])
+    except Exception:
+        return []
 
 def _load_settings(path: str) -> dict:
     try:
@@ -27,493 +26,352 @@ def _load_settings(path: str) -> dict:
     except Exception:
         return {}
 
-
-def _parity_from_text(text: str) -> str:
-    t = (text or "").lower()
-    if "par" in t and "impar" not in t:
-        return "E"
-    if "impar" in t or "ímpar" in t:
-        return "O"
-    return "N"
-
-
 def _decode_int32(hi: int, lo: int) -> int:
     val = ((hi & 0xFFFF) << 16) | (lo & 0xFFFF)
     if val & 0x80000000:
         val -= 0x100000000
     return val
 
-
-def _percentile(values: List[float], pct: float) -> float:
-    """Percentile simple (nearest rank)."""
-    if not values:
-        return 0.0
-    ordered = sorted(values)
-    idx = int(round(pct / 100.0 * (len(ordered) - 1)))
-    return ordered[max(0, min(idx, len(ordered) - 1))]
-
-
-def _call_read(client: ModbusSerialClient, address: int, count: int, unit_id: int):
-    """Read holding registers, compatible con pymodbus 2.x / 3.x."""
-    try:
-        return client.read_holding_registers(address, count=count, slave=unit_id)
-    except TypeError:
-        try:
-            return client.read_holding_registers(address, count=count, device_id=unit_id)
-        except TypeError:
-            return client.read_holding_registers(address, count=count, unit=unit_id)
-
+_first_error_printed = False
 
 def _read_once(client, address, unit_id, scale) -> Tuple[bool, float, int, float]:
-    """Lee 2 registros, decodifica int32, retorna (ok, value, raw, rtt_ms)."""
+    global _first_error_printed
     t0 = time.perf_counter()
     try:
-        result = _call_read(client, address, 2, unit_id)
-    except Exception:
-        rtt_ms = (time.perf_counter() - t0) * 1000.0
+        r = client.read_holding_registers(address, count=2, device_id=unit_id)
+    except Exception as e:
+        rtt_ms = (time.perf_counter() - t0) * 1000
+        if not _first_error_printed:
+            print(f"  [DIAG] Excepção: {type(e).__name__}: {e}")
+            _first_error_printed = True
         return False, 0.0, 0, rtt_ms
-    rtt_ms = (time.perf_counter() - t0) * 1000.0
-
-    if result and hasattr(result, "registers") and len(result.registers) >= 2:
-        raw = _decode_int32(result.registers[0], result.registers[1])
+    rtt_ms = (time.perf_counter() - t0) * 1000
+    if r and hasattr(r, "registers") and len(r.registers) >= 2:
+        _first_error_printed = False
+        raw = _decode_int32(r.registers[0], r.registers[1])
         return True, raw / float(scale), raw, rtt_ms
+    # La respuesta existe pero no tiene registros -> error Modbus
+    if not _first_error_printed:
+        is_err = getattr(r, 'isError', lambda: False)()
+        print(f"  [DIAG] Resposta inválida: type={type(r).__name__}  isError={is_err}  obj={r}")
+        _first_error_printed = True
     return False, 0.0, 0, rtt_ms
 
 
-def _parse_float_list(text: str) -> List[float]:
-    vals = []
-    for chunk in str(text or "").split(','):
-        c = chunk.strip()
-        if c:
-            vals.append(float(c))
-    return vals
+# ── Ventana de configuración simple ──────────────────────────────────────
 
+def show_config(default_port="COM9", default_baud="115200",
+                default_unit="1", default_print_ev="10") -> dict | None:
+    import tkinter as tk
+    from tkinter import ttk
 
-# ── Benchmark mode ───────────────────────────────────────────────────────
+    ports = _list_ports()
+    if default_port not in ports:
+        ports = [default_port] + ports
 
-def run_bench(client, address, unit_id, scale, duration_s, warmup_s=1.0):
-    """
-    Benchmark puro: lectura sin pausa lo más rápido posible.
-    Mide throughput real y latencia.
-    """
-    print(f"\n{'='*60}")
-    print(f"  BENCHMARK DE VELOCIDAD MÁXIMA")
-    print(f"  Duración: {duration_s}s  |  Warmup: {warmup_s}s")
-    print(f"{'='*60}\n")
+    result = {}
 
-    # Warmup
-    print(f"  Warmup ({warmup_s}s)...", end="", flush=True)
-    t_warm = time.perf_counter() + warmup_s
-    while time.perf_counter() < t_warm:
-        _read_once(client, address, unit_id, scale)
-    print(" OK")
+    root = tk.Tk()
+    root.title("Modbus RTU – Configuração")
+    root.resizable(False, False)
 
-    # Benchmark
-    print(f"  Midiendo ({duration_s}s)...", end="", flush=True)
-    rtts = []
-    errors = 0
-    values_changed = 0
-    last_raw = None
+    BG, CARD    = "#1e293b", "#263348"
+    FG, FG2     = "#f1f5f9", "#94a3b8"
+    ACCENT      = "#3b82f6"
+    SUCCESS     = "#22c55e"
+    DANGER      = "#ef4444"
+    fnt         = ("Segoe UI", 10)
+    fnt_bold    = ("Segoe UI", 10, "bold")
+    fnt_title   = ("Segoe UI", 14, "bold")
+    fnt_btn     = ("Segoe UI", 11, "bold")
 
-    t_start = time.perf_counter()
-    t_end = t_start + duration_s
+    root.configure(bg=BG)
 
-    while time.perf_counter() < t_end:
-        ok, _val, raw, rtt_ms = _read_once(client, address, unit_id, scale)
-        rtts.append(rtt_ms)
-        if ok:
-            if last_raw is not None and raw != last_raw:
-                values_changed += 1
-            last_raw = raw
-        else:
-            errors += 1
+    # Header
+    hdr = tk.Frame(root, bg="#0f172a", pady=20)
+    hdr.pack(fill="x")
+    tk.Label(hdr, text="📡  Modbus RTU Live", bg="#0f172a", fg=FG, font=fnt_title).pack()
+    tk.Label(hdr, text="Configure a conexão e inicie a leitura contínua",
+             bg="#0f172a", fg=FG2, font=("Segoe UI", 9)).pack(pady=(2,0))
 
-    elapsed = time.perf_counter() - t_start
-    total = len(rtts)
-    ok_count = total - errors
-    print(" OK\n")
+    # Card de parámetros
+    card = tk.Frame(root, bg=CARD, padx=24, pady=20)
+    card.pack(fill="x", padx=20, pady=16)
 
-    # Resultados
-    throughput = total / elapsed
-    mean_rtt = statistics.fmean(rtts) if rtts else 0
-    median_rtt = statistics.median(rtts) if rtts else 0
-    min_rtt = min(rtts) if rtts else 0
-    max_rtt = max(rtts) if rtts else 0
-    stdev_rtt = statistics.stdev(rtts) if len(rtts) > 1 else 0
-    p95 = _percentile(rtts, 95)
-    p99 = _percentile(rtts, 99)
+    def field(label_text, var, widget_fn):
+        row = tk.Frame(card, bg=CARD)
+        row.pack(fill="x", pady=5)
+        tk.Label(row, text=label_text, bg=CARD, fg=FG2, font=fnt,
+                 width=18, anchor="w").pack(side="left")
+        w = widget_fn(row)
+        w.pack(side="left")
+        return w
 
-    print(f"  ┌─────────────────────────────────────────────┐")
-    print(f"  │  RESULTADOS                                 │")
-    print(f"  ├─────────────────────────────────────────────┤")
-    print(f"  │  Lecturas totales:  {total:>8d}                │")
-    print(f"  │  Exitosas:          {ok_count:>8d} ({100*ok_count/total:.1f}%)        │")
-    print(f"  │  Errores:           {errors:>8d}                │")
-    print(f"  │  Valores cambiaron: {values_changed:>8d}                │")
-    print(f"  │  Elapsed:           {elapsed:>8.2f} s              │")
-    print(f"  │                                             │")
-    print(f"  │  THROUGHPUT:        {throughput:>8.1f} reads/s       │")
-    print(f"  │  Update rate:       {values_changed/elapsed:>8.1f} Hz            │")
-    print(f"  │                                             │")
-    print(f"  │  RTT medio:         {mean_rtt:>8.3f} ms            │")
-    print(f"  │  RTT mediana:       {median_rtt:>8.3f} ms            │")
-    print(f"  │  RTT min:           {min_rtt:>8.3f} ms            │")
-    print(f"  │  RTT max:           {max_rtt:>8.3f} ms            │")
-    print(f"  │  RTT stdev:         {stdev_rtt:>8.3f} ms            │")
-    print(f"  │  RTT P95:           {p95:>8.3f} ms            │")
-    print(f"  │  RTT P99:           {p99:>8.3f} ms            │")
-    print(f"  └─────────────────────────────────────────────┘")
+    def entry(parent, var, w=14):
+        return tk.Entry(parent, textvariable=var, width=w,
+                        bg="#334155", fg=FG, insertbackground=FG,
+                        relief="flat", bd=4, font=("Consolas", 10))
 
-    # Veredicto
-    print(f"\n  ➤ Velocidad máxima sostenible: ~{throughput:.0f} lecturas/s")
-    if errors > 0:
-        print(f"  ⚠ {errors} errores detectados — puede haber problemas de estabilidad")
-    else:
-        print(f"  ✓ Sin errores — la conexión es estable a esta velocidad")
+    def combo(parent, var, values, w=14):
+        style = ttk.Style(); style.theme_use("default")
+        style.configure("D.TCombobox", fieldbackground="#334155",
+                        background="#334155", foreground=FG,
+                        selectbackground=ACCENT, selectforeground=FG)
+        cb = ttk.Combobox(parent, textvariable=var, values=values,
+                          width=w, style="D.TCombobox", state="readonly")
+        return cb
 
-    return throughput, mean_rtt
+    v_port  = tk.StringVar(value=default_port)
+    v_baud  = tk.StringVar(value=default_baud)
+    v_unit  = tk.StringVar(value=default_unit)
+    v_print = tk.StringVar(value=default_print_ev)
 
+    field("Porta COM",           v_port,  lambda p: combo(p, v_port, ports, w=10))
+    field("Baudrate",            v_baud,  lambda p: combo(p, v_baud,
+          ["9600","19200","57600","115200","230400","460800","921600",
+           "1500000","3000000"], w=12))
+    field("Unit ID (escravo)",   v_unit,  lambda p: entry(p, v_unit, w=6))
+    field("Imprimir 1 de cada N", v_print, lambda p: entry(p, v_print, w=6))
 
-# ── Sweep mode ───────────────────────────────────────────────────────────
+    tk.Label(card, text="Paridade: N  |  Stop bits: 1  |  Modo: Live  |  Registro: 1000  |  Escala: 1000",
+             bg=CARD, fg=FG2, font=("Segoe UI", 8)).pack(anchor="w", pady=(10, 0))
 
-def run_sweep(client, address, unit_id, scale, intervals, sweep_seconds, plot_enabled):
-    """Compara latencia para distintos intervalos de polling."""
-    rows = []
+    # Error label
+    lbl_err = tk.Label(root, text="", bg=BG, fg=DANGER, font=("Segoe UI", 9))
+    lbl_err.pack()
 
-    print(f"\n{'='*60}")
-    print(f"  SWEEP DE INTERVALOS")
-    print(f"  {len(intervals)} intervalos  |  {sweep_seconds}s por intervalo")
-    print(f"{'='*60}\n")
+    # Botones
+    btn_row = tk.Frame(root, bg=BG, pady=14)
+    btn_row.pack(fill="x", padx=20)
 
-    for i, interval in enumerate(intervals):
-        freq_label = f"{1.0/interval:.0f} Hz" if interval > 0 else "MAX"
-        print(f"  [{i+1}/{len(intervals)}] interval={interval:.4f}s ({freq_label})...", end="", flush=True)
+    def on_cancel():
+        root.destroy()
 
-        rtts = []
-        errors = 0
-        last_raw = None
-        values_changed = 0
-
-        t_start = time.perf_counter()
-        t_end = t_start + max(0.5, sweep_seconds)
-
-        while time.perf_counter() < t_end:
-            ok, _val, raw, rtt_ms = _read_once(client, address, unit_id, scale)
-            rtts.append(rtt_ms)
-            if ok:
-                if last_raw is not None and raw != last_raw:
-                    values_changed += 1
-                last_raw = raw
-            else:
-                errors += 1
-            if interval > 0:
-                time.sleep(interval)
-
-        elapsed = max(1e-6, time.perf_counter() - t_start)
-        total = len(rtts)
-        ok_count = total - errors
-
-        row = {
-            'interval': interval,
-            'freq_hz': (1.0 / interval) if interval > 0 else 0.0,
-            'samples': total,
-            'ok_pct': (100.0 * ok_count / total) if total else 0.0,
-            'errors': errors,
-            'mean_rtt': statistics.fmean(rtts) if rtts else 0.0,
-            'median_rtt': statistics.median(rtts) if rtts else 0.0,
-            'p95_rtt': _percentile(rtts, 95),
-            'p99_rtt': _percentile(rtts, 99),
-            'max_rtt': max(rtts) if rtts else 0.0,
-            'min_rtt': min(rtts) if rtts else 0.0,
-            'throughput': total / elapsed,
-            'update_hz': values_changed / elapsed,
-        }
-        rows.append(row)
-        print(f" {total} lecturas, RTT={row['mean_rtt']:.1f}ms, throughput={row['throughput']:.0f}/s")
-
-    # Tabla de resultados
-    print(f"\n{'='*120}")
-    print(f"  {'interval':>10s} | {'target':>8s} | {'samples':>7s} | {'ok%':>6s} | {'errors':>6s} | "
-          f"{'mean_rtt':>9s} | {'p95_rtt':>9s} | {'p99_rtt':>9s} | {'max_rtt':>9s} | {'throughput':>10s} | {'updates':>10s}")
-    print(f"  {'-'*10}-+-{'-'*8}-+-{'-'*7}-+-{'-'*6}-+-{'-'*6}-+-"
-          f"{'-'*9}-+-{'-'*9}-+-{'-'*9}-+-{'-'*9}-+-{'-'*10}-+-{'-'*10}")
-    for r in rows:
-        freq_str = f"{r['freq_hz']:.0f} Hz" if r['freq_hz'] > 0 else "MAX"
-        err_str = f"{r['errors']}" if r['errors'] == 0 else f"⚠{r['errors']}"
-        print(f"  {r['interval']:>10.4f} | {freq_str:>8s} | {r['samples']:>7d} | {r['ok_pct']:>5.1f}% | {err_str:>6s} | "
-              f"{r['mean_rtt']:>8.2f}ms | {r['p95_rtt']:>8.2f}ms | {r['p99_rtt']:>8.2f}ms | {r['max_rtt']:>8.2f}ms | "
-              f"{r['throughput']:>9.1f}/s | {r['update_hz']:>9.1f} Hz")
-    print(f"  {'='*118}\n")
-
-    # Recomendación
-    best = max(rows, key=lambda r: r['throughput'])
-    print(f"  ➤ Mejor throughput: {best['throughput']:.0f} lecturas/s (interval={best['interval']:.4f}s)")
-    stable = [r for r in rows if r['ok_pct'] >= 99.9 and r['errors'] == 0]
-    if stable:
-        fastest_stable = max(stable, key=lambda r: r['throughput'])
-        print(f"  ➤ Mejor estable (0 errores): {fastest_stable['throughput']:.0f} lecturas/s (interval={fastest_stable['interval']:.4f}s)")
-
-    # Plot
-    if plot_enabled and rows:
+    def on_start():
         try:
-            import matplotlib.pyplot as plt
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+            result.update({
+                "port":        v_port.get().strip(),
+                "baud":        int(v_baud.get()),
+                "unit":        int(v_unit.get()),
+                "print_every": max(1, int(v_print.get())),
+            })
+            root.destroy()
+        except ValueError as e:
+            lbl_err.config(text=f"⚠  {e}")
 
-            throughputs = [r['throughput'] for r in rows]
-            means = [r['mean_rtt'] for r in rows]
-            p95s = [r['p95_rtt'] for r in rows]
-            labels = [f"{r['interval']:.3f}s" for r in rows]
+    tk.Button(btn_row, text="Cancelar", command=on_cancel,
+              bg="#475569", fg=FG, font=fnt_btn, relief="flat",
+              padx=16, pady=8, cursor="hand2",
+              activebackground="#64748b", activeforeground=FG).pack(side="left")
 
-            # Throughput bar chart
-            colors = ['#22c55e' if r['errors'] == 0 else '#ef4444' for r in rows]
-            bars = ax1.bar(range(len(rows)), throughputs, color=colors, alpha=0.85)
-            ax1.set_xlabel('Intervalo')
-            ax1.set_ylabel('Throughput (lecturas/s)')
-            ax1.set_title('Throughput por intervalo')
-            ax1.set_xticks(range(len(rows)))
-            ax1.set_xticklabels(labels, rotation=45, ha='right')
-            ax1.grid(axis='y', alpha=0.3)
-            for bar, val in zip(bars, throughputs):
-                ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5,
-                         f'{val:.0f}', ha='center', va='bottom', fontsize=8)
+    tk.Button(btn_row, text="▶  INICIAR LEITURA", command=on_start,
+              bg=SUCCESS, fg="#fff", font=fnt_btn, relief="flat",
+              padx=22, pady=8, cursor="hand2",
+              activebackground="#16a34a", activeforeground="#fff").pack(side="right")
 
-            # RTT line chart
-            ax2.plot(range(len(rows)), means, 'o-', label='RTT medio', color='#3b82f6')
-            ax2.plot(range(len(rows)), p95s, 's--', label='RTT P95', color='#f59e0b')
-            ax2.set_xlabel('Intervalo')
-            ax2.set_ylabel('RTT (ms)')
-            ax2.set_title('Latencia Modbus por intervalo')
-            ax2.set_xticks(range(len(rows)))
-            ax2.set_xticklabels(labels, rotation=45, ha='right')
-            ax2.grid(alpha=0.3)
-            ax2.legend()
-
-            plt.tight_layout()
-            plt.show()
-        except Exception as e:
-            print(f"  (Gráfico no disponible: {e})")
+    # Centrar ventana
+    root.update_idletasks()
+    sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+    w, h   = root.winfo_reqwidth(), root.winfo_reqheight()
+    root.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
+    root.mainloop()
+    return result if result else None
 
 
-# ── Live mode ────────────────────────────────────────────────────────────
+# ── Modo live con ventana deslizante 2 minutos ────────────────────────────
 
-def run_live(client, address, unit_id, scale, interval, plot_mode, plot_enabled,
-             window_size, print_every):
-    """Lectura continua con gráfico en tiempo real."""
-    print(f"\n  Modo live | intervalo={interval}s | Ctrl+C para parar\n")
+SLIDE_WINDOW_S = 120.0   # 2 minutos
+CONSOLE_LINES  = 10      # líneas visibles en el panel consola
 
-    samples = deque(maxlen=max(10, window_size))
-    rtt_samples = deque(maxlen=max(10, window_size))
-    sample_idx = deque(maxlen=max(10, window_size))
-    idx = 0
+def run_live(client, address, unit_id, scale, print_every):
+    import matplotlib.pyplot as plt
+    import matplotlib.gridspec as gridspec
 
-    fig = ax_value = ax_rtt = line_value = line_rtt = None
-    if plot_enabled:
-        try:
-            import matplotlib.pyplot as plt
-            plt.ion()
-            if plot_mode == 'latency':
-                fig, ax_rtt = plt.subplots(figsize=(9, 4))
-            elif plot_mode == 'both':
-                fig, (ax_value, ax_rtt) = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
-            else:
-                fig, ax_value = plt.subplots(figsize=(9, 4))
+    print(f"\n  Leitura contínua | janela={SLIDE_WINDOW_S:.0f}s | Ctrl+C para parar\n")
 
-            if ax_value is not None:
-                (line_value,) = ax_value.plot([], [], lw=2, color='#3b82f6')
-                ax_value.set_title("Señal recibida vía Modbus RTU")
-                ax_value.set_ylabel("Carga (kg)")
-                ax_value.grid(True, alpha=0.3)
+    ts_vals: deque = deque()          # (t, value)
+    console: deque = deque(maxlen=CONSOLE_LINES)  # líneas de log
 
-            if ax_rtt is not None:
-                (line_rtt,) = ax_rtt.plot([], [], lw=1.6, color='#f59e0b')
-                ax_rtt.set_title("Latencia RTT")
-                ax_rtt.set_xlabel("Muestra")
-                ax_rtt.set_ylabel("RTT (ms)")
-                ax_rtt.grid(True, alpha=0.3)
+    def log(line: str):
+        console.append(line)
+        print(f"  {line}")
 
-            plt.tight_layout()
-            plt.show(block=False)
-        except Exception as e:
-            print(f"  (Gráfico no disponible: {e})")
-            plot_enabled = False
+    # ── Layout ──────────────────────────────────────────────────────────
+    plt.ion()
+    fig = plt.figure(figsize=(13, 7))
+    fig.patch.set_facecolor("#0f172a")
+    gs  = gridspec.GridSpec(2, 1, height_ratios=[3.2, 1], hspace=0.0)
+    gs.update(left=0.07, right=0.97, top=0.95, bottom=0.04)
 
-    count = 0
-    errors_consecutive = 0
-    t_stats = time.perf_counter()
-    stats_count = 0
+    ax_val = fig.add_subplot(gs[0])
+    ax_con = fig.add_subplot(gs[1])
+
+    # Estilo gráfico principal
+    ax_val.set_facecolor("#1e293b")
+    ax_val.tick_params(colors="#94a3b8", labelsize=8)
+    ax_val.spines[:].set_color("#334155")
+    ax_val.xaxis.label.set_color("#64748b")
+    ax_val.yaxis.label.set_color("#64748b")
+    ax_val.title.set_color("#e2e8f0")
+    ax_val.grid(True, alpha=0.15, color="#334155")
+
+    (line_val,) = ax_val.plot([], [], lw=2, color="#3b82f6")
+    ax_val.set_title("Carga  (janela deslizante: 2 min)", pad=6)
+    ax_val.set_ylabel("Carga (kg)")
+    ax_val.set_xlabel("")   # lo oculta el panel consola que está pegado
+
+    # Panel consola – sin ejes, fondo muy oscuro
+    ax_con.set_facecolor("#020617")
+    ax_con.set_xlim(0, 1); ax_con.set_ylim(0, 1)
+    ax_con.tick_params(left=False, bottom=False,
+                       labelleft=False, labelbottom=False)
+    for sp in ax_con.spines.values():
+        sp.set_color("#1e293b")
+
+    txt_console = ax_con.text(
+        0.01, 0.97, "",
+        transform=ax_con.transAxes,
+        va="top", ha="left",
+        fontsize=8, fontfamily="monospace",
+        color="#4ade80",          # verde terminal
+        linespacing=1.5,
+    )
+    # Título del panel consola
+    ax_con.text(0.005, 1.0, " EVENTOS",
+                transform=ax_con.transAxes, va="bottom",
+                fontsize=7, fontfamily="monospace",
+                color="#334155")
+
+    # ── Estado ──────────────────────────────────────────────────────────
+    t_start       = time.perf_counter()
+    t_last_stats  = t_start
+    t_last_change = None
+    last_raw      = None
+    count         = 0
+    stats_count   = 0
+    errors_consec = 0
+    n_changes     = 0
+    intervals: list = []
+    MAX_INTERVALS   = 60
+
+    def _refresh_console():
+        txt_console.set_text("\n".join(console))
 
     while True:
+        now_s = time.perf_counter() - t_start
         ok, value, raw, rtt_ms = _read_once(client, address, unit_id, scale)
-        count += 1
-        stats_count += 1
+        count += 1; stats_count += 1
 
         if ok:
-            errors_consecutive = 0
-            if print_every <= 1 or (count % print_every) == 0:
-                print(f"  Carga={value:.3f} kg (raw={raw}) | RTT={rtt_ms:.3f} ms")
+            errors_consec = 0
+            ts_vals.append((now_s, value))
 
-            if plot_enabled and fig is not None:
-                try:
-                    import matplotlib.pyplot as plt
-                    if plt.fignum_exists(fig.number):
-                        idx += 1
-                        samples.append(value)
-                        rtt_samples.append(rtt_ms)
-                        sample_idx.append(idx)
-
-                        if line_value is not None and ax_value is not None:
-                            line_value.set_data(sample_idx, samples)
-                            ax_value.relim()
-                            ax_value.autoscale_view()
-
-                        if line_rtt is not None and ax_rtt is not None:
-                            line_rtt.set_data(sample_idx, rtt_samples)
-                            ax_rtt.relim()
-                            ax_rtt.autoscale_view()
-
-                        plt.pause(0.001)
-                except Exception:
-                    pass
+            if raw != last_raw:
+                if last_raw is not None:
+                    interval_s = now_s - t_last_change if t_last_change else 0.0
+                    delta      = value - (last_raw / float(scale))
+                    n_changes += 1
+                    intervals.append(interval_s)
+                    if len(intervals) > MAX_INTERVALS:
+                        intervals.pop(0)
+                    freq = 1.0 / interval_s if interval_s > 0 else 0
+                    log(f"t={now_s:6.1f}s  ★  {value:>10.3f} kg"
+                        f"  Δ={delta:>+8.3f}  int={interval_s*1000:5.0f}ms"
+                        f"  {freq:.1f}Hz  #{n_changes}")
+                t_last_change = now_s
+                last_raw      = raw
+            elif print_every <= 1 or (count % print_every) == 0:
+                log(f"t={now_s:6.1f}s     {value:>10.3f} kg"
+                    f"  RTT={rtt_ms:.1f}ms")
         else:
-            errors_consecutive += 1
+            errors_consec += 1
             if print_every <= 1 or (count % print_every) == 0:
-                print(f"  ⚠ Lectura inválida | RTT={rtt_ms:.3f} ms (errores consecutivos: {errors_consecutive})")
+                log(f"t={now_s:6.1f}s  ✗  err  RTT={rtt_ms:.2f}ms  ({errors_consec})")
 
-        # Stats periódicas
-        now = time.perf_counter()
-        if now - t_stats >= 5.0:
-            rate = stats_count / (now - t_stats)
-            print(f"  ── Rate: {rate:.1f} lecturas/s (últimos {now-t_stats:.1f}s) ──")
-            t_stats = now
-            stats_count = 0
+        # ── Actualizar figura ────────────────────────────────────────────
+        if plt.fignum_exists(fig.number):
+            x_right = max(SLIDE_WINDOW_S, now_s)
+            x_left  = x_right - SLIDE_WINDOW_S
+            while ts_vals and ts_vals[0][0] < x_left - 2.0:
+                ts_vals.popleft()
 
-        if interval > 0:
-            time.sleep(interval)
+            if ts_vals:
+                xs = [p[0] for p in ts_vals]
+                line_val.set_data(xs, [p[1] for p in ts_vals])
+                ax_val.set_xlim(x_left, x_right)
+                ax_val.relim(); ax_val.autoscale_view(scalex=False)
+
+            _refresh_console()
+            plt.pause(0.001)
+        else:
+            print("  Gráfico fechado. Encerrando...")
+            break
+
+        # Stats periódicas cada 5s
+        now_wall = time.perf_counter()
+        if now_wall - t_last_stats >= 5.0:
+            rate  = stats_count / max(0.001, now_wall - t_last_stats)
+            avg_i = (sum(intervals) / len(intervals)) if intervals else 0
+            freq_s = f"{1/avg_i:.1f}Hz" if avg_i > 0 else "---"
+            log(f"{'─'*12}  poll={rate:.0f}/s  "
+                f"cambios={n_changes}  servidor≈{freq_s}  {'─'*8}")
+            t_last_stats = now_wall
+            stats_count  = 0
+
+
 
 
 # ── Main ─────────────────────────────────────────────────────────────────
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Cliente Modbus RTU – benchmark de velocidad",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Ejemplos:
-  # Lectura continua con gráfico
-  python modbus_client.py --port COM9 --baud 3000000
-
-  # Benchmark de velocidad máxima (10 segundos)
-  python modbus_client.py --port COM9 --baud 3000000 --mode bench --duration 10
-
-  # Sweep de intervalos para encontrar velocidad óptima
-  python modbus_client.py --port COM9 --baud 3000000 --mode sweep --sweep "0,0.001,0.002,0.005,0.01"
-
-  # Lectura rápida sin gráfico para máxima velocidad
-  python modbus_client.py --port COM9 --baud 3000000 --interval 0 --no-plot --print-every 50
-""")
-
-    # Conexión
-    parser.add_argument("--settings", default="../settings.json", help="Path a settings.json")
-    parser.add_argument("--port", help="Puerto serial (override)")
-    parser.add_argument("--baud", type=int, help="Baudrate (override)")
-    parser.add_argument("--parity", choices=["N", "E", "O"], help="Paridad (override)")
-    parser.add_argument("--unit", type=int, help="ID esclavo Modbus (override)")
-    parser.add_argument("--timeout", type=float, default=0.1, help="Timeout serial por request (s)")
-
-    # Modbus
-    parser.add_argument("--holding-start", type=int, default=1000, help="Dirección del primer holding register")
-    parser.add_argument("--scale", type=int, default=1000, help="Factor de escala (valor_real = raw / scale)")
-
-    # Modo de operación
-    parser.add_argument("--mode", choices=["live", "sweep", "bench"], default="live",
-                        help="live: lectura continua | sweep: comparar intervalos | bench: velocidad máxima")
-    parser.add_argument("--interval", type=float, default=0.0, help="Intervalo entre lecturas (s), 0=sin pausa")
-
-    # Live mode
-    parser.add_argument("--plot-mode", choices=["value", "latency", "both"], default="value",
-                        help="Tipo de gráfico en modo live")
-    parser.add_argument("--no-plot", action="store_true", help="Desactivar gráfico")
-    parser.add_argument("--window", type=int, default=300, help="Ventana de muestras en el gráfico")
-    parser.add_argument("--print-every", type=int, default=10, help="Imprimir 1 de cada N lecturas")
-
-    # Sweep mode
-    parser.add_argument("--sweep", type=str, default="0,0.001,0.002,0.005,0.01,0.02,0.05",
-                        help="Intervalos (s) separados por coma para sweep")
-    parser.add_argument("--sweep-seconds", type=float, default=8.0, help="Duración por intervalo en sweep (s)")
-
-    # Bench mode
-    parser.add_argument("--duration", type=float, default=10.0, help="Duración del benchmark (s)")
-    parser.add_argument("--warmup", type=float, default=1.0, help="Warmup antes del benchmark (s)")
-
-    args = parser.parse_args()
-
-    # Cargar settings
-    settings_path = os.path.abspath(args.settings)
-    settings = _load_settings(settings_path)
-    t = settings.get("transmissao", {}) if isinstance(settings, dict) else {}
-
-    port = args.port or t.get("porta") or settings.get("serial_port") or "COM9"
-    baudrate = int(args.baud or t.get("velocidade") or settings.get("baudrate") or 115200)
-    parity = args.parity or _parity_from_text(t.get("paridade") or settings.get("paridade"))
-    unit_id = int(args.unit or t.get("id_escravo_pc") or settings.get("id_escravo_pc") or 1)
-
-    # Banner
-    print(f"\n  ╔═══════════════════════════════════════════════╗")
-    print(f"  ║  Modbus RTU Client – Speed Tester             ║")
-    print(f"  ╠═══════════════════════════════════════════════╣")
-    print(f"  ║  Puerto:    {port:<36s}║")
-    print(f"  ║  Baudrate:  {baudrate:<36,d}║")
-    print(f"  ║  Paridad:   {parity:<36s}║")
-    print(f"  ║  Unit ID:   {unit_id:<36d}║")
-    print(f"  ║  Registro:  {args.holding_start:<36d}║")
-    print(f"  ║  Modo:      {args.mode:<36s}║")
-    print(f"  ╚═══════════════════════════════════════════════╝\n")
-
-    # Conectar
-    client = ModbusSerialClient(
-        port=port,
-        baudrate=baudrate,
-        parity=parity,
-        stopbits=1,
-        bytesize=8,
-        timeout=max(0.001, args.timeout),
+def main():
+    # Buscar settings.json
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    settings_path = next(
+        (p for p in [
+            os.path.join(script_dir, "settings.json"),
+            os.path.join(script_dir, "..", "settings.json"),
+        ] if os.path.exists(p)),
+        ""
     )
+    settings = _load_settings(settings_path)
 
+    cfg = show_config(
+        default_port     = "COM9",
+        default_baud     = "115200",
+        default_unit     = "1",
+        default_print_ev = "10",
+    )
+    if cfg is None:
+        sys.exit(0)
+
+    port      = cfg["port"]
+    baudrate  = cfg["baud"]
+    unit_id   = cfg["unit"]
+    ADDRESS   = 1000
+    SCALE     = 1000
+
+    print(f"\n  Porta={port}  Baud={baudrate:,}  Unit={unit_id}  Reg={ADDRESS}  Escala={SCALE}")
+
+    client = ModbusSerialClient(
+        port=port, baudrate=baudrate, parity="N",
+        stopbits=1, bytesize=8, timeout=0.1,
+        framer=FramerType.RTU,
+    )
     if not client.connect():
-        print(f"  ✗ No se pudo abrir el puerto {port}")
+        print(f"  ✗ Não foi possível abrir {port}")
         sys.exit(1)
-    print(f"  ✓ Conectado a {port}")
+    print(f"  ✓ Conectado a {port}\n")
 
     try:
-        # Test inicial de comunicación
-        ok, val, _raw, rtt = _read_once(client, args.holding_start, unit_id, args.scale)
-        if ok:
-            print(f"  ✓ Comunicación OK — primera lectura: {val:.3f} kg, RTT={rtt:.1f}ms\n")
-        else:
-            print(f"  ⚠ Primera lectura falló (RTT={rtt:.1f}ms) — verificar configuración\n")
-
-        if args.mode == "bench":
-            run_bench(client, args.holding_start, unit_id, args.scale,
-                      args.duration, args.warmup)
-
-        elif args.mode == "sweep":
-            run_sweep(client, args.holding_start, unit_id, args.scale,
-                      _parse_float_list(args.sweep), args.sweep_seconds,
-                      not args.no_plot)
-
-        else:  # live
-            run_live(client, args.holding_start, unit_id, args.scale,
-                     args.interval, args.plot_mode, not args.no_plot,
-                     args.window, max(1, args.print_every))
-
+        run_live(client, ADDRESS, unit_id, SCALE, cfg["print_every"])
     except KeyboardInterrupt:
-        print("\n\n  Interrumpido por el usuario.")
+        print("\n  Interrompido.")
     finally:
         try:
             client.close()
         except Exception:
             pass
-        print("  Conexión cerrada.\n")
+        print("  Conexão encerrada.\n")
 
 
 if __name__ == "__main__":

@@ -1,14 +1,14 @@
 {
     "execution_mode": "REAL",
     "use_sensor_config": true,
-    "mock_sample_rate_hz": 300,
+    "mock_sample_rate_hz": 30,
     "gateway": {
         "porta": "COM4",
         "velocidade": 115200,
         "timeout": 0.05
     },
     "transmissao": {
-        "porta": "COM4",
+        "porta": "COM10",
         "velocidade": 115200,
         "paridade": "Nenhuma",
         "id_escravo_pc": 1,
@@ -19,13 +19,27 @@
     },
     "nodes": {
         "celda_1": {
-            "id": 5454,
+            "id": 9421,
             "ch_load": "ch1",
             "ch_angle": "ch2",
             "ch": "ch1",
-            "serial": "1232",
+            "serial": "3015",
             "com_port": "COM4"
         }
+    },
+    "runtime_tuning": {
+        "gateway_getdata_timeout_ms": 30,
+        "gateway_frame_timeout_s": 0.05,
+        "gateway_timestamp_tolerance_ns": 20000000,
+        "backend_sleep_connected_s": 0.001,
+        "backend_sleep_idle_s": 0.05,
+        "gui_publish_interval_s": 0.05,
+        "gui_keepalive_s": 0.5,
+        "modbus_retry_interval_s": 2.0,
+        "modbus_start_grace_s": 1.5,
+        "modbus_fail_threshold": 3,
+        "modbus_net_window_size": 15,
+        "debug_print_getdata_calls": false
     },
     "profiles_data": {
         "profiles": {

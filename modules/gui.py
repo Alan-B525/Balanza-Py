@@ -5219,12 +5219,17 @@ class BalanzaGUI(ttk.Window):
             self._apply_window_icon(wizard)
         except Exception:
             pass
-        w, h = self.winfo_screenwidth(), self.winfo_screenheight()
-        wiz_w = int(w * 0.88)
-        wiz_h = int(h * 0.88)
-        wiz_x = (w - wiz_w) // 2
-        wiz_y = (h - wiz_h) // 2
-        wizard.geometry(f"{wiz_w}x{wiz_h}+{wiz_x}+{wiz_y}")
+        # Copiar posición y tamaño real de la ventana principal (winfo_* reflejan la geometría
+        # actual en pantalla, a diferencia de geometry() que devuelve el estado restaurado)
+        try:
+            self.update_idletasks()
+            wx = self.winfo_x()
+            wy = self.winfo_y()
+            ww = self.winfo_width()
+            wh = self.winfo_height()
+            wizard.geometry(f"{ww}x{wh}+{wx}+{wy}")
+        except Exception:
+            pass
         try:
             wizard.resizable(True, True)
         except Exception:
@@ -5242,10 +5247,6 @@ class BalanzaGUI(ttk.Window):
         try:
             wizard.update_idletasks()
             wizard.deiconify()
-        except Exception:
-            pass
-        try:
-            wizard.state('zoomed')
         except Exception:
             pass
         # Ocultar la ventana de configuración mientras el wizard esté activo
@@ -5630,16 +5631,24 @@ class BalanzaGUI(ttk.Window):
                 self._cal_ax.set_xlabel("Leitura Sensor", fontsize=10)
                 self._cal_ax.set_ylabel("Peso (kg)", fontsize=10)
                 self._cal_ax.grid(True, linestyle='--', alpha=0.5)
-                self._cal_canvas = FigureCanvasTkAgg(self._cal_fig, master=g_frame)
-                self._cal_canvas.get_tk_widget().pack(fill=BOTH, expand=YES)
-                # Dibujo diferido para evitar bloqueo
-                wizard.after(100, lambda: self._cal_canvas.draw_idle() if self._cal_wizard_active else None)
+                # Diferir la creación del canvas de matplotlib al loop de eventos
+                # para que la ventana aparezca rápido y el gráfico cargue después
+                def _init_mpl_canvas():
+                    if not self._cal_wizard_active:
+                        return
+                    try:
+                        self._cal_canvas = FigureCanvasTkAgg(self._cal_fig, master=g_frame)
+                        self._cal_canvas.get_tk_widget().pack(fill=BOTH, expand=YES)
+                        self._update_cal_wizard_graph()
+                    except Exception as ex:
+                        self.log_message(f"Error matplotlib canvas: {ex}")
+                wizard.after(80, _init_mpl_canvas)
             except Exception as e:
                 self.log_message(f"Error matplotlib: {e}")
-                ttk.Label(g_frame, text="Erro ao inicializar gráfico", 
+                ttk.Label(g_frame, text="Erro ao inicializar gráfico",
                           font=("Segoe UI", 12)).pack(expand=YES)
         else:
-            ttk.Label(g_frame, text="Matplotlib não disponível\nInstale com: pip install matplotlib", 
+            ttk.Label(g_frame, text="Matplotlib não disponível\nInstale com: pip install matplotlib",
                       font=("Segoe UI", 12), justify="center").pack(expand=YES)
 
         ttk.Button(right, text="FINALIZAR E APLICAR CALIBRAÇÃO",
@@ -5647,12 +5656,9 @@ class BalanzaGUI(ttk.Window):
                    bootstyle="success",
                    padding=(20, 15)).pack(fill=X, pady=(10, 0))
 
-        # Refrescar tabla y gráfico con puntos precargados (si existen)
-        self._refresh_cal_wizard_table_ui()
-        self._update_cal_wizard_graph()
-        # Forzar refresco visual del gráfico tras inicialización completa
-        if hasattr(self, '_cal_canvas') and self._cal_canvas:
-            wizard.after(300, lambda: self._update_cal_wizard_graph())
+        # Diferir el primer refresco de tabla al loop de eventos para que
+        # la ventana aparezca completa antes de poblar la tabla
+        wizard.after(50, lambda: self._refresh_cal_wizard_table_ui() if self._cal_wizard_active else None)
         
     def _refresh_cal_wizard_table_ui(self):
         for w in self._cal_tbl_scroll.winfo_children(): 

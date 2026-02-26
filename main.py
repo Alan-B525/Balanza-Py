@@ -53,7 +53,7 @@ def _acquire_single_instance() -> bool:
 
 def load_custom_settings():
     """Carrega configuracao de settings.json se existir."""
-    global ACTIVE_COM, ACTIVE_NODOS, ACTIVE_MODE, USE_SENSOR_CONFIG
+    global ACTIVE_COM, ACTIVE_NODOS, ACTIVE_MODE, USE_SENSOR_CONFIG, RUNTIME_TUNING
     import json
     
     settings_path = os.path.join(current_dir, "settings.json")
@@ -78,14 +78,20 @@ def load_custom_settings():
             # Configurar Nos
             if "nodes" in settings:
                 ACTIVE_NODOS = settings["nodes"]
+
+            # Actualizar RUNTIME_TUNING con valores de settings.json (deep merge)
+            if "runtime_tuning" in settings and isinstance(settings["runtime_tuning"], dict):
+                RUNTIME_TUNING = {**RUNTIME_TUNING, **settings["runtime_tuning"]}
                 
             print(f"[INFO] Configuracao carregada de settings.json")
             print(f"       Modo: {ACTIVE_MODE}")
             print(f"       Porta: {ACTIVE_COM}")
             print(f"       Nos: {len(ACTIVE_NODOS)}")
+            print(f"       modbus_net_window_size: {RUNTIME_TUNING.get('modbus_net_window_size', 30)}")
             
         except Exception as e:
             print(f"[ERRO] Erro carregando settings.json: {e}")
+
 
 
 def show_startup_info():
@@ -201,7 +207,7 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
             try:
                 modbus_server = ModbusDataServer(
                     serial_port=serial_port,
-                    baudrate=modbus_params.get('baudrate', 3000000),
+                    baudrate=modbus_params.get('baudrate', 115200),
                     parity=modbus_params.get('parity', 'N'),
                     stopbits=modbus_params.get('stopbits', 1),
                     bytesize=modbus_params.get('bytesize', 8),

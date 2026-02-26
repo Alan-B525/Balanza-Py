@@ -38,6 +38,15 @@ except Exception:
     app_config = None
 
 RUNTIME_TUNING = getattr(app_config, 'RUNTIME_TUNING', {}) if app_config is not None else {}
+# Sobreescribir con valores de settings.json si existen (tienen prioridad sobre config.py)
+try:
+    from config import load_settings as _load_settings
+    _settings = _load_settings()
+    _rt_from_file = _settings.get('runtime_tuning', {})
+    if _rt_from_file:
+        RUNTIME_TUNING = {**RUNTIME_TUNING, **_rt_from_file}
+except Exception:
+    pass
 
 # =============================================================================
 # ESTRUCTURAS DE DATOS (Compatibilidad Main App)

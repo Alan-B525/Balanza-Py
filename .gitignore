@@ -12,6 +12,7 @@ env/
 
 # Distribution / Packaging
 build/
+build_modbus/
 dist/
 dist_test/
 *.spec

@@ -117,11 +117,11 @@ BAUDRATE = 3000000
 
 NODOS_CONFIG = {
     "celda_1": {
-        "id": 5454,
+        "id": 9421,
         "ch_load": "ch1",
         "ch_angle": "ch2",
         "ch": "ch1",
-        "serial": "1232",
+        "serial": "3015",
         "com_port": "COM4"
     },
 }
@@ -183,6 +183,9 @@ DEFAULT_SETTINGS = {
     "gateway": GATEWAY,
     "transmissao": TRANSMISSAO,
     "nodes": NODOS_CONFIG,
+    # Parámetros de runtime tuning: se pueden sobreescribir en settings.json
+    # sin necesidad de editar config.py
+    "runtime_tuning": RUNTIME_TUNING,
     "profiles_data": {
         "profiles": {
             "slot_1": {
@@ -240,7 +243,13 @@ def load_settings():
                 # Merge with defaults to ensure keys exist
                 merged = DEFAULT_SETTINGS.copy()
                 merged.update(data)
-                
+
+                # Deep merge de runtime_tuning: las claves del archivo sobreescriben
+                # los defaults, pero las claves ausentes mantienen su valor por defecto.
+                default_rt = DEFAULT_SETTINGS.get('runtime_tuning', {})
+                file_rt = data.get('runtime_tuning', {})
+                merged['runtime_tuning'] = {**default_rt, **file_rt}
+
                 # Migración/Limpieza: Si ya tenemos bloques nuevos, quitar basura del nivel superior
                 if "gateway" in merged:
                     obsolete = ["serial_port", "baudrate", "connection_type", "paridade", "id_escravo_pc", "swap_words", "stopbits", "bytesize", "timeout", "tcp_ip", "tcp_port"]
