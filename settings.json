@@ -2,11 +2,6 @@
     "execution_mode": "REAL",
     "use_sensor_config": true,
     "mock_sample_rate_hz": 30,
-    "gateway": {
-        "porta": "COM4",
-        "velocidade": 115200,
-        "timeout": 0.05
-    },
     "transmissao": {
         "porta": "COM10",
         "velocidade": 115200,

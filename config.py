@@ -130,16 +130,10 @@ NODOS_CONFIG = {
 # 4. TRANSMISIÓN Y ADQUISICIÓN (Configuración por Defecto)
 # =============================================================================
 
-# Configuración del Gateway (Adquisición de sensores)
-GATEWAY = {
-    "porta": PUERTO_COM,
-    "velocidade": 115200,
-    "timeout": 0.05,
-}
 
 # Configuración de Transmisión (Modbus RTU)
 TRANSMISSAO = {
-    "porta": "COM4",
+    "porta": "COM10",
     "velocidade": 115200,
     "paridade": "Nenhuma",
     "id_escravo_pc": 1,
@@ -180,7 +174,6 @@ DEFAULT_SETTINGS = {
     "execution_mode": MODO_EJECUCION,
     "use_sensor_config": True,
     "mock_sample_rate_hz": 50,
-    "gateway": GATEWAY,
     "transmissao": TRANSMISSAO,
     "nodes": NODOS_CONFIG,
     # Parámetros de runtime tuning: se pueden sobreescribir en settings.json

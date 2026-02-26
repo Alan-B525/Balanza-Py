@@ -52,7 +52,7 @@ def _acquire_single_instance() -> bool:
 
 
 def load_custom_settings():
-    """Carrega configuracao de settings.json se existir."""
+    """Carga los parametros desde settings.json si existe."""
     global ACTIVE_COM, ACTIVE_NODOS, ACTIVE_MODE, USE_SENSOR_CONFIG, RUNTIME_TUNING
     import json
     
@@ -69,9 +69,13 @@ def load_custom_settings():
             if "execution_mode" in settings:
                 ACTIVE_MODE = settings["execution_mode"]
 
-            # Intentar leer desde el nuevo bloque 'gateway', con fallback al anterior
-            if "gateway" in settings and isinstance(settings["gateway"], dict):
-                ACTIVE_COM = settings["gateway"].get("porta", settings.get("serial_port", DEFAULT_COM))
+            # Leer el puerto COM del primer nodo (fuente de verdad)
+            if "nodes" in settings and isinstance(settings["nodes"], dict):
+                first_node = next(iter(settings["nodes"].values()), {})
+                ACTIVE_COM = first_node.get("com_port", "") or DEFAULT_COM
+            elif "gateway" in settings and isinstance(settings["gateway"], dict):
+                # Compatibilidad con settings.json anteriores
+                ACTIVE_COM = settings["gateway"].get("porta", DEFAULT_COM)
             else:
                 ACTIVE_COM = settings.get("serial_port", DEFAULT_COM)
                 
@@ -95,7 +99,7 @@ def load_custom_settings():
 
 
 def show_startup_info():
-    """Mostra informacoes de inicializacao."""
+    """Muestra la informacion de inicio."""
     # Usar logger central para mensajes de inicio (conciso)
     try:
         from modules import logger
@@ -125,8 +129,9 @@ def _float_to_int32_registers(value: float, scale: int = 1000) -> list:
 
 def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modbus_params=None, modbus_server=None, execution_mode=None):
     """
-    Thread secundaria (Backend) que gerencia o hardware e o processamento.
-    Incluye manejo de desconexión de sensores y reconexión automática.
+
+    Hilo secundario (Backend) que gestiona el hardware y el procesamiento.
+    Incluye el manejo de desconexión de sensores y reconexión automática.
     """
     running = True
     acquisition_paused = False      # Flag para pausar adquisición
@@ -231,6 +236,8 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                     data_queue.put({'type': 'MODBUS_STATUS', 'payload': 'error'})
                     last_modbus_status = 'error'
                     modbus_last_not_started_reason = reason
+
+    last_loop_time = time.perf_counter()
 
     while running:
         # Iniciar automaticamente o servidor Modbus RTU se o sistema está conectado
@@ -813,11 +820,21 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
             except Exception as e:
                 data_queue.put({'type': 'LOG', 'payload': f"Erro na aquisicao: {e}"})
         
-        # Pausa dinámica para evitar saturar CPU y mantener UI responsiva
+        # Pausa dinámica para garantizar una frecuencia de adquisición estable
         if sistema_pesaje.esta_conectado() and not acquisition_paused:
-            time.sleep(float(RUNTIME_TUNING.get('backend_sleep_connected_s', 0.003)))
+            target_interval = float(RUNTIME_TUNING.get('backend_sleep_connected_s', 0.003))
+            now = time.perf_counter()
+            elapsed = now - last_loop_time
+            sleep_s = target_interval - elapsed
+            
+            if sleep_s > 0:
+                time.sleep(sleep_s)
+                last_loop_time = now + sleep_s
+            else:
+                last_loop_time = now  # Sin espera, el loop va retrasado
         else:
             time.sleep(float(RUNTIME_TUNING.get('backend_sleep_idle_s', 0.05)))
+            last_loop_time = time.perf_counter()
 
 
 def main():

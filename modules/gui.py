@@ -4413,9 +4413,8 @@ class BalanzaGUI(ttk.Window):
                 except Exception:
                     slave_id_val = 1
 
-            # --- Construir los datos de nodos primero para extraer el puerto del gateway ---
+            # --- Construir los datos de nodos ---
             built_nodes = {}
-            gateway_port = ""
             for key, inputs in node_entries.items():
                 try:
                     nid = int(inputs["id"].get())
@@ -4423,7 +4422,6 @@ class BalanzaGUI(ttk.Window):
                     nid = 0
                 serial_num = inputs.get("serial", None)
                 serial_val = serial_num.get() if serial_num else ""
-                # Puerto COM por nodo
                 com_widget = inputs.get("com")
                 try:
                     com_val = com_widget.get() if com_widget else ""
@@ -4436,17 +4434,10 @@ class BalanzaGUI(ttk.Window):
                     "id": nid,
                     "ch_load": inputs["ch_load"].get(),
                     "ch_angle": inputs["ch_angle"].get(),
-                    "ch": inputs["ch_load"].get(), # Legacy compat
+                    "ch": inputs["ch_load"].get(),
                     "serial": serial_val,
                     "com_port": com_val
                 }
-                # Tomar el puerto del primer nodo como gateway (modo single-node)
-                if not gateway_port and com_val:
-                    gateway_port = com_val
-
-            # Fallback si no se pudo extraer el gateway del nodo
-            if not gateway_port:
-                gateway_port = current_config.get('serial_port', 'COM3')
 
             # --- Partir de la config existente para preservar claves no editadas ---
             new_config = load_settings()
@@ -4460,11 +4451,6 @@ class BalanzaGUI(ttk.Window):
             new_config.update({
                 "execution_mode": current_config.get('execution_mode', 'REAL'),
                 "use_sensor_config": current_config.get('use_sensor_config', True),
-                "gateway": {
-                    "porta": gateway_port,
-                    "velocidade": current_config.get('gateway', {}).get('velocidade', 3000000),
-                    "timeout": current_config.get('gateway', {}).get('timeout', 0.05)
-                },
                 "nodes": built_nodes,
                 "transmissao": {
                     "porta": entry_trans.get() if 'entry_trans' in locals() or 'entry_trans' in globals() else current_config.get('transmissao', {}).get('porta', 'COM10'),
