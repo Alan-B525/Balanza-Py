@@ -1433,13 +1433,44 @@ class BalanzaGUI(ttk.Window):
             if pin_mode:
                 _pin_result['value'] = ''.join(_real_digits)
             else:
-                entry_widget.delete(0, tk.END)
-                entry_widget.insert(0, kp_value.get())
+                if entry_widget is not None:
+                    entry_widget.delete(0, tk.END)
+                    entry_widget.insert(0, kp_value.get())
             _close_keypad()
 
         def cancel_and_close():
             # _pin_result['value'] permanece None → el caller interpreta como cancelación
             _close_keypad()
+
+        def _on_physical_key(event):
+            """Permite controlar el teclado virtual con teclado físico."""
+            try:
+                key = event.keysym or ""
+                ch = event.char or ""
+
+                if key in ("Escape",):
+                    cancel_and_close()
+                    return "break"
+                if key in ("Return", "KP_Enter"):
+                    confirm_and_close()
+                    return "break"
+                if key in ("BackSpace", "Delete"):
+                    press_backspace()
+                    return "break"
+
+                if ch in "0123456789":
+                    press_digit(ch)
+                    return "break"
+
+                if not pin_mode:
+                    if ch == ',':
+                        ch = '.'
+                    if ch in ('.', '-'):
+                        press_digit(ch)
+                        return "break"
+            except Exception:
+                return None
+            return None
 
         # Fila 0: 7 8 9
         ttk.Button(all_btns, text="7", command=lambda: press_digit("7"), bootstyle="light", padding=pad_num).grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
@@ -1471,6 +1502,13 @@ class BalanzaGUI(ttk.Window):
             ttk.Button(all_btns, text="CANCELAR", command=cancel_and_close, bootstyle="danger", padding=pad_act).grid(row=4, column=0, sticky="nsew", padx=4, pady=4)
         ttk.Button(all_btns, text="OK", command=confirm_and_close, bootstyle="success", padding=pad_act).grid(row=4, column=1, columnspan=2, sticky="nsew", padx=4, pady=4)
 
+        try:
+            keypad.bind("<Key>", _on_physical_key)
+            entry_display.bind("<Key>", _on_physical_key)
+            all_btns.bind("<Key>", _on_physical_key)
+        except Exception:
+            pass
+
         # Evitar grab_set() para no bloquear la app en tablets; usar focus/lift
         try:
             keypad.focus_set()
@@ -1489,10 +1527,7 @@ class BalanzaGUI(ttk.Window):
         """Vincula un Entry para mostrar teclado numérico al hacer click."""
         def on_click(event):
             self.after(50, lambda: self._show_numeric_keypad(entry_widget, title))
-            return "break"
         entry_widget.bind("<Button-1>", on_click)
-        entry_widget.bind("<Return>", lambda e: "break")
-        entry_widget.bind("<KP_Enter>", lambda e: "break")
 
     def do_tare(self):
         # Si ya existe una tara aplicada, pedir confirmación antes de sobrescribir
@@ -2774,96 +2809,88 @@ class BalanzaGUI(ttk.Window):
             except:
                 pass
 
-        # Crear ventana modal - FULLSCREEN (sin barra de título)
+        # Crear ventana de configuración.
         dialog = ttk.Toplevel(self)
         # Registrar referencia para que otros diálogos (p.ej. conexión)
-        # puedan crearse como hijos y evitar conflictos de grab/overrideredirect.
+        # puedan crearse como hijos y evitar conflictos de grab.
         try:
             self._config_dialog = dialog
         except Exception:
             pass
-        dialog.overrideredirect(True)
-        # Pantalla completa real
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
-        dialog.geometry(f"{screen_w}x{screen_h}+0+0")
-        # Detectar pantallas pequeñas (tablet 1280x800) para ajustar paddings
+        # Detectar pantalla tablet (1280x800)
         small_screen = (screen_w == 1280 and screen_h == 800)
-        dialog.lift()
-        dialog.focus_force()
-        # Fix Z-order para el diálogo de configuración completo
-        def force_top(event=None):
+
+        if small_screen:
+            # TABLET: sin barra de título, pantalla completa
+            dialog.overrideredirect(True)
+            dialog.geometry(f"{screen_w}x{screen_h}+0+0")
+        else:
+            # ESCRITORIO: hija de la ventana principal
             try:
-                # Evitar elevar el diálogo si el foco actual pertenece a una ventana hija (p.ej. keypad)
-                focus_widget = self.focus_get()
-                if focus_widget:
-                    try:
-                        top = focus_widget.winfo_toplevel()
-                    except Exception:
-                        top = None
-                    if top is not None and getattr(top, 'master', None) is dialog:
-                        return
-                dialog.lift()
-                dialog.attributes('-topmost', True)
+                dialog.transient(self)
             except Exception:
                 pass
+            # Copiar la geometría EXACTA de la ventana principal para evitar que
+            # el Toplevel "zoomed" cubra la barra de tareas a diferencia del root.
+            try:
+                self.update_idletasks()
+                geom = f"{self.winfo_width()}x{self.winfo_height()}+{self.winfo_x()}+{self.winfo_y()}"
+                dialog.geometry(geom)
+            except Exception:
+                dialog.geometry(f"{screen_w}x{screen_h}+0+0")
+
+            # Restaurar jerarquía al hacer minimize/restore desde la barra de tareas:
+            # cuando la ventana principal aparece (<Map>), levantar el dialog encima.
+            _map_id_cfg = [None]
+            def _on_main_restored_cfg(event):
+                try:
+                    if event.widget is self and dialog.winfo_exists():
+                        dialog.lift()
+                        dialog.focus_force()
+                except Exception:
+                    pass
+            try:
+                _map_id_cfg[0] = self.bind('<Map>', _on_main_restored_cfg, add='+')
+            except Exception:
+                pass
+
+            # Guardar el id del binding para limpiarlo al cerrar el dialog
+            try:
+                self._cfg_map_binding_id = _map_id_cfg[0]
+            except Exception:
+                pass
+
+        dialog.lift()
+        dialog.focus_force()
+        # NO forzar topmost permanente.
         try:
-            self.bind('<FocusIn>', force_top)
+            dialog.attributes('-topmost', False)
+        except Exception:
+            pass
+        # Marcar watch como inactivo (ya no se usa el loop de lift)
+        try:
+            self._config_dialog_watch_running = False
         except Exception:
             pass
 
-        # Watchdog para mantener el diálogo encima si pierde z-order
-        def _watch_cfg():
-            try:
-                if dialog.winfo_exists():
-                    # Si hay una bandera que suprime el watchdog (un diálogo hijo abierto), no forzar lift
-                    if getattr(self, '_suppress_cfg_watch', False):
-                        dialog.after(1000, _watch_cfg)
-                        return
-                    try:
-                        # Comprueba si el foco está en otro Toplevel (p.ej. keypad).
-                        focus_widget = self.focus_get()
-                        if focus_widget:
-                            try:
-                                top = focus_widget.winfo_toplevel()
-                            except Exception:
-                                top = None
-                            # Si el toplevel con foco es hijo del diálogo, darle topmost y lift
-                            if top is not None and getattr(top, 'master', None) is dialog:
-                                try:
-                                    top.attributes('-topmost', True)
-                                    top.lift()
-                                except Exception:
-                                    pass
-                                dialog.after(1000, _watch_cfg)
-                                return
-                            # Si el foco está en otra ventana distinta, no forzar lift del diálogo
-                            if top is not None and top is not dialog:
-                                dialog.after(1000, _watch_cfg)
-                                return
-                        # Si no hay otro foco relevante, asegurar topmost del diálogo
-                        try:
-                            dialog.lift()
-                            dialog.attributes('-topmost', True)
-                        except Exception:
-                            pass
-                    except Exception:
-                        pass
-                    dialog.after(1000, _watch_cfg)
-                else:
-                    try:
-                        self.unbind('<FocusIn>')
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+        # Título e ícone da janela de configuração (visível na barra de tarefas em modo desktop)
         try:
-            dialog.after(1000, _watch_cfg)
+            dialog.title("Configurações do Sistema de Pesagem")
         except Exception:
             pass
-        # Ocupar toda la pantalla (Tkinter fullscreen)
         try:
-            dialog.attributes('-fullscreen', True)
+            import os, sys
+            _base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            _ico = os.path.join(_base, 'assets', 'icon.ico')
+            _png = os.path.join(_base, 'assets', 'icon.png')
+            if os.path.exists(_ico):
+                dialog.iconbitmap(_ico)
+            elif os.path.exists(_png) and Image is not None and ImageTk is not None:
+                _pil = Image.open(_png)
+                self._cfg_icon_img = ImageTk.PhotoImage(_pil)
+                dialog.iconphoto(True, self._cfg_icon_img)
         except Exception:
             pass
 
@@ -2885,16 +2912,16 @@ class BalanzaGUI(ttk.Window):
         # Funo de fechamento seguro
         def safe_close_dialog():
             try:
+                self._config_dialog_watch_running = False
+            except Exception:
+                pass
+            try:
                 dialog.grab_release()
             except:
                 pass
             try:
                 dialog.destroy()
             except:
-                pass
-            try:
-                self.unbind('<FocusIn>')
-            except Exception:
                 pass
             # Limpiar referencias a botones del diálogo para evitar referencias muertas
             try:
@@ -2918,6 +2945,14 @@ class BalanzaGUI(ttk.Window):
                             self._config_dialog = None
                         except Exception:
                             pass
+            except Exception:
+                pass
+            # Limpiar binding de Map en ventana principal
+            try:
+                bid = getattr(self, '_cfg_map_binding_id', None)
+                if bid:
+                    self.unbind('<Map>', bid)
+                    self._cfg_map_binding_id = None
             except Exception:
                 pass
 
@@ -4368,25 +4403,65 @@ class BalanzaGUI(ttk.Window):
                         serial_num = nodos_cfg[internal_name].get('serial', '?')
             except Exception:
                 pass
-        wizard.title(f"Curva da Célula {celda_num} (Nº Série {serial_num})")
+        wizard.title(f"Calibração — Célula {celda_num}  |  Nº Série {serial_num}")
         w, h = self.winfo_screenwidth(), self.winfo_screenheight()
-        wizard.geometry(f"{w}x{h}+0+0")
-        try:
-            wizard.attributes('-fullscreen', True)  # Fullscreen nativo de Windows
-        except Exception:
-            pass
-        # Si venimos de un diálogo de configuración, hacemos transient con él
-        try:
-            if config_dialog is not None and config_dialog.winfo_exists():
+        _is_tablet = (w == 1280 and h == 800)
+        if _is_tablet:
+            # Tablet: sin barra de título, pantalla completa
+            wizard.overrideredirect(True)
+            wizard.geometry(f"{w}x{h}+0+0")
+        else:
+            # Escritorio: hija del diálogo de config
+            _cfg_parent = config_dialog if (config_dialog is not None) else self
+            try:
+                wizard.transient(_cfg_parent)
+            except Exception:
+                pass
+            # Copiar geometría exacta del padre para evitar diferencias de tamaño
+            try:
+                _cfg_parent.update_idletasks()
+                geom = f"{_cfg_parent.winfo_width()}x{_cfg_parent.winfo_height()}+{_cfg_parent.winfo_x()}+{_cfg_parent.winfo_y()}"
+                wizard.geometry(geom)
+            except Exception:
+                wizard.geometry(f"{w}x{h}+0+0")
+            # Binding: cuando el config dialog se restaura (<Map>), deiconificar y levantar el wizard.
+            # Se necesita deiconify() porque lift() solo no restaura ventanas en estado withdrawn/iconic.
+            _wiz_map_id = [None]
+            def _on_cfg_restored_wiz(event):
                 try:
-                    wizard.transient(config_dialog)
+                    if event.widget is _cfg_parent and wizard.winfo_exists():
+                        try:
+                            wizard.deiconify()
+                        except Exception:
+                            pass
+                        wizard.lift()
+                        wizard.focus_force()
                 except Exception:
                     pass
-        except Exception:
-            pass
-        # Marcar topmost para asegurar stack correcto respecto al diálogo de config
+            try:
+                _wiz_map_id[0] = _cfg_parent.bind('<Map>', _on_cfg_restored_wiz, add='+')
+            except Exception:
+                pass
+            try:
+                self._wiz_map_binding_id = (_cfg_parent, _wiz_map_id[0])
+            except Exception:
+                pass
+        # Icono del wizard: usar la imagen ya cargada en la ventana principal (si existe),
+        # o intentar cargar desde disco. iconphoto con True=propaga a hijos.
         try:
-            wizard.attributes('-topmost', True)
+            if hasattr(self, '_icon_img') and self._icon_img:
+                wizard.iconphoto(True, self._icon_img)
+            else:
+                import os, sys
+                _base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                _ico = os.path.join(_base, 'assets', 'icon.ico')
+                _png = os.path.join(_base, 'assets', 'icon.png')
+                if os.path.exists(_ico):
+                    wizard.iconbitmap(_ico)
+                elif os.path.exists(_png) and Image is not None and ImageTk is not None:
+                    _pil = Image.open(_png)
+                    self._wiz_icon_img = ImageTk.PhotoImage(_pil)
+                    wizard.iconphoto(True, self._wiz_icon_img)
         except Exception:
             pass
         try:
@@ -4421,19 +4496,35 @@ class BalanzaGUI(ttk.Window):
             except:
                 pass
             try:
-                # Limpiar bandera que suprime el watchdog
                 self._suppress_cfg_watch = False
             except Exception:
                 pass
-            # Restaurar grab del diálogo de configuración
-            if self._config_dialog_ref:
+            # Limpiar binding de Map registrado en el config dialog (si existe)
+            try:
+                bid_info = getattr(self, '_wiz_map_binding_id', None)
+                if bid_info:
+                    _parent_w, _bid = bid_info
+                    if _parent_w and _bid:
+                        _parent_w.unbind('<Map>', _bid)
+                    self._wiz_map_binding_id = None
+            except Exception:
+                pass
+            # Restaurar foco en el diálogo de configuración (usar referencia directa del closure)
+            _cfg_ref = config_dialog if (config_dialog is not None) else getattr(self, '_config_dialog', None)
+            if _cfg_ref:
                 try:
-                    self._config_dialog_ref.grab_set()
-                    self._config_dialog_ref.lift()
-                    self._config_dialog_ref.focus_force()
+                    if _cfg_ref.winfo_exists():
+                        # deiconify() necesario si el config dialog está en estado withdrawn/iconic
+                        try:
+                            _cfg_ref.deiconify()
+                        except Exception:
+                            pass
+                        _cfg_ref.lift()
+                        _cfg_ref.focus_force()
                 except:
                     pass
             self._cal_wizard = None
+
         
         wizard.protocol("WM_DELETE_WINDOW", close_wizard)
         
