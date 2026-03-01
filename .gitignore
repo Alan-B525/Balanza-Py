@@ -10,6 +10,7 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+build_modbus/
 *.spec
 
 # Entornos virtuales
