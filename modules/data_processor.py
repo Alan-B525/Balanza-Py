@@ -66,20 +66,7 @@ class DataProcessor:
                  median_window: int = 5,
                  ema_alpha: float = 0.3,
                  input_unit: str = "t"):
-        # Forzar modo 1 nodo / 1 celda: mantener sólo la primera entrada
         self.nodos_config = nodos_config
-        try:
-            # Si se pasó un dict con múltiples entradas, conservar sólo la primera
-            if isinstance(self.nodos_config, dict) and len(self.nodos_config) > 1:
-                first_key = next(iter(self.nodos_config))
-                self.nodos_config = {first_key: self.nodos_config[first_key]}
-                try:
-                    self._log_to_file(f"Single-node mode enforced, using {first_key}")
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        # Marca explícita para lógica de un sólo sensor en el resto del código
         self.median_window = median_window
         self.ema_alpha = ema_alpha
         self.input_unit = "kg"  # Force kg as per user request
@@ -115,14 +102,6 @@ class DataProcessor:
         self._initialize_structures()
     
     def _initialize_structures(self) -> None:
-        # Asegurar modo single-node: si hay múltiples entradas, conservar solo la primera
-        try:
-            if isinstance(self.nodos_config, dict) and len(self.nodos_config) > 1:
-                first_key = next(iter(self.nodos_config))
-                self.nodos_config = {first_key: self.nodos_config[first_key]}
-        except Exception:
-            pass
-
         # Limpiar estructuras previas antes de (re)inicializar
         self._node_to_name.clear()
         self._median_buffers.clear()
@@ -136,37 +115,41 @@ class DataProcessor:
 
         for nombre_logico, cfg in self.nodos_config.items():
             node_id = cfg["id"]
-            # Force creating structures for both channels
-            
-            # Load configuration for channels (default: Load=ch1, Angle=ch2)
+            if not isinstance(cfg, dict):
+                cfg = {}
+
             ch_load = cfg.get('ch_load', cfg.get('ch', 'ch1'))
-            ch_angle = cfg.get('ch_angle', 'ch2')
+            ch_angles = cfg.get('ch_angles')
+            if not isinstance(ch_angles, list):
+                ch_single = cfg.get('ch_angle', 'ch2')
+                ch_angles = [ch_single]
+            ch_angles = [str(ch).strip() for ch in ch_angles if str(ch).strip()]
 
-            # Channel 1: Load (Main)
-            comp_load = f"{node_id}:{ch_load}"
-            self._node_to_name[comp_load] = nombre_logico # Primary name maps to load
-            self._median_buffers[comp_load] = deque(maxlen=self.median_window)
-            self._ema_values[comp_load] = None
-            self._tares[comp_load] = 0.0
-            self._last_stable_values[comp_load] = 0.0
-            self._last_seen[comp_load] = 0.0
-            self._node_connected_state[comp_load] = False
-            self._load_keys.add(comp_load)
-            
-            # Channel 2: Angle (Aux)
-            comp_angle = f"{node_id}:{ch_angle}"
-            self._node_to_name[comp_angle] = f"{nombre_logico}_Angle"
-            self._median_buffers[comp_angle] = deque(maxlen=self.median_window)
-            self._ema_values[comp_angle] = None
-            self._tares[comp_angle] = 0.0 # Angle might not need taring but good to have
-            self._last_stable_values[comp_angle] = 0.0
-            self._last_seen[comp_angle] = 0.0
-            self._node_connected_state[comp_angle] = False
+            load_enabled = bool(cfg.get('load_enabled', True))
 
-            # Guardar serial si existe en la configuración para mapping de calibración
-            serial = cfg.get('serial') if isinstance(cfg, dict) else None
-            # Map serial to both? Usually calibration applies to Load (ch1)
-            self._composite_to_serial[comp_load] = serial
+            if load_enabled:
+                comp_load = f"{node_id}:{ch_load}"
+                self._node_to_name[comp_load] = nombre_logico
+                self._median_buffers[comp_load] = deque(maxlen=self.median_window)
+                self._ema_values[comp_load] = None
+                self._tares[comp_load] = 0.0
+                self._last_stable_values[comp_load] = 0.0
+                self._last_seen[comp_load] = 0.0
+                self._node_connected_state[comp_load] = False
+                self._load_keys.add(comp_load)
+
+                serial = cfg.get('serial') if isinstance(cfg, dict) else None
+                self._composite_to_serial[comp_load] = serial
+
+            for idx, ch_angle in enumerate(ch_angles, start=1):
+                comp_angle = f"{node_id}:{ch_angle}"
+                self._node_to_name[comp_angle] = f"{nombre_logico}_Angle{idx}"
+                self._median_buffers[comp_angle] = deque(maxlen=self.median_window)
+                self._ema_values[comp_angle] = None
+                self._tares[comp_angle] = 0.0
+                self._last_stable_values[comp_angle] = 0.0
+                self._last_seen[comp_angle] = 0.0
+                self._node_connected_state[comp_angle] = False
 
     def update_config(self, new_nodes_config: Dict[str, Any]):
         """Actualiza la configuración en caliente y reinicializa estructuras."""
@@ -214,6 +197,7 @@ class DataProcessor:
             "total_raw": 0.0,
             "total_tare": 0.0,
             "angle_val": 0.0,   # Nuevo campo para el ángulo
+            "angles": [],
             "logs": [],
             "disconnect_events": [],
             "any_disconnected": False
@@ -245,98 +229,114 @@ class DataProcessor:
         # Variables para el ángulo
         total_angle_val = 0.0
         angle_count = 0
+        angles_ordered: List[float] = []
 
         for nombre_logico, cfg in self.nodos_config.items():
-            node_id = cfg["id"]
+            if not isinstance(cfg, dict):
+                cfg = {}
+            node_id = cfg.get("id", 0)
             ch_load = cfg.get('ch_load', cfg.get('ch', 'ch1'))
-            ch_angle = cfg.get('ch_angle', 'ch2')
-            
+            ch_angles = cfg.get('ch_angles')
+            if not isinstance(ch_angles, list):
+                ch_single = cfg.get('ch_angle', 'ch2')
+                ch_angles = [ch_single]
+            ch_angles = [str(ch).strip() for ch in ch_angles if str(ch).strip()]
+            load_enabled = bool(cfg.get('load_enabled', True))
+
+            node_angles: List[float] = []
+
             # --- PROCESAR CANAL DE CARGA ---
-            comp_load = f"{node_id}:{ch_load}"
-            is_connected_load = self._check_connection(comp_load, current_time, resultado, emit_event=True)
-            
-            # Obtener Valor Crudo (Load)
-            val_load = 0.0
-            if comp_load in datos_por_nodo:
-                original = datos_por_nodo[comp_load]
-                try:
-                    val_load = float(original)
-                except: 
-                    val_load = 0.0
-                self._last_raw_readings[comp_load] = val_load
-                
-                # Multiplicador de signo (solo aplica a carga)
-                mult = 1.0
-                try:
-                    if 'sign' in cfg: mult = float(cfg.get('sign', 1.0))
-                    elif cfg.get('invert', False): mult = -1.0
-                except: mult = 1.0
-                val_load = val_load * mult
-            else:
-                # Sample & Hold
-                val_load = self._last_raw_readings.get(comp_load, 0.0)
+            if load_enabled:
+                comp_load = f"{node_id}:{ch_load}"
+                is_connected_load = self._check_connection(comp_load, current_time, resultado, emit_event=True)
 
-            # Filtros (Load)
-            val_load_filt = self._filter_value(comp_load, val_load)
-            if comp_load in datos_por_nodo:
-                self._last_stable_values[comp_load] = val_load_filt
-            
-            # Calibración por sensor (Load)
-            calibrated_load = None
-            try:
-                calibrated_load = self._map_raw_to_weight(comp_load, val_load_filt)
-            except: pass
-            
-            if calibrated_load is not None:
-                contrib_load = float(calibrated_load)
-                any_calibrated = True
-            else:
-                contrib_load = val_load_filt
-            
-            _valor_filtrado_por_key[comp_load] = val_load_filt
-            _contrib_por_key[comp_load] = contrib_load
-            
-            if is_connected_load:
-                sum_raw_connected += val_load_filt
-                sum_contrib_connected += contrib_load
-            else:
-                resultado["any_disconnected"] = True
+                val_load = 0.0
+                if comp_load in datos_por_nodo:
+                    original = datos_por_nodo[comp_load]
+                    try:
+                        val_load = float(original)
+                    except:
+                        val_load = 0.0
+                    self._last_raw_readings[comp_load] = val_load
 
-            # --- PROCESAR CANAL DE ANGULO ---
-            comp_angle = f"{node_id}:{ch_angle}"
-            self._check_connection(comp_angle, current_time, resultado, emit_event=False) # Actualizar estado angle
-            
-            val_angle = 0.0
-            if comp_angle in datos_por_nodo:
+                    mult = 1.0
+                    try:
+                        if 'sign' in cfg:
+                            mult = float(cfg.get('sign', 1.0))
+                        elif cfg.get('invert', False):
+                            mult = -1.0
+                    except:
+                        mult = 1.0
+                    val_load = val_load * mult
+                else:
+                    val_load = self._last_raw_readings.get(comp_load, 0.0)
+
+                val_load_filt = self._filter_value(comp_load, val_load)
+                if comp_load in datos_por_nodo:
+                    self._last_stable_values[comp_load] = val_load_filt
+
+                calibrated_load = None
                 try:
-                    val_angle = float(datos_por_nodo[comp_angle])
-                except: val_angle = 0.0
-                self._last_raw_readings[comp_angle] = val_angle
-            else:
-                val_angle = self._last_raw_readings.get(comp_angle, 0.0)
-            
-            # Guardamos el ángulo raw direct (o aplicar factor si fuese necesario)
-            # Asumimos que el canal 2 viene ya en grados o unidad deseada
-            # Si se desea promediar ángulos de múltiples sensores (raro), se suma
-            if comp_angle in datos_por_nodo or self._node_connected_state.get(comp_angle, False):
-                total_angle_val += val_angle
-                angle_count += 1
-            
+                    calibrated_load = self._map_raw_to_weight(comp_load, val_load_filt)
+                except:
+                    pass
+
+                if calibrated_load is not None:
+                    contrib_load = float(calibrated_load)
+                    any_calibrated = True
+                else:
+                    contrib_load = val_load_filt
+
+                _valor_filtrado_por_key[comp_load] = val_load_filt
+                _contrib_por_key[comp_load] = contrib_load
+
+                if is_connected_load:
+                    sum_raw_connected += val_load_filt
+                    sum_contrib_connected += contrib_load
+                else:
+                    resultado["any_disconnected"] = True
+
+            # --- PROCESAR CANALES DE ANGULO ---
+            for ch_angle in ch_angles:
+                comp_angle = f"{node_id}:{ch_angle}"
+                self._check_connection(comp_angle, current_time, resultado, emit_event=False)
+
+                val_angle = 0.0
+                if comp_angle in datos_por_nodo:
+                    try:
+                        val_angle = float(datos_por_nodo[comp_angle])
+                    except:
+                        val_angle = 0.0
+                    self._last_raw_readings[comp_angle] = val_angle
+                else:
+                    val_angle = self._last_raw_readings.get(comp_angle, 0.0)
+
+                node_angles.append(val_angle)
+                angles_ordered.append(val_angle)
+
+                if comp_angle in datos_por_nodo or self._node_connected_state.get(comp_angle, False):
+                    total_angle_val += val_angle
+                    angle_count += 1
+
             # --- POPULAR RESULTADO INDIVIDUAL ---
-            # Usamos Load para visualizar en la lista de sensores
-            tare_val = self._tares.get(comp_load, 0.0)
-            sensor_net = contrib_load - tare_val
-            
-            resultado["sensores"][nombre_logico] = {
-                "valor": round(sensor_net, 3), # Peso Neto
-                "raw": round(val_load_filt, 3),
-                "crudo": round(val_load, 3), # Crudo con signo
-                "angle": round(val_angle, 2), # Dato Angulo
-                "id": node_id,
-                "key": comp_load, # Key primaria (Load)
-                "connected": is_connected_load,
-                "last_seen": self._last_seen.get(comp_load, 0.0)
-            }
+            if load_enabled:
+                comp_load = f"{node_id}:{ch_load}"
+                tare_val = self._tares.get(comp_load, 0.0)
+                sensor_net = _contrib_por_key.get(comp_load, 0.0) - tare_val
+                val_load_filt = _valor_filtrado_por_key.get(comp_load, 0.0)
+                val_load_raw = self._last_raw_readings.get(comp_load, 0.0)
+                is_connected_load = self._node_connected_state.get(comp_load, False)
+
+                resultado["sensores"][nombre_logico] = {
+                    "valor": round(sensor_net, 3),
+                    "raw": round(val_load_filt, 3),
+                    "crudo": round(val_load_raw, 3),
+                    "angles": [round(a, 2) for a in node_angles],
+                    "id": node_id,
+                    "key": comp_load,
+                    "connected": is_connected_load,
+                    "last_seen": self._last_seen.get(comp_load, 0.0)
+                }
 
         # Guardar ultima suma raw valida
         if sum_raw_connected != 0:
@@ -383,12 +383,13 @@ class DataProcessor:
         resultado["total_tare"] = round(tara_total, 3)
         resultado["total_last_seen"] = self._last_total_seen
         
-        # Ángulo Final (Si hay 1 nodo, es ese ángulo. Si hay varios, promedio o suma?)
-        # Asumimos 1 nodo principal o promedio simple
+        # Ángulo Final (compatibilidad): promedio simple de todos los canales
         if angle_count > 0:
             resultado["angle_val"] = round(total_angle_val / angle_count, 2)
         else:
             resultado["angle_val"] = 0.0
+
+        resultado["angles"] = [round(a, 2) for a in angles_ordered]
         
         # Eventos
         disconnect_events = self.get_disconnect_events()

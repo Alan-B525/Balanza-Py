@@ -146,23 +146,28 @@ class MSCLDriver(ISistemaPesaje):
     def _parse_config(self):
         """Traduce el diccionario de configuración a estructuras internas."""
         for name, cfg in self.nodos_config.items():
+            if not isinstance(cfg, dict):
+                cfg = {}
             nid = cfg.get('id', 0)
             if nid <= 0: continue
             self._config_node_ids.add(nid)
 
-            # Usar canales configurados (permite mover ángulo a ch3, etc.)
             ch_load = cfg.get('ch_load', cfg.get('ch', 'ch1'))
-            ch_angle = cfg.get('ch_angle', 'ch2')
+            ch_angles = cfg.get('ch_angles')
+            if not isinstance(ch_angles, list):
+                ch_single = cfg.get('ch_angle', 'ch2')
+                ch_angles = [ch_single]
+            ch_angles = [str(ch).strip() for ch in ch_angles if str(ch).strip()]
+            load_enabled = bool(cfg.get('load_enabled', True))
 
-            # Channel Load
-            key_load = f"{nid}:{ch_load}"
-            self._config_data_keys.add(key_load)
-            self._value_cache[key_load] = deque(maxlen=10)
-
-            # Channel Angle
-            key_angle = f"{nid}:{ch_angle}"
-            self._config_data_keys.add(key_angle)
-            self._value_cache[key_angle] = deque(maxlen=10)
+            channels = []
+            if load_enabled:
+                channels.append(ch_load)
+            channels.extend(ch_angles)
+            for ch in dict.fromkeys(channels):
+                key = f"{nid}:{ch}"
+                self._config_data_keys.add(key)
+                self._value_cache[key] = deque(maxlen=10)
 
     def _log(self, msg):
         """Wrapper de log para integrarse con el sistema o imprimir."""

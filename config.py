@@ -119,9 +119,19 @@ NODOS_CONFIG = {
     "celda_1": {
         "id": 9421,
         "ch_load": "ch1",
-        "ch_angle": "ch2",
+        "ch_angles": ["ch2", "ch3"],
+        "load_enabled": True,
         "ch": "ch1",
         "serial": "3015",
+        "com_port": "COM4"
+    },
+    "celda_2": {
+        "id": 9422,
+        "ch_load": "ch1",
+        "ch_angles": ["ch1", "ch2", "ch3"],
+        "load_enabled": False,
+        "ch": "ch1",
+        "serial": "",
         "com_port": "COM4"
     },
 }

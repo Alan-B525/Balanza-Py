@@ -53,8 +53,7 @@ class MockDriver(ISistemaPesaje):
             for nid in sorted(self._expected_node_ids):
                 channels = sorted(list(self._node_channels.get(nid, {'ch1'})))
                 
-                # Determine role based on config for this node
-                # Since we force single node, we can look up config easily
+                # Lookup node config for load/angle channels
                 try:
                      # Find config for this nid
                     node_cfg = None
@@ -64,18 +63,28 @@ class MockDriver(ISistemaPesaje):
                                 node_cfg = cfg
                                 break
                     
-                    ch_angle = node_cfg.get('ch_angle', 'ch2') if node_cfg else 'ch2'
+                    ch_load = node_cfg.get('ch_load', 'ch1') if node_cfg else 'ch1'
+                    ch_angles = node_cfg.get('ch_angles') if node_cfg else None
+                    if not isinstance(ch_angles, list):
+                        ch_single = node_cfg.get('ch_angle', 'ch2') if node_cfg else 'ch2'
+                        ch_angles = [ch_single]
+                    ch_angles = [str(ch).strip() for ch in ch_angles if str(ch).strip()]
+                    load_enabled = bool(node_cfg.get('load_enabled', True)) if node_cfg else True
                 except:
-                    ch_angle = 'ch2'
+                    ch_load = 'ch1'
+                    ch_angles = ['ch2']
+                    load_enabled = True
 
                 for channel in channels:
                     # Valores simulados por canal (escada na carga)
-                    if channel == ch_angle:
+                    if load_enabled and channel == ch_load:
+                        # Carga em escada: 0 -> 1200 -> 0
+                        val = self._next_stair_value()
+                    elif channel in ch_angles:
                         # Ângulo fixo para não interferir na visualização da escada
                         val = 0.0
                     else:
-                        # Carga em escada: 0 -> 1200 -> 0
-                        val = self._next_stair_value()
+                        val = 0.0
                     
                     key = f"{nid}:{channel}"
                     readings[key] = val
@@ -160,9 +169,24 @@ class MockDriver(ISistemaPesaje):
             # Agrupar por node id para listar todos los canales configurados por nodo
             nid_map = {}
             for logical, cfg in self.nodos_config.items():
+                if not isinstance(cfg, dict):
+                    cfg = {}
                 nid = cfg.get('id', 0) or self._logical_to_id.get(logical)
-                ch = cfg.get('ch', 'ch1')
-                nid_map.setdefault(nid, set()).add(ch)
+                ch_load = cfg.get('ch_load', cfg.get('ch', 'ch1'))
+                ch_angles = cfg.get('ch_angles')
+                if not isinstance(ch_angles, list):
+                    ch_single = cfg.get('ch_angle', 'ch2')
+                    ch_angles = [ch_single]
+                ch_angles = [str(ch).strip() for ch in ch_angles if str(ch).strip()]
+                load_enabled = bool(cfg.get('load_enabled', True))
+
+                channels = []
+                if load_enabled:
+                    channels.append(ch_load)
+                channels.extend(ch_angles)
+
+                for ch in channels:
+                    nid_map.setdefault(nid, set()).add(ch)
             for nid, channels in nid_map.items():
                 channels_list = [{'channel': ch, 'type': 'strain', 'value': 0.0, 'last_value': 0.0} for ch in sorted(channels)]
                 nodos.append({
@@ -233,18 +257,29 @@ class MockDriver(ISistemaPesaje):
         self._logical_to_id = {}
         
         # Re-inicializar estructuras internas con la nueva config
-        # (Lógica simplificada duplicada de __init__)
         if isinstance(self.nodos_config, dict) and len(self.nodos_config) > 0:
-            # En mock forzamos single node
-            first_logical = next(iter(self.nodos_config))
-            cfg = self.nodos_config[first_logical]
-            nid = cfg.get('id', 4248)
-            ch_load = cfg.get('ch_load', 'ch1')
-            ch_angle = cfg.get('ch_angle', 'ch2')
-            
-            self._logical_to_id[first_logical] = nid
-            self._expected_node_ids.add(nid)
-            self._node_channels[nid] = {ch_load, ch_angle}
+            for logical, cfg in self.nodos_config.items():
+                if not isinstance(cfg, dict):
+                    cfg = {}
+                nid = cfg.get('id', 0)
+                if nid <= 0:
+                    continue
+                ch_load = cfg.get('ch_load', 'ch1')
+                ch_angles = cfg.get('ch_angles')
+                if not isinstance(ch_angles, list):
+                    ch_single = cfg.get('ch_angle', 'ch2')
+                    ch_angles = [ch_single]
+                ch_angles = [str(ch).strip() for ch in ch_angles if str(ch).strip()]
+                load_enabled = bool(cfg.get('load_enabled', True))
+
+                channels = []
+                if load_enabled:
+                    channels.append(ch_load)
+                channels.extend(ch_angles)
+
+                self._logical_to_id[logical] = nid
+                self._expected_node_ids.add(nid)
+                self._node_channels[nid] = set(channels)
 
         # Recalcular frequência após atualização de config
         self._mock_frequency_hz = self._resolve_mock_frequency_hz()

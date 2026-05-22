@@ -3,6 +3,7 @@ import os
 import time
 import threading
 import queue
+import struct
 from collections import deque
 from typing import Dict
 
@@ -113,17 +114,16 @@ def show_startup_info():
         pass
 
 
-def _float_to_int32_registers(value: float, scale: int = 1000) -> list:
-    """Convierte un float a dos registros Modbus (int32) con escala."""
+def _float_to_float32_registers(value: float, swap_words: bool = False) -> list:
+    """Convierte un float a dos registros Modbus (float32 IEEE754)."""
     try:
-        ival = int(round(value * scale))
+        packed = struct.pack('>f', float(value))
     except Exception:
-        ival = 0
-    # convertir a signed 32
-    if ival < 0:
-        ival = (1 << 32) + ival
-    hi = (ival >> 16) & 0xFFFF
-    lo = ival & 0xFFFF
+        packed = struct.pack('>f', 0.0)
+    hi = (packed[0] << 8) | packed[1]
+    lo = (packed[2] << 8) | packed[3]
+    if swap_words:
+        return [lo, hi]
     return [hi, lo]
 
 
@@ -163,6 +163,7 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
     modbus_state_lock = threading.Lock()
     modbus_block_size = max(1, int(RUNTIME_TUNING.get('modbus_net_window_size', 30)))
     modbus_net_window = deque(maxlen=modbus_block_size)
+    last_angles = [0.0, 0.0, 0.0, 0.0, 0.0]
 
     def _is_serial_port_available(port_name):
         try:
@@ -465,6 +466,8 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                                 modbus_params['enabled'] = bool(new_transmissao.get('enabled'))
                             else:
                                 modbus_params['enabled'] = bool(modbus_params.get('enabled', True) and modbus_params.get('serial_port'))
+                            if 'swap_words' in new_transmissao:
+                                modbus_params['swap_words'] = bool(new_transmissao.get('swap_words'))
                             try:
                                 modbus_params['baudrate'] = int(new_transmissao.get('velocidade', modbus_params.get('baudrate', 3000000)))
                             except Exception:
@@ -617,6 +620,22 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                 if 'logs' in datos_procesados:
                     for log_msg in datos_procesados['logs']:
                         data_queue.put({'type': 'LOG', 'payload': log_msg})
+
+                # Actualizar ultimo snapshot de angulos para Modbus
+                try:
+                    angles = datos_procesados.get('angles')
+                    if isinstance(angles, list) and angles:
+                        cleaned = []
+                        for val in angles[:5]:
+                            try:
+                                cleaned.append(float(val))
+                            except Exception:
+                                cleaned.append(0.0)
+                        while len(cleaned) < 5:
+                            cleaned.append(0.0)
+                        last_angles = cleaned
+                except Exception:
+                    pass
                 
                 # === DETECCION DE DESCONEXION DE SENSORES ===
                 if datos_procesados.get('disconnect_events'):
@@ -753,21 +772,22 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                         except Exception:
                             latest_ts = None
 
-                        # Acumular sólo muestras nuevas en ventana por BLOQUES
+                        # Publicar inmediatamente ante nueva muestra recibida del sensor
                         if latest_ts is None or latest_ts != last_modbus_sample_ts:
                             total_neto = float(datos_procesados.get('total', 0.0) or 0.0)
-                            modbus_net_window.append(total_neto)
                             if latest_ts is not None:
                                 last_modbus_sample_ts = latest_ts
 
-                        # Publicar únicamente cuando se completa el bloque N
-                        if len(modbus_net_window) >= modbus_block_size:
-                            total_val_modbus = sum(modbus_net_window) / len(modbus_net_window)
-                            regs = _float_to_int32_registers(total_val_modbus)
+                            swap_words = False
+                            try:
+                                swap_words = bool((modbus_params or {}).get('swap_words', False))
+                            except Exception:
+                                swap_words = False
+
+                            regs = _float_to_float32_registers(total_neto, swap_words)
 
                             modbus_ok = modbus_server.push_data(regs)
                             if modbus_ok:
-                                modbus_net_window.clear()
                                 modbus_fail_count = 0
                                 if last_modbus_status != 'connected':
                                     data_queue.put({'type': 'MODBUS_STATUS', 'payload': 'connected'})
@@ -892,6 +912,7 @@ def main():
         stopbits = 1
         bytesize = 8
         timeout = 0.05
+        swap_words = False
 
         if settings and isinstance(settings.get('transmissao'), dict):
             t = settings.get('transmissao')
@@ -902,6 +923,7 @@ def main():
             porta_conf = t.get('porta')
             if isinstance(porta_conf, str) and porta_conf.strip():
                 serial_port = porta_conf.strip()
+            swap_words = bool(t.get('swap_words', swap_words))
             try:
                 baudrate = int(t.get('velocidade', t.get('baudrate', baudrate)))
             except Exception:
@@ -936,6 +958,7 @@ def main():
             'stopbits': stopbits,
             'bytesize': bytesize,
             'timeout': timeout,
+            'swap_words': swap_words,
         }
     except Exception:
         modbus_params = None

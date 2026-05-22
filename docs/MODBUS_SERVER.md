@@ -15,7 +15,7 @@
 
 ## Descripción General
 
-El sistema de pesaje actúa como **servidor (esclavo) Modbus RTU** que publica continuamente el peso neto total en holding registers. Un cliente externo (PLC, PC, HMI) puede leer este valor en cualquier momento mediante el protocolo Modbus RTU estándar sobre un enlace serial RS-485.
+El sistema de pesaje actúa como **servidor (esclavo) Modbus RTU** que publica continuamente el peso neto total y los 5 angulos en holding registers. Un cliente externo (PLC, PC, HMI) puede leer estos valores en cualquier momento mediante el protocolo Modbus RTU estándar sobre un enlace serial RS-485.
 
 ```
 ┌──────────────────────┐         RS-485          ┌──────────────────┐
@@ -23,7 +23,7 @@ El sistema de pesaje actúa como **servidor (esclavo) Modbus RTU** que publica c
 │                      │                          │                  │
 │  Sensor → Procesar   │     Modbus RTU @ 3Mbaud  │  Lee registros   │
 │  → Publicar en HR    │     Slave ID: 1          │  cada ciclo      │
-│    registro 1000     │     Registro: 1000-1001  │                  │
+│    registros 1000+   │     Registro: 1000-1011  │                  │
 └──────────────────────┘                          └──────────────────┘
 ```
 
@@ -74,8 +74,8 @@ main.py (hilo de adquisición)
 ```
 1. Sensor (real o mock) envía dato
 2. main.py lo procesa con DataProcessor → obtiene peso neto total
-3. main.py convierte total (float) a 2 registros INT32 (×1000)
-4. main.py llama modbus_server.push_data([reg_hi, reg_lo])
+3. main.py convierte 6 valores (float32) a 12 registros (IEEE754)
+4. main.py llama modbus_server.push_data([regs...])
 5. push_data() escribe directamente en los holding registers del datastore
 6. El servidor responde automáticamente al cliente que lea esos registros
 ```
@@ -97,7 +97,7 @@ La sección `transmissao` controla el servidor Modbus:
     "velocidade": 3000000,      // Baudrate en bps
     "paridade": "Nenhuma",      // Paridad: "Nenhuma", "Par", "Impar"
     "id_escravo_pc": 1,         // Slave ID Modbus (1-247)
-    "swap_words": false         // Intercambiar palabras del INT32
+    "swap_words": false         // Intercambiar palabras del FLOAT32
   }
 }
 ```
@@ -118,23 +118,34 @@ La sección `transmissao` controla el servidor Modbus:
 
 | Dirección | Tipo | Contenido |
 |---|---|---|
-| **1000** | Holding Register (HR) | Peso neto total – **word alta** (INT32 MSW) |
-| **1001** | Holding Register (HR) | Peso neto total – **word baja** (INT32 LSW) |
+| **1000-1001** | Holding Register (HR) | Peso neto total – **float32** |
+| **1002-1003** | Holding Register (HR) | Angulo 1 – **float32** |
+| **1004-1005** | Holding Register (HR) | Angulo 2 – **float32** |
+| **1006-1007** | Holding Register (HR) | Angulo 3 – **float32** |
+| **1008-1009** | Holding Register (HR) | Angulo 4 – **float32** |
+| **1010-1011** | Holding Register (HR) | Angulo 5 – **float32** |
 | Coil 0 | Coil | Data available flag (1 = dato actualizado) |
 
-### Decodificación del peso en el cliente
+### Decodificacion de datos en el cliente
 
 ```
-raw_int32 = (registro_1000 << 16) | registro_1001
-peso_kg   = raw_int32 / 1000.0
+import struct
+
+def regs_to_float32(hi, lo, swap_words=False):
+  if swap_words:
+    hi, lo = lo, hi
+  packed = bytes([(hi >> 8) & 0xFF, hi & 0xFF, (lo >> 8) & 0xFF, lo & 0xFF])
+  return struct.unpack('>f', packed)[0]
+
+peso_kg = regs_to_float32(HR[1000], HR[1001])
+ang1 = regs_to_float32(HR[1002], HR[1003])
+ang2 = regs_to_float32(HR[1004], HR[1005])
+ang3 = regs_to_float32(HR[1006], HR[1007])
+ang4 = regs_to_float32(HR[1008], HR[1009])
+ang5 = regs_to_float32(HR[1010], HR[1011])
 ```
 
-**Ejemplo**: si `HR[1000]=0x0009`, `HR[1001]=0x6C8A`:
-
-```
-raw = (0x0009 << 16) | 0x6C8A = 618634
-peso = 618634 / 1000.0 = 618.634 kg
-```
+> Si `swap_words` esta habilitado en settings, invertir los words al decodificar.
 
 ---
 
