@@ -48,16 +48,7 @@ try:
 except Exception:
     pass
 
-# =============================================================================
-# ESTRUCTURAS DE DATOS (Compatibilidad Main App)
-# =============================================================================
-
-class ConnectionState(Enum):
-    DISCONNECTED = "disconnected"
-    CONNECTING = "connecting"
-    CONNECTED = "connected"
-    SAMPLING = "sampling"
-    ERROR = "error"
+from .interfaces import ISistemaPesaje, ConnectionState
 
 @dataclass
 class AggregatedFrame:
@@ -69,11 +60,6 @@ class AggregatedFrame:
     
     def is_complete(self, expected_keys: Set[str]) -> bool:
         return expected_keys.issubset(set(self.readings.keys()))
-
-try:
-    from .interfaces import ISistemaPesaje
-except ImportError:
-    class ISistemaPesaje: pass
 
 # =============================================================================
 # CLASE PRINCIPAL DEL DRIVER
@@ -174,7 +160,7 @@ class MSCLDriver(ISistemaPesaje):
         try:
             from . import logger
             logger.info(f"[MSCL] {msg}")
-        except:
+        except Exception:
             print(f"[MSCL] {msg}")
 
     # =========================================================================
@@ -182,167 +168,167 @@ class MSCLDriver(ISistemaPesaje):
     # =========================================================================
 
     def conectar(self, puerto: str) -> bool:
+        # 1. Comprobar/marcar estado de conexión rápido con lock
         with self._lock:
-            if self._state in (ConnectionState.CONNECTED, ConnectionState.SAMPLING):
-                return True
-
+            if self._state in (ConnectionState.CONNECTED, ConnectionState.SAMPLING, ConnectionState.CONNECTING):
+                return self._state in (ConnectionState.CONNECTED, ConnectionState.SAMPLING)
             self._state = ConnectionState.CONNECTING
             self._emit_progress(f"Iniciando Conexão em {puerto} @ {self.BAUD_RATE}...")
 
-            # Validación temprana de puerto para evitar esperas innecesarias y estados confusos.
-            try:
-                import serial.tools.list_ports
-                available_ports = {str(p.device).strip().upper() for p in serial.tools.list_ports.comports()}
-                normalized = str(puerto or '').strip().upper()
-                if normalized and available_ports and normalized not in available_ports:
-                    self._emit_progress(f"Falha geral na conexão: Invalid Com Port ({puerto}).")
-                    self._emit_progress(f"Portas disponíveis: {', '.join(sorted(available_ports))}")
-                    self.desconectar()
-                    return False
-            except Exception:
-                # No bloquear la conexión si falla la detección de puertos.
-                pass
+        # Validación temprana de puerto
+        try:
+            import serial.tools.list_ports
+            available_ports = {str(p.device).strip().upper() for p in serial.tools.list_ports.comports()}
+            normalized = str(puerto or '').strip().upper()
+            if normalized and available_ports and normalized not in available_ports:
+                self._emit_progress(f"Falha geral na conexão: Invalid Com Port ({puerto}).")
+                self._emit_progress(f"Portas disponíveis: {', '.join(sorted(available_ports))}")
+                self.desconectar()
+                return False
+        except Exception:
+            pass
 
-            try:
-                # 1. Conexión Física
+        try:
+            # 2. Conexión Física (con el lock para asegurar creación segura de objetos)
+            with self._lock:
+                if self._state == ConnectionState.DISCONNECTED:
+                    return False
                 self._connection = mscl.Connection.Serial(puerto, self.BAUD_RATE)
                 self._base_station = mscl.BaseStation(self._connection)
 
-                # 2. SILENCIO RADIAL (CRÍTICO)
-                # Apagamos el Beacon y esperamos a que los nodos "zombies" (que creen que siguen midiendo)
-                # se den cuenta de que la red cayó y pasen a modo escucha.
-                self._emit_progress("Passo 1: Silenciando rede (6s)...")
-                try:
-                    self._base_station.disableBeacon()
-                except: 
-                    pass
-                
-                # Pausa obligatoria
-                time.sleep(6)
+            # 3. SILENCIO RADIAL (CRÍTICO)
+            self._emit_progress("Passo 1: Silenciando rede (6s)...")
+            try:
+                with self._lock:
+                    if self._base_station:
+                        self._base_station.disableBeacon()
+            except Exception:
+                pass
+            
+            # Dormir SIN mantener el lock para evitar bloquear esta_conectado() o desconectar()!
+            time.sleep(6)
 
-                # 3. GESTIÓN Y RECUPERACIÓN DE NODOS
+            # Verificar si fue cancelado durante el sleep
+            with self._lock:
+                if self._state == ConnectionState.DISCONNECTED or not self._base_station:
+                    self._emit_progress("Conexão cancelada durante o silêncio radial.")
+                    return False
                 self._network = mscl.SyncSamplingNetwork(self._base_station)
-                nodos_recuperados = 0
-                
-                if not self._config_node_ids:
-                    self._emit_progress("AVISO: Nenhum nó configurado em settings.json.")
 
-                for nid in self._config_node_ids:
-                    self._emit_progress(f"Tentando recuperar nó {nid}...")
-                    if self._recuperar_y_preparar_nodo(nid):
-                        self._emit_progress(f"Nó {nid} recuperado.")
-                        nodos_recuperados += 1
-                    else:
-                        self._emit_progress(f"Nó {nid} NÃO recuperado.")
-                
-                if nodos_recuperados == 0 and self._config_node_ids:
-                    self._log("ERRO: Não foi possível conectar a nenhum nó configurado.")
-                    self.desconectar()
-                    return False
+            # 4. GESTIÓN Y RECUPERACIÓN DE NODOS
+            nodos_recuperados = 0
+            if not self._config_node_ids:
+                self._emit_progress("AVISO: Nenhum nó configurado em settings.json.")
 
-                # Si la recuperación fue parcial, intentar reset del beacon/base station y reintentar nodos faltantes
-                total_expected = len(self._config_node_ids) if self._config_node_ids else 0
-                if total_expected and nodos_recuperados < total_expected:
-                    missing = set(self._config_node_ids) - set(self._active_node_ids)
-                    if missing:
-                        self._emit_progress(f"Conexão parcial ({nodos_recuperados}/{total_expected}). Tentando reset do beacon e reintentar {len(missing)} nó(s)...")
-                        # Intentar desactivar beacon -> esperar -> reactivar
-                        try:
-                            try:
-                                self._base_station.disableBeacon()
-                            except Exception:
-                                pass
-                            time.sleep(1.0)
-                            if hasattr(self._base_station, 'enableBeacon'):
-                                try:
-                                    self._base_station.enableBeacon()
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
-
-                        # Si la base station no responde, intentar recrear la conexión física
-                        try:
-                            try:
-                                if self._connection:
-                                    try:
-                                        self._connection.disconnect()
-                                    except Exception:
-                                        pass
-                            except Exception:
-                                pass
-                            try:
-                                self._connection = mscl.Connection.Serial(puerto, self.BAUD_RATE)
-                                self._base_station = mscl.BaseStation(self._connection)
-                                self._network = mscl.SyncSamplingNetwork(self._base_station)
-                            except Exception:
-                                pass
-                        except Exception:
-                            pass
-
-                        # Reintentar nodos faltantes
-                        for nid in list(missing):
-                            try:
-                                self._emit_progress(f"Tentando novamente o nó {nid} após reset do beacon...")
-                                if self._recuperar_y_preparar_nodo(nid):
-                                    self._emit_progress(f"Nó {nid} recuperado após reset.")
-                                    nodos_recuperados += 1
-                            except Exception:
-                                continue
-
-                        # Estado final tras reintentos
-                        try:
-                            self._emit_progress(f"Tentativas concluídas. Nós recuperados agora: {nodos_recuperados}/{total_expected}")
-                        except Exception:
-                            pass
-
-                # 4. APLICAR CONFIGURACIÓN A LA RED
-                # Este paso envía la tabla de slots TDMA al Gateway
-                self._emit_progress("Passo 3: Aplicando configuração de rede ao Gateway...")
-                try:
-                    self._network.applyConfiguration()
-                except Exception as e:
-                    self._log(f"Aviso: falha ao aplicar configuração de rede: {e}")
-
-                # 5. INICIAR MUESTREO (Fix V5/V6)
-                self._emit_progress(f"Passo 4: Iniciando amostragem ({nodos_recuperados} nós)...")
-                try:
-                    self._network.startSampling()
-                    self._emit_progress(">>> REDE OPERACIONAL (Beacon Ativo) <<<")
-                except Exception as e:
-                    self._log(f"Erro crítico ao iniciar rede: {e}")
-                    self.desconectar()
-                    return False
-
-                # Informar cuántos nodos se recuperaron
-                try:
-                    total_configured = len(self._config_node_ids) if self._config_node_ids else 0
-                    self._emit_progress(f"Nós recuperados: {nodos_recuperados}/{total_configured}")
-                except Exception:
-                    pass
-
-                self._state = ConnectionState.SAMPLING
-                # Guardar el recuento para consultas externas
-                try:
-                    self._last_recovered_count = nodos_recuperados
-                except Exception:
-                    self._last_recovered_count = 0
-                # Considerar conexión exitosa sólo si recuperamos todos los nodos configurados
-                if self._config_node_ids:
-                    if nodos_recuperados == len(self._config_node_ids):
-                        return True
-                    else:
-                        # Recuperación parcial: iniciamos muestreo pero devolvemos False
+            for nid in self._config_node_ids:
+                # Comprobar cancelación
+                with self._lock:
+                    if self._state == ConnectionState.DISCONNECTED or not self._base_station:
+                        self._emit_progress("Conexão cancelada durante a recuperação de nós.")
                         return False
+                
+                self._emit_progress(f"Tentando recuperar nó {nid}...")
+                if self._recuperar_y_preparar_nodo(nid):
+                    self._emit_progress(f"Nó {nid} recuperado.")
+                    nodos_recuperados += 1
                 else:
-                    # Si no hay nodos configurados, tratamos como éxito
-                    return True
+                    self._emit_progress(f"Nó {nid} NÃO recuperado.")
+            
+            with self._lock:
+                if self._state == ConnectionState.DISCONNECTED or not self._base_station:
+                    self._emit_progress("Conexão cancelada antes do início de amostragem.")
+                    return False
 
-            except Exception as e:
-                self._emit_progress(f"Falha geral na conexão: {e}")
-                self._emit_progress(traceback.format_exc())
+            if nodos_recuperados == 0 and self._config_node_ids:
+                self._log("ERRO: Não foi posible conectar a ningún nó configurado.")
                 self.desconectar()
                 return False
+
+            # Si la recuperación fue parcial, intentar reset del beacon/base station y reintentar nodos faltantes
+            total_expected = len(self._config_node_ids) if self._config_node_ids else 0
+            if total_expected and nodos_recuperados < total_expected:
+                with self._lock:
+                    missing = set(self._config_node_ids) - set(self._active_node_ids)
+                if missing:
+                    self._emit_progress(f"Conexão parcial ({nodos_recuperados}/{total_expected}). Tentando reset do beacon e reintentar...")
+                    try:
+                        with self._lock:
+                            if self._base_station:
+                                try: self._base_station.disableBeacon()
+                                except Exception: pass
+                        time.sleep(1.0)
+                        with self._lock:
+                            if self._base_station and hasattr(self._base_station, 'enableBeacon'):
+                                try: self._base_station.enableBeacon()
+                                except Exception: pass
+                    except Exception:
+                        pass
+
+                    # Recrear la conexión física si la base station no responde
+                    try:
+                        with self._lock:
+                            if self._state == ConnectionState.DISCONNECTED:
+                                return False
+                            if self._connection:
+                                try: self._connection.disconnect()
+                                except Exception: pass
+                            self._connection = mscl.Connection.Serial(puerto, self.BAUD_RATE)
+                            self._base_station = mscl.BaseStation(self._connection)
+                            self._network = mscl.SyncSamplingNetwork(self._base_station)
+                    except Exception:
+                        pass
+
+                    # Reintentar nodos faltantes
+                    for nid in list(missing):
+                        with self._lock:
+                            if self._state == ConnectionState.DISCONNECTED or not self._base_station:
+                                return False
+                        try:
+                            self._emit_progress(f"Tentando novamente o nó {nid} após reset do beacon...")
+                            if self._recuperar_y_preparar_nodo(nid):
+                                self._emit_progress(f"Nó {nid} recuperado após reset.")
+                                nodos_recuperados += 1
+                        except Exception:
+                            continue
+
+            # 5. APLICAR CONFIGURACIÓN A LA RED
+            self._emit_progress("Passo 3: Aplicando configuração de rede ao Gateway...")
+            try:
+                with self._lock:
+                    if self._state == ConnectionState.DISCONNECTED or not self._network:
+                        return False
+                    self._network.applyConfiguration()
+            except Exception as e:
+                self._log(f"Aviso: falha ao aplicar configuração de rede: {e}")
+
+            # 6. INICIAR MUESTREO
+            self._emit_progress(f"Passo 4: Iniciando amostragem ({nodos_recuperados} nós)...")
+            try:
+                with self._lock:
+                    if self._state == ConnectionState.DISCONNECTED or not self._network:
+                        return False
+                    self._network.startSampling()
+                self._emit_progress(">>> REDE OPERACIONAL (Beacon Ativo) <<<")
+            except Exception as e:
+                self._log(f"Erro crítico ao iniciar rede: {e}")
+                self.desconectar()
+                return False
+
+            with self._lock:
+                if self._state == ConnectionState.DISCONNECTED:
+                    return False
+                self._state = ConnectionState.SAMPLING
+                self._last_recovered_count = nodos_recuperados
+
+            if self._config_node_ids:
+                return nodos_recuperados == len(self._config_node_ids)
+            return True
+
+        except Exception as e:
+            self._emit_progress(f"Falha geral na conexão: {e}")
+            self._emit_progress(traceback.format_exc())
+            self.desconectar()
+            return False
 
     def get_recovered_count(self) -> int:
         """Devuelve el último recuento de nodos recuperados tras conectar()."""
@@ -384,7 +370,11 @@ class MSCLDriver(ISistemaPesaje):
         Maneja nodos dormidos y bugs de librería.
         """
         self._log(f"[{node_id}] Tentando recuperar controle...")
-        node = mscl.WirelessNode(node_id, self._base_station)
+        
+        with self._lock:
+            if not self._base_station:
+                return False
+            node = mscl.WirelessNode(node_id, self._base_station)
         
         start_time = time.time()
         encontrado = False
@@ -393,6 +383,11 @@ class MSCLDriver(ISistemaPesaje):
         attempts = 0
         while (time.time() - start_time) < self.RECOVERY_TIMEOUT_S:
             attempts += 1
+            
+            with self._lock:
+                if self._state == ConnectionState.DISCONNECTED or not self._base_station:
+                    return False
+
             try:
                 # Mandar Idle aunque no responda ping
                 self._set_node_idle(node, node_id)
@@ -405,14 +400,17 @@ class MSCLDriver(ISistemaPesaje):
                         encontrado = True
                         break
                 except Exception:
-                    # ping falló; seguiremos intentando y usaremos fallback discovery cada cierto número de intentos
+                    # ping falló
                     pass
 
                 # Fallback: cada 8 intentos verificar descubrimientos pasivos
                 if attempts % 8 == 0:
                     try:
                         self._log(f"[{node_id}] Ping falló; verificando descubrimientos pendientes...")
-                        discoveries = self._base_station.getNodeDiscoveries()
+                        with self._lock:
+                            if not self._base_station:
+                                return False
+                            discoveries = self._base_station.getNodeDiscoveries()
                         for disc in discoveries:
                             try:
                                 if disc.nodeAddress() == node_id:
@@ -440,8 +438,11 @@ class MSCLDriver(ISistemaPesaje):
 
         # Agregar a la red
         try:
-            self._network.addNode(node)
-            self._active_node_ids.add(node_id)
+            with self._lock:
+                if self._state == ConnectionState.DISCONNECTED or not self._network:
+                    return False
+                self._network.addNode(node)
+                self._active_node_ids.add(node_id)
             self._log(f"[{node_id}] Adicionado à rede de amostragem.")
             return True
         except Exception as e:
@@ -464,7 +465,7 @@ class MSCLDriver(ISistemaPesaje):
                     try:
                         node = mscl.WirelessNode(nid, self._base_station)
                         node.setToIdle()
-                    except:
+                    except Exception:
                         pass # Si falla, no importa, ya lo intentamos
 
             # 2. Apagar Beacon (Fundamental para detener sincronización)
@@ -472,14 +473,14 @@ class MSCLDriver(ISistemaPesaje):
                 try:
                     self._base_station.disableBeacon()
                     self._log("Beacon desativado.")
-                except:
+                except Exception:
                     pass
             
             # 3. Cerrar conexión física
             if self._connection:
                 try:
                     self._connection.disconnect()
-                except:
+                except Exception:
                     pass
 
             self._active_node_ids.clear()
@@ -500,23 +501,24 @@ class MSCLDriver(ISistemaPesaje):
         Método llamado periódicamente por DataProcessor.
         Lee datos del buffer del Gateway y los agrega en tramas sincronizadas.
         """
-        if not self._base_station or self._state != ConnectionState.SAMPLING:
-            return []
+        with self._lock:
+            if not self._base_station or self._state != ConnectionState.SAMPLING:
+                return []
 
-        # Leer del buffer interno del Gateway
-        try:
-            sweeps = self._base_station.getData(self.DATA_TIMEOUT_MS)
-        except Exception:
-            return []
+            # Leer del buffer interno del Gateway
+            try:
+                sweeps = self._base_station.getData(self.DATA_TIMEOUT_MS)
+            except Exception:
+                return []
 
-        now = time.time()
+            now = time.time()
 
-        # Procesar cada paquete individualmente
-        for sweep in sweeps:
-            self._process_single_sweep(sweep)
+            # Procesar cada paquete individualmente
+            for sweep in sweeps:
+                self._process_single_sweep(sweep)
 
-        # Recolectar tramas que estén completas o hayan expirado
-        return self._collect_ready_frames(now)
+            # Recolectar tramas que estén completas o hayan expirado
+            return self._collect_ready_frames(now)
 
     def _process_single_sweep(self, sweep):
         """Procesa un paquete de datos crudo y lo mete en el buffer de tramas."""
@@ -535,13 +537,24 @@ class MSCLDriver(ISistemaPesaje):
             for dp in sweep.data():
                 try:
                     # Mapeo de nombre de canal (ej: "Channel 1" -> "ch1")
+                    import re
                     ch_str = str(dp.channelName()).lower()
                     ch_key = None
                     
-                    if "1" in ch_str and ("ch" in ch_str or "val" in ch_str): ch_key = "ch1"
-                    elif "2" in ch_str and ("ch" in ch_str or "val" in ch_str): ch_key = "ch2"
-                    elif "3" in ch_str: ch_key = "ch3"
-                    elif "4" in ch_str: ch_key = "ch4"
+                    # Extraer el número exacto del canal de forma robusta
+                    match = re.search(r'\b(\d+)\b', ch_str)
+                    num = None
+                    if match:
+                        num = int(match.group(1))
+                    else:
+                        match_named = re.search(r'(?:ch|val|channel|analog|column|ch_)\s*(\d+)', ch_str)
+                        if match_named:
+                            num = int(match_named.group(1))
+                    
+                    if num == 1: ch_key = "ch1"
+                    elif num == 2: ch_key = "ch2"
+                    elif num == 3: ch_key = "ch3"
+                    elif num == 4: ch_key = "ch4"
 
                     if ch_key:
                         full_key = f"{nid}:{ch_key}"
@@ -554,7 +567,7 @@ class MSCLDriver(ISistemaPesaje):
                                     val = dp.as_float()
                                 else:
                                     val = float(dp.as_string())
-                            except:
+                            except Exception:
                                 # Fallback extremo si as_float falla
                                 continue
                             
@@ -563,7 +576,7 @@ class MSCLDriver(ISistemaPesaje):
                             # Cache simple para debug
                             if full_key in self._value_cache:
                                 self._value_cache[full_key].append(val)
-                except:
+                except Exception:
                     continue
 
             # Si encontramos datos útiles en este barrido, los guardamos
@@ -657,8 +670,8 @@ class MSCLDriver(ISistemaPesaje):
                     {'channel': 'ch1', 'type': 'strain', 'value': 0.0},
                     {'channel': 'ch2', 'type': 'strain', 'value': 0.0}
                 ]
-        except:
-            self._log("Fallo en AutoDiscovery, retornando vacío.")
+        except Exception as e:
+            self._log(f"Fallo en AutoDiscovery: {e}")
 
         return list(found.values())
 
@@ -668,13 +681,16 @@ class MSCLDriver(ISistemaPesaje):
 
     @property
     def state(self) -> ConnectionState: 
-        return self._state
+        with self._lock:
+            return self._state
     
     def esta_conectado(self) -> bool: 
-        return self._state in (ConnectionState.CONNECTED, ConnectionState.SAMPLING)
+        with self._lock:
+            return self._state in (ConnectionState.CONNECTED, ConnectionState.SAMPLING)
     
     def get_statistics(self) -> Dict: 
-        return {'connection_state': self._state.value}
+        with self._lock:
+            return {'connection_state': self._state.value}
 
     def get_node_status(self, nid: int) -> Optional[Dict]: 
         # Verificar si hemos recibido datos de este nodo recientemente en el buffer
@@ -695,6 +711,16 @@ class MSCLDriver(ISistemaPesaje):
 
     def tarar(self, nid=None): pass
     def reset_tarar(self): pass
+
+    def update_nodes_config(self, config: Dict[str, Any]) -> None:
+        """Actualiza la configuración de nodos en caliente."""
+        with self._lock:
+            self.nodos_config = config
+            self._config_node_ids = set()
+            self._config_data_keys = set()
+            self._parse_config()
+            self._log(f"Configuración de nodos actualizada en caliente. Total nodos configurados: {len(self._config_node_ids)}")
+
 
 # Factory function requerida por main.py
 def create_driver(nodos_config: Optional[Dict] = None, avoid_eeprom: bool = True) -> MSCLDriver:

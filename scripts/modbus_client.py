@@ -26,15 +26,20 @@ def _load_settings(path: str) -> dict:
     except Exception:
         return {}
 
-def _decode_int32(hi: int, lo: int) -> int:
-    val = ((hi & 0xFFFF) << 16) | (lo & 0xFFFF)
-    if val & 0x80000000:
-        val -= 0x100000000
-    return val
+import struct
+
+def _decode_float32(hi: int, lo: int, swap_words: bool = False) -> float:
+    if swap_words:
+        hi, lo = lo, hi
+    try:
+        raw_bytes = struct.pack('>HH', hi & 0xFFFF, lo & 0xFFFF)
+        return struct.unpack('>f', raw_bytes)[0]
+    except Exception:
+        return 0.0
 
 _first_error_printed = False
 
-def _read_once(client, address, unit_id, scale) -> Tuple[bool, float, int, float]:
+def _read_once(client, address, unit_id, scale) -> Tuple[bool, float, float, float]:
     global _first_error_printed
     t0 = time.perf_counter()
     try:
@@ -44,18 +49,18 @@ def _read_once(client, address, unit_id, scale) -> Tuple[bool, float, int, float
         if not _first_error_printed:
             print(f"  [DIAG] Excepção: {type(e).__name__}: {e}")
             _first_error_printed = True
-        return False, 0.0, 0, rtt_ms
+        return False, 0.0, 0.0, rtt_ms
     rtt_ms = (time.perf_counter() - t0) * 1000
     if r and hasattr(r, "registers") and len(r.registers) >= 2:
         _first_error_printed = False
-        raw = _decode_int32(r.registers[0], r.registers[1])
-        return True, raw / float(scale), raw, rtt_ms
+        val = _decode_float32(r.registers[0], r.registers[1], swap_words=False)
+        return True, val, val, rtt_ms
     # La respuesta existe pero no tiene registros -> error Modbus
     if not _first_error_printed:
         is_err = getattr(r, 'isError', lambda: False)()
         print(f"  [DIAG] Resposta inválida: type={type(r).__name__}  isError={is_err}  obj={r}")
         _first_error_printed = True
-    return False, 0.0, 0, rtt_ms
+    return False, 0.0, 0.0, rtt_ms
 
 
 # ── Ventana de configuración simple ──────────────────────────────────────
@@ -133,7 +138,7 @@ def show_config(default_port="COM9", default_baud="115200",
     field("Unit ID (escravo)",   v_unit,  lambda p: entry(p, v_unit, w=6))
     field("Imprimir 1 de cada N", v_print, lambda p: entry(p, v_print, w=6))
 
-    tk.Label(card, text="Paridade: N  |  Stop bits: 1  |  Modo: Live  |  Registro: 1000  |  Escala: 1000",
+    tk.Label(card, text="Paridade: N  |  Stop bits: 1  |  Modo: Live  |  Registro: 1000  |  Formato: Float32",
              bg=CARD, fg=FG2, font=("Segoe UI", 8)).pack(anchor="w", pady=(10, 0))
 
     # Error label
@@ -269,7 +274,7 @@ def run_live(client, address, unit_id, scale, print_every):
             if raw != last_raw:
                 if last_raw is not None:
                     interval_s = now_s - t_last_change if t_last_change else 0.0
-                    delta      = value - (last_raw / float(scale))
+                    delta      = value - last_raw
                     n_changes += 1
                     intervals.append(interval_s)
                     if len(intervals) > MAX_INTERVALS:

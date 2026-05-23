@@ -4,7 +4,7 @@ import random
 from collections import deque
 from typing import Dict, Any, List, Optional
 
-from .interfaces import ISistemaPesaje
+from .interfaces import ISistemaPesaje, ConnectionState
 
 
 class MockDriver(ISistemaPesaje):
@@ -16,27 +16,30 @@ class MockDriver(ISistemaPesaje):
     def __init__(self, nodos_config: Optional[Dict[str, Any]] = None, use_sensor_config: bool = False):
         self.nodos_config = nodos_config or {}
         self.use_sensor_config = use_sensor_config
+        self._lock = threading.Lock()
 
         self._stair_min = 0.0
         self._stair_max = 1200.0
         self._stair_step = 1
         self._stair_value = self._stair_min
         self._stair_direction = 1
-        self._mock_frequency_hz = self._resolve_mock_frequency_hz()
+        self._mock_frequency_hz = 20.0
         
         self._running = False
         self._thread = None
         self._frames = deque()
-        self._state = 'disconnected'
+        self._state = ConnectionState.DISCONNECTED
         self._stats = {'total_packets': 0, 'valid_packets': 0, 'start_time': None}
+        self._progress_cb = None
 
         # Inicializar canales y estructuras usando la lógica centralizada
         self.update_nodes_config(self.nodos_config)
 
     def conectar(self, puerto: str) -> bool:
-        self._running = True
-        self._state = 'sampling' if self._expected_node_ids else 'connected'
-        self._stats['start_time'] = time.time()
+        with self._lock:
+            self._running = True
+            self._state = ConnectionState.SAMPLING if self._expected_node_ids else ConnectionState.CONNECTED
+            self._stats['start_time'] = time.time()
         # Iniciar productor de frames
         self._thread = threading.Thread(target=self._producer_loop, daemon=True)
         self._thread.start()
@@ -44,25 +47,38 @@ class MockDriver(ISistemaPesaje):
 
     def _producer_loop(self):
         # Gerar frames com frequência configurável
-        while self._running:
-            # Recalcular periodo para permitir cambios en caliente
-            period = 1.0 / max(self._mock_frequency_hz, 0.1)
-            ts_ns = int(time.time() * 1e9)
-            readings = {}
-            rssi = {}
-            for nid in sorted(self._expected_node_ids):
-                channels = sorted(list(self._node_channels.get(nid, {'ch1'})))
+        while True:
+            with self._lock:
+                if not self._running:
+                    break
+                period = 1.0 / max(self._mock_frequency_hz, 0.1)
+                ts_ns = int(time.time() * 1e9)
+                readings = {}
+                rssi = {}
+                expected_ids = sorted(self._expected_node_ids)
+                nodos_cfg = self.nodos_config
                 
+            for nid in expected_ids:
+                channels = sorted(list(self._node_channels.get(nid, {'ch1'})))
                 # Lookup node config for load/angle channels
                 try:
-                     # Find config for this nid
                     node_cfg = None
-                    if self.nodos_config:
-                        for cfg in self.nodos_config.values():
+                    if nodos_cfg:
+                        for cfg in nodos_cfg.values():
                             if cfg.get('id') == nid:
                                 node_cfg = cfg
                                 break
                     
+                    simulate_failure = bool(node_cfg.get('simulate_failure', False)) if node_cfg else False
+                    drop_rate = float(node_cfg.get('packet_drop_rate', 0.0)) if node_cfg else 0.0
+                    
+                    if simulate_failure:
+                        # Simular fallo completo (desconexión)
+                        continue
+                    if drop_rate > 0.0 and random.random() < drop_rate:
+                        # Simular pérdida de paquete transitoria
+                        continue
+
                     ch_load = node_cfg.get('ch_load', 'ch1') if node_cfg else 'ch1'
                     ch_angles = node_cfg.get('ch_angles') if node_cfg else None
                     if not isinstance(ch_angles, list):
@@ -70,18 +86,16 @@ class MockDriver(ISistemaPesaje):
                         ch_angles = [ch_single]
                     ch_angles = [str(ch).strip() for ch in ch_angles if str(ch).strip()]
                     load_enabled = bool(node_cfg.get('load_enabled', True)) if node_cfg else True
-                except:
+                except Exception:
                     ch_load = 'ch1'
                     ch_angles = ['ch2']
                     load_enabled = True
 
                 for channel in channels:
-                    # Valores simulados por canal (escada na carga)
                     if load_enabled and channel == ch_load:
                         # Carga em escada: 0 -> 1200 -> 0
                         val = self._next_stair_value()
                     elif channel in ch_angles:
-                        # Ângulo fixo para não interferir na visualização da escada
                         val = 0.0
                     else:
                         val = 0.0
@@ -98,13 +112,19 @@ class MockDriver(ISistemaPesaje):
                 'total': sum(readings.values()),
                 'complete': True
             }
-            self._frames.append(frame)
-            # mantener un buffer razonable
-            while len(self._frames) > 200:
-                self._frames.popleft()
+            
+            with self._lock:
+                self._frames.append(frame)
+                self._stats['total_packets'] += 1
+                self._stats['valid_packets'] += 1
+                # mantener un buffer razonable
+                while len(self._frames) > 200:
+                    self._frames.popleft()
+            
             time.sleep(period)
 
     def _next_stair_value(self) -> float:
+        # Nota: llamarse dentro de _producer_loop que ya tiene el lock de _lock
         value = self._stair_value
         next_value = self._stair_value + (self._stair_step * self._stair_direction)
         if next_value >= self._stair_max:
@@ -143,35 +163,52 @@ class MockDriver(ISistemaPesaje):
         except Exception:
             pass
 
-        # Default
         return 20.0
 
     def esta_conectado(self) -> bool:
-        return self._state in ('connected', 'sampling')
+        with self._lock:
+            return self._state in (ConnectionState.CONNECTED, ConnectionState.SAMPLING)
 
     def obtener_datos(self) -> List[Dict[str, Any]]:
-        frames = []
-        while self._frames:
-            frames.append(self._frames.popleft())
-        return frames
+        with self._lock:
+            frames = []
+            while self._frames:
+                frames.append(self._frames.popleft())
+            return frames
 
     def desconectar(self) -> None:
-        self._running = False
+        with self._lock:
+            self._running = False
+            self._state = ConnectionState.DISCONNECTED
         if self._thread:
             self._thread.join(timeout=1.0)
             self._thread = None
-        self._state = 'disconnected'
+
+    def set_progress_callback(self, callback) -> None:
+        with self._lock:
+            self._progress_cb = callback
+
+    def get_recovered_count(self) -> int:
+        with self._lock:
+            if self._state in (ConnectionState.CONNECTED, ConnectionState.SAMPLING):
+                return len(self._expected_node_ids)
+            return 0
 
     def descubrir_nodos(self, timeout_ms: int = 5000) -> List[Dict[str, Any]]:
         nodos = []
-        # Construir lista de nodos basada en la configuración lógica cuando sea posible
-        if self.nodos_config:
-            # Agrupar por node id para listar todos los canales configurados por nodo
+        with self._lock:
+            config_copy = self.nodos_config.copy() if self.nodos_config else {}
+            expected_ids = self._expected_node_ids.copy()
+            logical_to_id = self._logical_to_id.copy()
+
+        if config_copy:
             nid_map = {}
-            for logical, cfg in self.nodos_config.items():
+            for logical, cfg in config_copy.items():
                 if not isinstance(cfg, dict):
                     cfg = {}
-                nid = cfg.get('id', 0) or self._logical_to_id.get(logical)
+                nid = cfg.get('id', 0) or logical_to_id.get(logical, 0)
+                if nid <= 0:
+                    continue
                 ch_load = cfg.get('ch_load', cfg.get('ch', 'ch1'))
                 ch_angles = cfg.get('ch_angles')
                 if not isinstance(ch_angles, list):
@@ -199,7 +236,7 @@ class MockDriver(ISistemaPesaje):
                     'sample_rate': '32'
                 })
         else:
-            for nid in sorted(self._expected_node_ids):
+            for nid in sorted(expected_ids):
                 nodos.append({
                     'id': nid,
                     'rssi': -40,
@@ -214,17 +251,19 @@ class MockDriver(ISistemaPesaje):
         return nodos
 
     def tarar(self, node_id: int = None) -> None:
-        return None
+        pass
 
     def reset_tarar(self) -> None:
-        return None
+        pass
 
-    def get_node_status(self, node_id: int):
+    def get_node_status(self, node_id: int) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            configured = node_id in self._expected_node_ids
         return {
             'node_id': node_id,
             'channel': 'ch1',
             'is_online': True,
-            'is_configured': node_id in self._expected_node_ids,
+            'is_configured': configured,
             'last_seen': time.time(),
             'last_value': None,
             'last_rssi': -40,
@@ -233,56 +272,56 @@ class MockDriver(ISistemaPesaje):
             'error_count': 0
         }
 
-    def get_statistics(self):
-        uptime = 0.0
-        if self._stats['start_time']:
-            uptime = time.time() - self._stats['start_time']
+    def get_statistics(self) -> Dict[str, Any]:
+        with self._lock:
+            uptime = 0.0
+            if self._stats['start_time']:
+                uptime = time.time() - self._stats['start_time']
+            state_val = self._state.value
+            expected_count = len(self._expected_node_ids)
+            stats_copy = self._stats.copy()
+
         return {
-            **self._stats,
+            **stats_copy,
             'uptime_seconds': uptime,
-            'connection_state': self._state,
-            'nodes_online': len(self._expected_node_ids),
-            'nodes_configured': len(self._expected_node_ids)
+            'connection_state': state_val,
+            'nodes_online': expected_count,
+            'nodes_configured': expected_count
         }
 
-    def get_last_cached_value(self, node_id: int):
-        # Retornar None como placeholder
-        return None
-
-    def update_nodes_config(self, new_nodes_config: Dict[str, Any]):
+    def update_nodes_config(self, new_nodes_config: Dict[str, Any]) -> None:
         """Actualiza la configuración de nodos en tiempo real."""
-        self.nodos_config = new_nodes_config
-        self._expected_node_ids = set()
-        self._node_channels = {}
-        self._logical_to_id = {}
-        
-        # Re-inicializar estructuras internas con la nueva config
-        if isinstance(self.nodos_config, dict) and len(self.nodos_config) > 0:
-            for logical, cfg in self.nodos_config.items():
-                if not isinstance(cfg, dict):
-                    cfg = {}
-                nid = cfg.get('id', 0)
-                if nid <= 0:
-                    continue
-                ch_load = cfg.get('ch_load', 'ch1')
-                ch_angles = cfg.get('ch_angles')
-                if not isinstance(ch_angles, list):
-                    ch_single = cfg.get('ch_angle', 'ch2')
-                    ch_angles = [ch_single]
-                ch_angles = [str(ch).strip() for ch in ch_angles if str(ch).strip()]
-                load_enabled = bool(cfg.get('load_enabled', True))
+        with self._lock:
+            self.nodos_config = new_nodes_config
+            self._expected_node_ids = set()
+            self._node_channels = {}
+            self._logical_to_id = {}
+            
+            if isinstance(self.nodos_config, dict) and len(self.nodos_config) > 0:
+                for logical, cfg in self.nodos_config.items():
+                    if not isinstance(cfg, dict):
+                        cfg = {}
+                    nid = cfg.get('id', 0)
+                    if nid <= 0:
+                        continue
+                    ch_load = cfg.get('ch_load', 'ch1')
+                    ch_angles = cfg.get('ch_angles')
+                    if not isinstance(ch_angles, list):
+                        ch_single = cfg.get('ch_angle', 'ch2')
+                        ch_angles = [ch_single]
+                    ch_angles = [str(ch).strip() for ch in ch_angles if str(ch).strip()]
+                    load_enabled = bool(cfg.get('load_enabled', True))
 
-                channels = []
-                if load_enabled:
-                    channels.append(ch_load)
-                channels.extend(ch_angles)
+                    channels = []
+                    if load_enabled:
+                        channels.append(ch_load)
+                    channels.extend(ch_angles)
 
-                self._logical_to_id[logical] = nid
-                self._expected_node_ids.add(nid)
-                self._node_channels[nid] = set(channels)
+                    self._logical_to_id[logical] = nid
+                    self._expected_node_ids.add(nid)
+                    self._node_channels[nid] = set(channels)
 
-        # Recalcular frequência após atualização de config
-        self._mock_frequency_hz = self._resolve_mock_frequency_hz()
+            self._mock_frequency_hz = self._resolve_mock_frequency_hz()
 
 
 RealPesajeMock = MockDriver

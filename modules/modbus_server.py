@@ -65,6 +65,7 @@ class ModbusDataServer:
 
         self.is_running = False
         self.last_error_msg: Optional[str] = None
+        self._lock = threading.Lock()
 
     # ------------------------------------------------------------------ #
     #  Start / Stop
@@ -141,9 +142,19 @@ class ModbusDataServer:
                 future.result(timeout=3.0)
             except Exception as exc:
                 log.warning("Error al detener Modbus server: %s", exc)
+        
+        # Esperar a que el thread del servidor termine para liberar recursos
+        if self._server_thread and self._server_thread.is_alive():
+            try:
+                self._server_thread.join(timeout=3.0)
+            except Exception as exc:
+                log.warning("Error al esperar finalización del hilo Modbus: %s", exc)
+                
         self._server = None
         self._context = None
         self.is_running = False
+        self._server_thread = None
+        self._loop = None
 
     def get_last_error(self) -> str:
         try:
@@ -162,14 +173,15 @@ class ModbusDataServer:
             return False
         try:
             safe = [int(x) & 0xFFFF for x in regs]
-            self._context[0x00].setValues(3, self.holding_start, safe)
-            # Mantener coil data_available=1 para clientes legacy
-            self._context[0x00].setValues(1, self.COIL_DATA_AVAILABLE, [1])
-            # Dejar coil ack en 0 (cliente puede escribir 1 para confirmar)
-            try:
-                self._context[0x00].setValues(1, self.COIL_ACK, [0])
-            except Exception:
-                pass
+            with self._lock:
+                self._context[0x00].setValues(3, self.holding_start, safe)
+                # Mantener coil data_available=1 para clientes legacy
+                self._context[0x00].setValues(1, self.COIL_DATA_AVAILABLE, [1])
+                # Dejar coil ack en 0 (cliente puede escribir 1 para confirmar)
+                try:
+                    self._context[0x00].setValues(1, self.COIL_ACK, [0])
+                except Exception:
+                    pass
             return True
         except Exception:
             log.exception("Error publicando registros Modbus")

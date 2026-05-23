@@ -284,18 +284,30 @@ class CalibrationManager:
     def _write_csv(self, path: str, weights: List[float], serials_map: Dict[str, Dict[float, Any]]):
         # serials order stable
         serials = sorted(serials_map.keys(), key=lambda x: str(x))
-        with open(path, "w", encoding="utf-8", newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(["Carga Real"] + serials)
-            for w in weights:
-                row = [("%.6g" % w)]
-                for s in serials:
-                    val = serials_map.get(s, {}).get(w)
-                    if val is None:
-                        row.append("")
-                    else:
-                        row.append(str(val))
-                writer.writerow(row)
+        temp_path = path + ".tmp"
+        try:
+            with open(temp_path, "w", encoding="utf-8", newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(["Carga Real"] + serials)
+                for w in weights:
+                    row = [("%.6g" % w)]
+                    for s in serials:
+                        val = serials_map.get(s, {}).get(w)
+                        if val is None:
+                            row.append("")
+                        else:
+                            row.append(str(val))
+                    writer.writerow(row)
+            # Reemplazo atómico para evitar corrupción en caso de interrupción de escritura
+            if os.path.exists(temp_path):
+                os.replace(temp_path, path)
+        except Exception as e:
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+            raise e
 
     def clear_points(self):
         self.points = []
@@ -329,6 +341,9 @@ class CalibrationManager:
         x_data = np.array([p.reading for p in self.points]) # X = Lectura
         y_data = np.array([p.weight for p in self.points])  # Y = Peso real
         
+        if len(x_data) >= 2 and np.max(x_data) == np.min(x_data):
+            return {"method": method, "valid": False, "error": "Todos los puntos de lectura son idénticos, no se puede calcular calibración."}
+
         # Ordenar arrays por X para interpolaciones correctas
         sorted_indices = np.argsort(x_data)
         x_data = x_data[sorted_indices]
@@ -340,25 +355,42 @@ class CalibrationManager:
             if "Lineal" in method:
                 if len(x_data) >= 2:
                     z = np.polyfit(x_data, y_data, 1) # [slope, offset]
+                    slope, offset = float(z[0]), float(z[1])
+                    
+                    # Calcular R²
+                    y_pred = slope * x_data + offset
+                    y_mean = np.mean(y_data)
+                    ss_tot = np.sum((y_data - y_mean) ** 2)
+                    ss_res = np.sum((y_data - y_pred) ** 2)
+                    r_squared = 1.0 - (ss_res / ss_tot) if ss_tot != 0 else 1.0
+                    
                     result.update({
                         "valid": True,
-                        "slope": float(z[0]),
-                        "offset": float(z[1]),
-                        "eq": f"y = {z[0]:.4f}x + {z[1]:.2f}"
+                        "slope": slope,
+                        "offset": offset,
+                        "eq": f"y = {slope:.4f}x + {offset:.2f}",
+                        "r_squared": float(r_squared)
                     })
             
             elif "Polinomio" in method:
                 degree = 2 if "Grado 2" in method else 3
                 if len(x_data) >= (degree + 1):
                     z = np.polyfit(x_data, y_data, degree)
+                    
+                    # Calcular R²
+                    p = np.poly1d(z)
+                    y_pred = p(x_data)
+                    y_mean = np.mean(y_data)
+                    ss_tot = np.sum((y_data - y_mean) ** 2)
+                    ss_res = np.sum((y_data - y_pred) ** 2)
+                    r_squared = 1.0 - (ss_res / ss_tot) if ss_tot != 0 else 1.0
+                    
                     result.update({
                         "valid": True,
                         "coefficients": z.tolist(), # [c_n, ..., c_0]
-                        "degree": degree
+                        "degree": degree,
+                        "r_squared": float(r_squared)
                     })
-            
-            # Nota: Splines e Interpolación no generan coeficientes simples para guardar igual,
-            # pero el Manager podría validar que son calculables.
             
         except Exception as e:
             result["error"] = str(e)
