@@ -637,7 +637,7 @@ class BackendController:
                     self.data_queue.put({'type': 'LOG', 'payload': f"Fallo reconexion de sensor {node_id} despues de {self.MAX_AUTO_RECONNECT} intentos"})
 
     def _publish_to_modbus(self, raw_data: List[Dict[str, Any]], datos_procesados: Dict[str, Any]) -> None:
-        """Envía el valor neto configurado al servidor Modbus RTU."""
+        """Envía el valor bruto y los 5 ángulos al servidor Modbus RTU."""
         with self.modbus_state_lock:
             server = self.modbus_server
             start_ts = self.modbus_start_ts
@@ -656,8 +656,8 @@ class BackendController:
             latest_ts = None
 
         if latest_ts is None or latest_ts != self.last_modbus_sample_ts:
-            total_neto = float(datos_procesados.get('total', 0.0) or 0.0)
-            modbus_value = total_neto
+            total_bruto = float(datos_procesados.get('total_gross', 0.0) or 0.0)
+            modbus_value = total_bruto
 
             with self.state_lock:
                 mb_params = self.modbus_params.copy() if self.modbus_params else {}
@@ -668,11 +668,11 @@ class BackendController:
                     sensores = datos_procesados.get('sensores', {}) or {}
                     sensor_info = sensores.get('celda_1')
                     if isinstance(sensor_info, dict) and sensor_info.get('key') == src:
-                        modbus_value = float(sensor_info.get('valor', total_neto))
+                        modbus_value = float(sensor_info.get('bruto', total_bruto))
                     else:
                         for info in sensores.values():
                             if isinstance(info, dict) and info.get('key') == src:
-                                modbus_value = float(info.get('valor', total_neto))
+                                modbus_value = float(info.get('bruto', total_bruto))
                                 break
             except Exception:
                 pass
@@ -680,8 +680,25 @@ class BackendController:
             if latest_ts is not None:
                 self.last_modbus_sample_ts = latest_ts
 
+            # Obtener y normalizar ángulos (exactamente 5 floats)
+            angles = datos_procesados.get('angles', [])
+            if not isinstance(angles, list):
+                angles = []
+            
+            modbus_angles = []
+            for i in range(5):
+                if i < len(angles):
+                    modbus_angles.append(float(angles[i]))
+                else:
+                    modbus_angles.append(0.0)
+
             swap_words = bool(mb_params.get('swap_words', False))
-            regs = self._float_to_float32_registers(modbus_value, swap_words)
+            
+            # Serializar peso bruto + 5 ángulos en 12 holding registers
+            regs = []
+            regs.extend(self._float_to_float32_registers(modbus_value, swap_words))
+            for ang in modbus_angles:
+                regs.extend(self._float_to_float32_registers(ang, swap_words))
 
             modbus_ok = False
             try:
@@ -726,7 +743,7 @@ class BackendController:
                             if port_blocked:
                                 self.modbus_waiting_config_change = True
                                 serial_conf = mb_params.get('serial_port', '')
-                                self.data_queue.put({'type': 'LOG', 'payload': f"Modbus RTU em espera: porta {serial_conf} ocupada/sem acesso. Altere em Configuração para tentar novamente."})
+                                self.data_queue.put({'type': 'LOG', 'payload': f"Modbus RTU em espera: porta {serial_conf} ocupada/sem acceso. Altere em Configuração para tentar nuevamente."})
                             
                             try:
                                 server.stop()

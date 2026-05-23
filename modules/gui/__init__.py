@@ -415,6 +415,7 @@ class BalanzaGUI(ttk.Window):
         self.style.configure('Large.danger.TButton', font=(FONT_MAIN, sf(18), 'bold'))
         self.style.configure('Large.info.TButton', font=(FONT_MAIN, sf(18), 'bold'))
         self.style.configure('Large.warning.TButton', font=(FONT_MAIN, sf(18), 'bold'))
+        self.style.configure('Large.secondary.Outline.TButton', font=(FONT_MAIN, sf(18), 'bold'))
 
         # Tabs config - Pestañas gruesas, anchas y centradas
         self.style.configure('TNotebook.Tab', font=(FONT_MAIN, sf(16), 'bold'), padding=(self.scaled(40), self.scaled(15)))
@@ -887,7 +888,7 @@ class BalanzaGUI(ttk.Window):
         tiles_frame.pack(expand=True, fill=BOTH, pady=4)
 
         for col in range(5):
-            tiles_frame.columnconfigure(col, weight=1)
+            tiles_frame.columnconfigure(col, weight=1, uniform="group_angles")
         tiles_frame.rowconfigure(0, weight=1)
 
         self.lbl_angles = []
@@ -902,14 +903,16 @@ class BalanzaGUI(ttk.Window):
                 tile,
                 text=f"Ângulo {idx + 1}",
                 style='AngleTileTitle.TLabel',
-                anchor='center'
+                anchor='center',
+                width=10
             ).grid(row=0, column=0, sticky='ew', pady=(2, 0))
 
             value_lbl = ttk.Label(
                 tile,
                 text="0,00°",
                 style='AngleTileValue.TLabel',
-                anchor='center'
+                anchor='center',
+                width=10
             )
             value_lbl.grid(row=1, column=0, sticky='nsew', pady=(0, 4))
             self.lbl_angles.append(value_lbl)
@@ -3618,13 +3621,59 @@ class BalanzaGUI(ttk.Window):
             self._apply_window_icon(dialog)
         except Exception:
             pass
-        try:
-            dialog.transient(self)
-        except Exception:
-            pass
+        # transient() se aplica depois de state('zoomed') para não interferir
+        # com a maximização respeitando a taskbar do Windows.
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
-        small_screen = False
+        
+        # Obter área de trabalho utilizável para detecção de notebooks con resoluções menores
+        work_w = screen_w
+        work_h = screen_h
+        try:
+            import ctypes
+            from ctypes import wintypes
+            class RECT(ctypes.Structure):
+                _fields_ = [("left", wintypes.LONG), ("top", wintypes.LONG),
+                            ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
+            SPI_GETWORKAREA = 0x0030
+            rect = RECT()
+            if ctypes.windll.user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(rect), 0):
+                work_w = rect.right - rect.left
+                work_h = rect.bottom - rect.top
+        except Exception:
+            pass
+
+        # Detectar se a tela é pequena (e.g. notebook 768p ou tela com alto DPI scaling)
+        small_screen = (screen_h <= 800) or (work_h <= 768)
+
+        # Parâmetros responsivos para a UI de configuração
+        if small_screen:
+            base_font = ('Segoe UI', self.scaled_font(13))
+            base_font_bold = ('Segoe UI', self.scaled_font(13), 'bold')
+            maint_font = ("Segoe UI", 13)
+            maint_font_bold = ("Segoe UI", 13, "bold")
+            ch_radio_font = ("Segoe UI", self.scaled_font(16), "bold")
+            ch_btn_padding = (12, 8)
+            ch_btn_width = 5
+            tab_padding = (self.scaled(25), self.scaled(8))
+            btn_pad = (self.scaled(18), self.scaled(6))
+            btn_bottom_height = 60
+            row_pady = 4
+            btn_width = 14
+        else:
+            base_font = ('Segoe UI', self.scaled_font(16))
+            base_font_bold = ('Segoe UI', self.scaled_font(16), 'bold')
+            maint_font = ("Segoe UI", 16)
+            maint_font_bold = ("Segoe UI", 16, "bold")
+            ch_radio_font = ("Segoe UI", self.scaled_font(24), "bold")
+            ch_btn_padding = (18, 14)
+            ch_btn_width = 6
+            tab_padding = (self.scaled(50), self.scaled(14))
+            btn_pad = (self.scaled(24), self.scaled(8))
+            btn_bottom_height = 72
+            row_pady = 7
+            btn_width = 16
+
         # El deiconify se hace al final, luego de construir todos los widgets,
         # para que la ventana aparezca completamente formada sin flash de contenido vacío.
         # Asegurar que el diálogo reciba foco de teclado al hacer click en él
@@ -3664,8 +3713,8 @@ class BalanzaGUI(ttk.Window):
         style.configure('CfgTab.TNotebook',
                         background='#f1f5f9', tabposition='nw')
         style.configure('CfgTab.TNotebook.Tab',
-                        font=('Segoe UI', self.scaled_font(15), 'bold'),
-                        padding=(self.scaled(50), self.scaled(14)),
+                        font=('Segoe UI', self.scaled_font(13 if small_screen else 15), 'bold'),
+                        padding=tab_padding,
                         background='#e2e8f0',
                         foreground='#475569',
                         anchor='center')
@@ -3739,7 +3788,7 @@ class BalanzaGUI(ttk.Window):
         # ===========================================================
         # BARRA DE BOTONES INFERIOR — diseño profesional con dos zonas
         # ===========================================================
-        btn_bottom_bar = tk.Frame(border_frame, bg='#f1f5f9', height=self.scaled(72))
+        btn_bottom_bar = tk.Frame(border_frame, bg='#f1f5f9', height=self.scaled(btn_bottom_height))
         btn_bottom_bar.pack(fill=X, side=BOTTOM)
         btn_bottom_bar.pack_propagate(False)
 
@@ -3748,10 +3797,7 @@ class BalanzaGUI(ttk.Window):
 
         # Contenedor interior con padding horizontal
         btn_inner = tk.Frame(btn_bottom_bar, bg='#f1f5f9')
-        btn_inner.pack(fill=BOTH, expand=True, padx=self.scaled(20), pady=self.scaled(10))
-
-        btn_width  = 16
-        btn_pad    = (self.scaled(24), self.scaled(8))
+        btn_inner.pack(fill=BOTH, expand=True, padx=self.scaled(20), pady=self.scaled(6 if small_screen else 10))
 
         # Zona IZQUIERDA — botón principal SALVAR (verde prominente)
         left_zone = tk.Frame(btn_inner, bg='#f1f5f9')
@@ -3780,7 +3826,7 @@ class BalanzaGUI(ttk.Window):
         try:
             import os, sys as _sys
             _logo2_path = os.path.join(BASE_DIR, "assets", "logo2.png")
-            _logo2_h = self.scaled(44)
+            _logo2_h = self.scaled(36 if small_screen else 44)
             if Image is not None and ImageTk is not None and os.path.exists(_logo2_path):
                 if not hasattr(self, 'config_logo2_img') or self.config_logo2_img is None:
                     _pil = Image.open(_logo2_path)
@@ -3813,6 +3859,7 @@ class BalanzaGUI(ttk.Window):
             width=btn_width,
             padding=btn_pad
         )
+        btn_cancelar.configure(style='Large.secondary.Outline.TButton')
         btn_cancelar.pack(side=RIGHT, padx=(0, self.scaled(8)))
         # ==================== FIN BARRA DE BOTONES ====================
         
@@ -3852,12 +3899,20 @@ class BalanzaGUI(ttk.Window):
         tab_config = ttk.Frame(notebook, padding=10)
         notebook.add(tab_config, text="Configuração")
         
+        # Usar ScrolledFrame para evitar cortes em resoluções menores
+        from ttkbootstrap.scrolled import ScrolledFrame
+        sf_config = ScrolledFrame(tab_config, autohide=True)
+        sf_config.pack(fill=BOTH, expand=YES)
+        
         # Legacy variable name mapping to preserve existing logic below
-        tab_nodes = tab_config
+        tab_nodes = sf_config
 
         # --- TAB 2: Modbus ---
         tab_modbus = ttk.Frame(notebook, padding=10)
         notebook.add(tab_modbus, text="Modbus")
+        
+        sf_modbus = ScrolledFrame(tab_modbus, autohide=True)
+        sf_modbus.pack(fill=BOTH, expand=YES)
 
         # --- TAB 3: Manutenção (New) ---
         tab_maint = ttk.Frame(notebook, padding=10)
@@ -3870,9 +3925,7 @@ class BalanzaGUI(ttk.Window):
         maint_cols.columnconfigure(1, weight=1) # Editor
         maint_cols.rowconfigure(0, weight=1)     # Stretch vertically
 
-        # Estilo de fuente para campos de mantenimiento
-        maint_font = ("Segoe UI", 16)
-        maint_font_bold = ("Segoe UI", 16, "bold")
+        # Estilo de fuente para campos de mantenimiento (ya definidos dinámicamente)
 
         frame_list = ttk.Labelframe(maint_cols, text="Perfis", padding=15, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Panel.TLabelframe')
         frame_list.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=8)
@@ -3891,8 +3944,8 @@ class BalanzaGUI(ttk.Window):
         # Aumentar fuente del Treeview para coincidir con labels del editor
         try:
             style = ttk.Style()
-            style.configure("Treeview", font=("Segoe UI", 16), rowheight=self.scaled(40))
-            style.configure("Treeview.Heading", font=("Segoe UI", 16, "bold"))
+            style.configure("Treeview", font=maint_font, rowheight=self.scaled(32 if small_screen else 40))
+            style.configure("Treeview.Heading", font=maint_font_bold)
         except Exception:
             pass
 
@@ -4084,11 +4137,12 @@ class BalanzaGUI(ttk.Window):
         else:
             main_content.pack(fill=BOTH, expand=True, pady=(15, 0))
         main_content.columnconfigure(0, weight=1)
-        main_content.rowconfigure(0, weight=0) # Porta serial frame
+        main_content.columnconfigure(1, weight=1)
+        main_content.rowconfigure(0, weight=0) # Porta serial + Calibrar Carga
         main_content.rowconfigure(1, weight=1) # Configuração dos Nós frame
 
         # === TAB MODBUS: Transmissão de Dados ===
-        modbus_content = ttk.Frame(tab_modbus)
+        modbus_content = ttk.Frame(sf_modbus)
         modbus_content.pack(fill=BOTH, expand=True, pady=(15, 0))
         modbus_content.columnconfigure(0, weight=1)
         modbus_content.rowconfigure(0, weight=1)
@@ -4131,7 +4185,7 @@ class BalanzaGUI(ttk.Window):
         trans_grid.columnconfigure(1, weight=0)
         for r in range(7):
             trans_grid.rowconfigure(r, weight=0)
-        row_pad = self.scaled(6)
+        row_pad = self.scaled(4 if small_screen else 6)
 
         ttk.Label(trans_grid, text="Porta:", font=base_font_bold).grid(row=0, column=0, sticky='w', padx=(0, 20), pady=row_pad)
         try:
@@ -4159,7 +4213,8 @@ class BalanzaGUI(ttk.Window):
 
         try:
             style = ttk.Style()
-            style.configure('Modbus.Radio.TRadiobutton', font=base_font_bold, padding=(self.scaled(14), self.scaled(8)))
+            modbus_rb_pad = (self.scaled(8), self.scaled(4)) if small_screen else (self.scaled(14), self.scaled(8))
+            style.configure('Modbus.Radio.TRadiobutton', font=base_font_bold, padding=modbus_rb_pad)
         except Exception:
             pass
 
@@ -4214,7 +4269,7 @@ class BalanzaGUI(ttk.Window):
             padding=(15, 6), borderwidth=self.scaled(2),
             relief='solid', labelanchor='n', style='Panel.TLabelframe'
         )
-        port_frame.grid(row=0, column=0, sticky='ew', padx=8, pady=(4, 8))
+        port_frame.grid(row=0, column=0, sticky='nsew', padx=(8, 4), pady=(4, 8))
         
         port_grid = ttk.Frame(port_frame)
         port_grid.pack(fill=X)
@@ -4264,13 +4319,84 @@ class BalanzaGUI(ttk.Window):
         )
         btn_refresh.grid(row=0, column=2, sticky="w", padx=(8, 0), pady=4)
 
+        # === Botão Calibrar Carga (ao lado da seção de porta COM) ===
+        cal_frame = ttk.Labelframe(
+            main_content, text='Calibração',
+            padding=(15, 6), borderwidth=self.scaled(2),
+            relief='solid', labelanchor='n', style='Panel.TLabelframe'
+        )
+        cal_frame.grid(row=0, column=1, sticky='nsew', padx=(4, 8), pady=(4, 8))
+        cal_frame.columnconfigure(0, weight=1)
+        cal_frame.rowconfigure(0, weight=1)
+
+        def start_cal_from_top():
+            # Sincronizar current_config con los valores actuales de los campos
+            try:
+                if 'nodes' not in current_config or not isinstance(current_config['nodes'], dict):
+                    current_config['nodes'] = {}
+                for k, inputs in node_entries.items():
+                    try:
+                        nid = int(inputs['id'].get())
+                    except Exception:
+                        nid = 0
+                    try:
+                        serial_v = inputs['serial'].get()
+                    except Exception:
+                        serial_v = ''
+                    try:
+                        com_v = inputs['com'].get()
+                    except Exception:
+                        com_v = ''
+                    angle_list = []
+                    for v in inputs.get('ch_angles', []):
+                        try:
+                            val = v.get()
+                        except Exception:
+                            val = ""
+                        if val:
+                            angle_list.append(val)
+                    ch_angle_fallback = angle_list[0] if angle_list else 'ch2'
+                    current_config['nodes'][k] = {
+                        'id': nid,
+                        'ch_load': inputs['ch_load'].get(),
+                        'ch_angles': angle_list,
+                        'ch_angle': ch_angle_fallback,
+                        'load_enabled': bool(inputs.get('load_enabled').get()) if inputs.get('load_enabled') else True,
+                        'ch': inputs['ch_load'].get(),
+                        'serial': serial_v,
+                        'com_port': com_v
+                    }
+            except Exception:
+                pass
+            try:
+                sensor_name = 'celda_1'
+                try:
+                    dialog.grab_release()
+                except Exception:
+                    pass
+                self._open_calibration_wizard(current_config, sensor_name, dialog)
+            except Exception as e:
+                try:
+                    self.show_alert("Erro", f"Não foi possível iniciar calibração: {e}", "error", parent=cal_frame)
+                except Exception:
+                    pass
+
+        btn_cal_top = ttk.Button(
+            cal_frame, text="CALIBRAR CARGA",
+            command=start_cal_from_top, bootstyle="success")
+        try:
+            btn_cal_top.configure(style='Calib.Node.TButton')
+        except Exception:
+            pass
+        btn_cal_top.pack(fill=BOTH, expand=True, ipadx=self.scaled(10), ipady=self.scaled(8))
+
         # === Configuração dos Nós ===
         panel1 = ttk.Labelframe(
             main_content, text='Configuração dos Nós',
             padding=14, borderwidth=self.scaled(2),
             relief='solid', labelanchor='n', style='Panel.TLabelframe'
         )
-        panel1.grid(row=1, column=0, rowspan=1, sticky='nsew', padx=8, pady=8)
+        panel1.grid(row=1, column=0, columnspan=2, rowspan=1, sticky='nsew', padx=8, pady=8)
         panel1.columnconfigure(0, weight=1)
         panel1.columnconfigure(1, weight=1)
         panel1.rowconfigure(0, weight=1)
@@ -4329,19 +4455,19 @@ class BalanzaGUI(ttk.Window):
 
             # ID do Nó
             ttk.Label(cell_grid, text='ID do Nó:', font=base_font_bold).grid(
-                row=row_idx, column=0, sticky='w', padx=(0, 12), pady=7)
+                row=row_idx, column=0, sticky='w', padx=(0, 12), pady=row_pady)
             e_id = ttk.Entry(cell_grid, font=base_font, width=14)
             e_id.insert(0, str(current_node_data.get('id', 0)))
-            e_id.grid(row=row_idx, column=1, sticky='ew', ipady=self.scaled(4), pady=7)
+            e_id.grid(row=row_idx, column=1, sticky='ew', ipady=self.scaled(4), pady=row_pady)
             self._bind_numeric_keypad(e_id, f'ID do Nó — {node_title}')
             row_idx += 1
 
             # Nº de Série
             ttk.Label(cell_grid, text='Nº de Série:', font=base_font_bold).grid(
-                row=row_idx, column=0, sticky='w', padx=(0, 12), pady=7)
+                row=row_idx, column=0, sticky='w', padx=(0, 12), pady=row_pady)
             e_serial = ttk.Entry(cell_grid, font=base_font, width=14)
             e_serial.insert(0, str(current_node_data.get('serial', '')))
-            e_serial.grid(row=row_idx, column=1, sticky='ew', ipady=self.scaled(4), pady=7)
+            e_serial.grid(row=row_idx, column=1, sticky='ew', ipady=self.scaled(4), pady=row_pady)
             self._bind_numeric_keypad(e_serial, f'Nº Série — {node_title}')
             row_idx += 1
 
@@ -4385,18 +4511,17 @@ class BalanzaGUI(ttk.Window):
                     ch_var = tk.StringVar(value=saved_val)
                     angle_vars.append(ch_var)
 
-                # Etiqueta do canal (Uniformizada com ID e Série)
+                # Etiqueta do canal (à esquerda)
                 ch_lbl_font = base_font_bold if is_load else base_font
                 ttk.Label(
                     cell_grid, text=lbl_text + ':',
                     font=ch_lbl_font
-                ).grid(row=row_idx, column=0, sticky='w', padx=(0, 10), pady=5)
+                ).grid(row=row_idx, column=0, sticky='w', padx=(0, 10), pady=3 if small_screen else 5)
 
-                # Seleção de canal via Radiobuttons (estilo Master)
+                # Seleção de canal via Radiobuttons
                 ch_btn_frame = ttk.Frame(cell_grid)
-                ch_btn_frame.grid(row=row_idx, column=1, sticky='w', pady=4)
+                ch_btn_frame.grid(row=row_idx, column=1, sticky='w', pady=2 if small_screen else 4)
                 
-                ch_radio_font = ("Segoe UI", self.scaled_font(24), "bold")
                 for ch_opt in ["ch1", "ch2", "ch3"]:
                     ch_btn = ttk.Radiobutton(
                         ch_btn_frame, 
@@ -4404,10 +4529,10 @@ class BalanzaGUI(ttk.Window):
                         variable=ch_var,
                         value=ch_opt,
                         bootstyle="info-toolbutton",
-                        width=6,
-                        padding=(18, 14)
+                        width=ch_btn_width,
+                        padding=ch_btn_padding
                     )
-                    ch_btn.pack(side=LEFT, padx=6)
+                    ch_btn.pack(side=LEFT, padx=4 if small_screen else 6)
                     try:
                         ch_btn.configure(font=ch_radio_font)
                     except Exception:
@@ -4430,82 +4555,9 @@ class BalanzaGUI(ttk.Window):
                 'com': entry_serial
             }
 
-        # Botão de calibração (abaixo dos dois nós)
-        try:
-            node_action_frame = ttk.Frame(panel1)
-            node_action_frame.grid(row=1, column=0, columnspan=2, sticky='ew', padx=8, pady=(10, 0))
-            node_action_frame.columnconfigure(0, weight=1)
-
-            def start_cal_node_action():
-                # Sincronizar current_config con los valores actuales de los campos
-                try:
-                    if 'nodes' not in current_config or not isinstance(current_config['nodes'], dict):
-                        current_config['nodes'] = {}
-                    for k, inputs in node_entries.items():
-                        try:
-                            nid = int(inputs['id'].get())
-                        except Exception:
-                            nid = 0
-                        try:
-                            serial_v = inputs['serial'].get()
-                        except Exception:
-                            serial_v = ''
-                        try:
-                            com_v = inputs['com'].get()
-                        except Exception:
-                            com_v = ''
-                        angle_list = []
-                        for v in inputs.get('ch_angles', []):
-                            try:
-                                val = v.get()
-                            except Exception:
-                                val = ""
-                            if val:
-                                angle_list.append(val)
-                        ch_angle_fallback = angle_list[0] if angle_list else 'ch2'
-                        current_config['nodes'][k] = {
-                            'id': nid,
-                            'ch_load': inputs['ch_load'].get(),
-                            'ch_angles': angle_list,
-                            'ch_angle': ch_angle_fallback,
-                            'load_enabled': bool(inputs.get('load_enabled').get()) if inputs.get('load_enabled') else True,
-                            'ch': inputs['ch_load'].get(),
-                            'serial': serial_v,
-                            'com_port': com_v
-                        }
-                except Exception:
-                    pass
-                try:
-                    sensor_name = 'celda_1'
-                    try:
-                        dialog.grab_release()
-                    except Exception:
-                        pass
-                    self._open_calibration_wizard(current_config, sensor_name, dialog)
-                except Exception as e:
-                    try:
-                        self.show_alert("Erro", f"Não foi possível iniciar calibração: {e}", "error", parent=panel1)
-                    except Exception:
-                        pass
-
-            btn_node_cal_main = ttk.Button(
-                node_action_frame, text="INICIAR CALIBRAÇÃO",
-                command=start_cal_node_action, bootstyle="success")
-            try:
-                btn_node_cal_main.configure(style='Calib.Node.TButton')
-            except Exception:
-                pass
-            try:
-                btn_node_cal_main.pack(fill=X, ipadx=self.scaled(10), ipady=self.scaled(8))
-            except Exception:
-                btn_node_cal_main.grid(row=0, column=0, sticky='ew')
-        except Exception:
-            pass
+        # (Botão de calibração movido para a seção superior, ao lado da Porta COM)
 
         # Fin configuración de nodos
-        except Exception:
-            # Si falla la creación de la pestaña, continuar sin bloquear el diálogo
-            pass
 
         # Definir la función save_config y asignarla a la referencia del header
         def save_config():
@@ -4746,39 +4798,19 @@ class BalanzaGUI(ttk.Window):
         # Configurar protocolo de cierre
         dialog.protocol("WM_DELETE_WINDOW", safe_close_dialog)
 
-        # Modal behavior
-        dialog.transient(self)
-        # Sincronizar tamanho com a janela principal respeitando a barra de tarefas
+        # Copiar posição e tamanho real da janela principal (mesma abordagem que
+        # o wizard de calibração, que funciona corretamente respeitando a taskbar).
         try:
             self.update_idletasks()
-            wx = self.winfo_rootx()
-            wy = self.winfo_rooty()
+            wx = self.winfo_x()
+            wy = self.winfo_y()
             ww = self.winfo_width()
             wh = self.winfo_height()
-            if ww > 1 and wh > 1:
-                dialog.geometry(f"{ww}x{wh}+{wx}+{wy}")
-            else:
-                dialog.geometry(self.geometry())
+            dialog.geometry(f"{ww}x{wh}+{wx}+{wy}")
         except Exception:
-            try:
-                dlg_h = int(screen_h * 0.94)
-                dialog.geometry(f"{screen_w}x{dlg_h}+0+0")
-            except Exception:
-                pass
-        # Ajustar a posicao para o canto superior esquerdo da area utilizavel
+            pass
         try:
-            import ctypes
-            from ctypes import wintypes
-            class RECT(ctypes.Structure):
-                _fields_ = [("left", wintypes.LONG), ("top", wintypes.LONG),
-                            ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
-            SPI_GETWORKAREA = 0x0030
-            rect = RECT()
-            if ctypes.windll.user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(rect), 0):
-                work_w = rect.right - rect.left
-                work_h = rect.bottom - rect.top
-                if work_w > 1 and work_h > 1:
-                    dialog.geometry(f"{work_w}x{work_h}+{rect.left}+{rect.top}")
+            dialog.transient(self)
         except Exception:
             pass
 

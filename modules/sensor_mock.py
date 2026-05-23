@@ -1,6 +1,7 @@
 import time
 import threading
 import random
+import math
 from collections import deque
 from typing import Dict, Any, List, Optional
 
@@ -96,7 +97,9 @@ class MockDriver(ISistemaPesaje):
                         # Carga em escada: 0 -> 1200 -> 0
                         val = self._next_stair_value()
                     elif channel in ch_angles:
-                        val = 0.0
+                        # Generar un ángulo simulado oscilante para pruebas
+                        freq_multiplier = 1.0 + (nid % 3) * 0.5
+                        val = round(15.0 * math.sin(time.time() * freq_multiplier), 2)
                     else:
                         val = 0.0
                     

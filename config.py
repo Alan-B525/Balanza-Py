@@ -68,19 +68,21 @@ BAUDRATE = 3000000
 
 NODOS_CONFIG = {
     "celda_1": {
-        "id": 9421,
+        "id": 19345,
         "ch_load": "ch1",
         "ch_angles": ["ch2", "ch3"],
         "load_enabled": True,
+        "convert_rad_to_deg": False,
         "ch": "ch1",
         "serial": "3015",
         "com_port": "COM4"
     },
     "celda_2": {
-        "id": 9422,
+        "id": 19344,
         "ch_load": "ch1",
         "ch_angles": ["ch1", "ch2", "ch3"],
         "load_enabled": False,
+        "convert_rad_to_deg": False,
         "ch": "ch1",
         "serial": "",
         "com_port": "COM4"

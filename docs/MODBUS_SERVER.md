@@ -118,7 +118,7 @@ La sección `transmissao` controla el servidor Modbus:
 
 | Dirección | Tipo | Contenido |
 |---|---|---|
-| **1000-1001** | Holding Register (HR) | Peso neto total – **float32** |
+| **1000-1001** | Holding Register (HR) | Peso bruto total – **float32** |
 | **1002-1003** | Holding Register (HR) | Angulo 1 – **float32** |
 | **1004-1005** | Holding Register (HR) | Angulo 2 – **float32** |
 | **1006-1007** | Holding Register (HR) | Angulo 3 – **float32** |
@@ -413,18 +413,20 @@ ModbusDataServer(..., holding_start=2000)
 
 ### ¿Cómo se codifica el peso en los registros?
 
-```
-peso_float = 618.442  (en kg)
-int32      = 618442   (peso × 1000, eliminando decimales)
-reg[1000]  = 0x0009   (int32 >> 16, word alta)
-reg[1001]  = 0x6F0A   (int32 & 0xFFFF, word baja)
-```
+Los datos de peso bruto y los 5 ángulos se transmiten en formato de punto flotante de precisión simple (float32 de 32 bits según la norma IEEE 754), ocupando dos registros de 16 bits cada uno.
 
-Para decodificar en el cliente/PLC:
+Ejemplo de decodificación en Python:
+```python
+import struct
 
-```
-int32 = (reg[1000] << 16) | reg[1001]
-peso  = int32 / 1000.0
+def regs_to_float32(hi, lo, swap_words=False):
+    if swap_words:
+        hi, lo = lo, hi
+    packed = bytes([(hi >> 8) & 0xFF, hi & 0xFF, (lo >> 8) & 0xFF, lo & 0xFF])
+    return struct.unpack('>f', packed)[0]
+
+# El peso bruto total está en los registros 1000 y 1001
+peso_bruto = regs_to_float32(reg[1000], reg[1001])
 ```
 
 ### ¿Los 3 Mbaud son necesarios?

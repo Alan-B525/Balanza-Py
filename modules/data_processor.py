@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 data_processor.py - Procesador de Datos para Sistema de Pesaje Industrial
 """
@@ -8,6 +8,7 @@ from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 import time
 import statistics
+import math
 
 
 @dataclass
@@ -297,6 +298,7 @@ class DataProcessor:
                     resultado["any_disconnected"] = True
 
             # --- PROCESAR CANALES DE ANGULO ---
+            convert_rad = bool(cfg.get('convert_rad_to_deg', False))
             for ch_angle in ch_angles:
                 comp_angle = f"{node_id}:{ch_angle}"
                 self._check_connection(comp_angle, current_time, resultado, emit_event=False)
@@ -305,6 +307,8 @@ class DataProcessor:
                 if comp_angle in datos_por_nodo:
                     try:
                         val_angle = float(datos_por_nodo[comp_angle])
+                        if convert_rad:
+                            val_angle = math.degrees(val_angle)
                     except:
                         val_angle = 0.0
                     self._last_raw_readings[comp_angle] = val_angle
@@ -331,6 +335,7 @@ class DataProcessor:
                     "valor": round(sensor_net, 3),
                     "raw": round(val_load_filt, 3),
                     "crudo": round(val_load_raw, 3),
+                    "bruto": round(_contrib_por_key.get(comp_load, 0.0), 3),
                     "angles": [round(a, 2) for a in node_angles],
                     "id": node_id,
                     "key": comp_load,
@@ -349,6 +354,9 @@ class DataProcessor:
         else:
             peso_bruto = (sum_raw_connected * self.system_slope) + self.system_offset
         
+        # Guardar peso bruto en el resultado
+        resultado["total_gross"] = round(peso_bruto, 3)
+
         # Calcular tara total (suma de taras de los canales de carga activos o configurados)
         tara_total = 0.0
         for k, v in self._tares.items():
@@ -383,9 +391,34 @@ class DataProcessor:
         resultado["total_tare"] = round(tara_total, 3)
         resultado["total_last_seen"] = self._last_total_seen
         
-        # Ángulo Final (compatibilidad): promedio simple de todos los canales
-        if angle_count > 0:
-            resultado["angle_val"] = round(total_angle_val / angle_count, 2)
+        # Ángulo Final (compatibilidad): promedio circular de todos los canales activos
+        valid_angles = []
+        for nombre_logico, cfg in self.nodos_config.items():
+            if not isinstance(cfg, dict):
+                cfg = {}
+            node_id = cfg.get("id", 0)
+            ch_angles = cfg.get('ch_angles')
+            if not isinstance(ch_angles, list):
+                ch_single = cfg.get('ch_angle', 'ch2')
+                ch_angles = [ch_single]
+            ch_angles = [str(ch).strip() for ch in ch_angles if str(ch).strip()]
+            for ch_angle in ch_angles:
+                comp_angle = f"{node_id}:{ch_angle}"
+                if comp_angle in datos_por_nodo or self._node_connected_state.get(comp_angle, False):
+                    valid_angles.append(self._last_raw_readings.get(comp_angle, 0.0))
+
+        if valid_angles:
+            try:
+                sum_sin = 0.0
+                sum_cos = 0.0
+                for a in valid_angles:
+                    rad = math.radians(a)
+                    sum_sin += math.sin(rad)
+                    sum_cos += math.cos(rad)
+                mean_rad = math.atan2(sum_sin, sum_cos)
+                resultado["angle_val"] = round(math.degrees(mean_rad), 2)
+            except Exception:
+                resultado["angle_val"] = 0.0
         else:
             resultado["angle_val"] = 0.0
 
