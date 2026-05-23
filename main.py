@@ -164,6 +164,7 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
     modbus_block_size = max(1, int(RUNTIME_TUNING.get('modbus_net_window_size', 30)))
     modbus_net_window = deque(maxlen=modbus_block_size)
     last_angles = [0.0, 0.0, 0.0, 0.0, 0.0]
+    cancel_connect_requested = False
 
     def _is_serial_port_available(port_name):
         try:
@@ -257,7 +258,7 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                 cmd_msg = command_queue.get_nowait()
                 cmd = cmd_msg['cmd']
                 
-                if cmd == 'CONNECT':
+                if cmd in ('CONNECT', 'CONNECT_WITH_PROGRESS'):
                     if not connection_in_progress:
                         connection_in_progress = True
                         
@@ -280,28 +281,36 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                                         recovered = int(sistema_pesaje.get_recovered_count() or 0)
                                 except Exception:
                                     recovered = 0
-
-                                data_queue.put({'type': 'STATUS', 'payload': connected})
-                                if connected:
-                                    data_queue.put({'type': 'LOG', 'payload': f"Conectado com sucesso a {ACTIVE_COM}"})
-                                    # Notify GUI progress finished
-                                    data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'success', 'message': 'Conexão estabelecida'}})
-                                    acquisition_paused = False
-                                    modbus_net_window.clear()
-                                    diag_samples_budget = 6
-                                    diag_last_log_ts = 0.0
-                                    reconnecting_nodes.clear()
-                                    reconnect_attempts.clear()
-                                    _start_modbus_if_needed()
+                                if cancel_connect_requested:
+                                    try:
+                                        sistema_pesaje.desconectar()
+                                    except Exception:
+                                        pass
+                                    data_queue.put({'type': 'STATUS', 'payload': False})
+                                    data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'cancelled', 'message': 'Conexão cancelada'}})
+                                    data_queue.put({'type': 'LOG', 'payload': 'Conexão cancelada pelo usuário.'})
+                                    cancel_connect_requested = False
                                 else:
-                                    # Si hubo recuperación parcial, reportar 'partial' en lugar de 'failed'
-                                    if recovered > 0:
-                                        try:
-                                            expected = len(ACTIVE_NODOS) if ACTIVE_NODOS else 0
-                                        except Exception:
-                                            expected = 0
-                                        data_queue.put({'type': 'LOG', 'payload': f"Conexão parcial: {recovered}/{expected} nós"})
-                                        data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'partial', 'message': f'Conexão parcial: {recovered}/{expected} nós', 'recovered': recovered, 'expected': expected}})
+                                    connected_effective = bool(connected or recovered > 0)
+                                    data_queue.put({'type': 'STATUS', 'payload': connected_effective})
+                                    if connected_effective:
+                                        if connected:
+                                            data_queue.put({'type': 'LOG', 'payload': f"Conectado com sucesso a {ACTIVE_COM}"})
+                                            data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'success', 'message': 'Conexão estabelecida'}})
+                                        else:
+                                            try:
+                                                expected = len(ACTIVE_NODOS) if ACTIVE_NODOS else 0
+                                            except Exception:
+                                                expected = 0
+                                            data_queue.put({'type': 'LOG', 'payload': f"Conexão parcial: {recovered}/{expected} nós"})
+                                            data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'partial', 'message': f'Conexão parcial: {recovered}/{expected} nós', 'recovered': recovered, 'expected': expected}})
+                                        acquisition_paused = False
+                                        modbus_net_window.clear()
+                                        diag_samples_budget = 6
+                                        diag_last_log_ts = 0.0
+                                        reconnecting_nodes.clear()
+                                        reconnect_attempts.clear()
+                                        _start_modbus_if_needed()
                                     else:
                                         data_queue.put({'type': 'LOG', 'payload': f"Falha ao conectar a {ACTIVE_COM}"})
                                         data_queue.put({'type': 'CONNECTION_PROGRESS', 'payload': {'status': 'failed', 'message': 'Falha ao conectar'}})
@@ -319,11 +328,9 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                         connection_thread = threading.Thread(target=do_connect, daemon=True)
                         connection_thread.start()
                 
-                elif cmd == 'CONNECT_WITH_PROGRESS':
-                    pass
-                
                 elif cmd == 'CANCEL_CONNECT':
-                    pass
+                    cancel_connect_requested = True
+                    data_queue.put({'type': 'LOG', 'payload': 'Cancelamento solicitado. Aguardando término da conexão...'} )
                     
                 elif cmd == 'DISCONNECT':
                     sistema_pesaje.desconectar()
@@ -331,6 +338,7 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                     data_queue.put({'type': 'LOG', 'payload': "Sistema desconectado pelo usuário."})
                     acquisition_paused = True
                     modbus_net_window.clear()
+                    cancel_connect_requested = False
                     if modbus_server is not None:
                         try:
                             modbus_server.stop()
@@ -452,11 +460,34 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
 
                             data_queue.put({'type': 'LOG', 'payload': f"Mapeamento de nós atualizado ({len(ACTIVE_NODOS)} nós)"})
 
+                            # Recalcular canal de publicação Modbus (celda_1 ch_load)
+                            try:
+                                if modbus_params is None:
+                                    modbus_params = {}
+                                modbus_params['data_source_key'] = None
+                                cfg_c1 = ACTIVE_NODOS.get('celda_1', {}) if isinstance(ACTIVE_NODOS, dict) else {}
+                                node_id = cfg_c1.get('id') if isinstance(cfg_c1, dict) else None
+                                ch_load = None
+                                if isinstance(cfg_c1, dict):
+                                    ch_load = cfg_c1.get('ch_load') or cfg_c1.get('ch')
+                                if node_id is not None:
+                                    modbus_params['data_source_key'] = f"{node_id}:{ch_load or 'ch1'}"
+                            except Exception:
+                                pass
+
                         # Actualizar parámetros de Modbus RTU en caliente
                         if isinstance(new_transmissao, dict):
                             if modbus_params is None:
                                 modbus_params = {}
-                            old_modbus_port = str(modbus_params.get('serial_port') or '').strip()
+                            old_modbus_conf = {
+                                'serial_port': str(modbus_params.get('serial_port') or '').strip(),
+                                'baudrate': modbus_params.get('baudrate'),
+                                'parity': modbus_params.get('parity'),
+                                'stopbits': modbus_params.get('stopbits'),
+                                'bytesize': modbus_params.get('bytesize'),
+                                'timeout': modbus_params.get('timeout'),
+                                'enabled': bool(modbus_params.get('enabled', True)),
+                            }
                             porta_conf = new_transmissao.get('porta')
                             if isinstance(porta_conf, str) and porta_conf.strip():
                                 modbus_params['serial_port'] = porta_conf.strip()
@@ -494,12 +525,21 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                             except Exception:
                                 pass
                             # Si cambia el puerto/config de Modbus, permitir nuevo intento de arranque
-                            new_modbus_port = str(modbus_params.get('serial_port') or '').strip()
+                            new_modbus_conf = {
+                                'serial_port': str(modbus_params.get('serial_port') or '').strip(),
+                                'baudrate': modbus_params.get('baudrate'),
+                                'parity': modbus_params.get('parity'),
+                                'stopbits': modbus_params.get('stopbits'),
+                                'bytesize': modbus_params.get('bytesize'),
+                                'timeout': modbus_params.get('timeout'),
+                                'enabled': bool(modbus_params.get('enabled', True)),
+                            }
                             modbus_waiting_config_change = False
                             modbus_last_not_started_reason = None
                             modbus_start_ts = None
                             modbus_fail_count = 0
-                            if modbus_server is not None and new_modbus_port != old_modbus_port:
+                            modbus_conf_changed = (old_modbus_conf != new_modbus_conf)
+                            if modbus_server is not None and (modbus_conf_changed or not new_modbus_conf.get('enabled', True)):
                                 try:
                                     modbus_server.stop()
                                 except Exception:
@@ -760,23 +800,41 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
 
                 # Empujar datos al servidor Modbus (si está activo)
                 try:
-                    if modbus_server is not None and raw_data:
-                        # Publicar sólo ante nueva muestra recibida del sensor
-                        latest_ts = None
-                        try:
-                            last_frame = raw_data[-1] if isinstance(raw_data, list) and raw_data else {}
-                            if isinstance(last_frame, dict):
-                                latest_ts = last_frame.get('timestamp_ns', None)
-                                if latest_ts is None:
-                                    latest_ts = last_frame.get('timestamp', None)
-                        except Exception:
+                        if modbus_server is not None and raw_data:
+                            # Publicar sólo ante nueva muestra recibida del sensor
                             latest_ts = None
+                            try:
+                                last_frame = raw_data[-1] if isinstance(raw_data, list) and raw_data else {}
+                                if isinstance(last_frame, dict):
+                                    latest_ts = last_frame.get('timestamp_ns', None)
+                                    if latest_ts is None:
+                                        latest_ts = last_frame.get('timestamp', None)
+                            except Exception:
+                                latest_ts = None
 
-                        # Publicar inmediatamente ante nueva muestra recibida del sensor
-                        if latest_ts is None or latest_ts != last_modbus_sample_ts:
-                            total_neto = float(datos_procesados.get('total', 0.0) or 0.0)
-                            if latest_ts is not None:
-                                last_modbus_sample_ts = latest_ts
+                            # Publicar inmediatamente ante nueva muestra recibida del sensor
+                            if latest_ts is None or latest_ts != last_modbus_sample_ts:
+                                total_neto = float(datos_procesados.get('total', 0.0) or 0.0)
+                                modbus_value = total_neto
+                                try:
+                                    if modbus_params and modbus_params.get('data_source_key'):
+                                        src = modbus_params.get('data_source_key')
+                                        sensores = datos_procesados.get('sensores', {}) or {}
+                                        sensor_info = sensores.get('celda_1')
+                                        if isinstance(sensor_info, dict) and sensor_info.get('key') == src:
+                                            modbus_value = float(sensor_info.get('valor', total_neto))
+                                        else:
+                                            try:
+                                                for info in sensores.values():
+                                                    if isinstance(info, dict) and info.get('key') == src:
+                                                        modbus_value = float(info.get('valor', total_neto))
+                                                        break
+                                            except Exception:
+                                                pass
+                                except Exception:
+                                    modbus_value = total_neto
+                                if latest_ts is not None:
+                                    last_modbus_sample_ts = latest_ts
 
                             swap_words = False
                             try:
@@ -784,7 +842,7 @@ def hilo_adquisicion(data_queue, command_queue, sistema_pesaje, procesador, modb
                             except Exception:
                                 swap_words = False
 
-                            regs = _float_to_float32_registers(total_neto, swap_words)
+                            regs = _float_to_float32_registers(modbus_value, swap_words)
 
                             modbus_ok = modbus_server.push_data(regs)
                             if modbus_ok:
@@ -950,6 +1008,19 @@ def main():
             except Exception:
                 pass
 
+        # Determinar fuente de datos Modbus: celda_1 ch_load por defecto
+        data_source_key = None
+        try:
+            if isinstance(ACTIVE_NODOS, dict):
+                cfg_c1 = ACTIVE_NODOS.get('celda_1', {})
+                if isinstance(cfg_c1, dict):
+                    node_id = cfg_c1.get('id')
+                    ch_load = cfg_c1.get('ch_load') or cfg_c1.get('ch')
+                    if node_id is not None:
+                        data_source_key = f"{node_id}:{ch_load or 'ch1'}"
+        except Exception:
+            data_source_key = None
+
         modbus_params = {
             'enabled': bool(modbus_enabled and serial_port),
             'serial_port': serial_port,
@@ -959,6 +1030,7 @@ def main():
             'bytesize': bytesize,
             'timeout': timeout,
             'swap_words': swap_words,
+            'data_source_key': data_source_key,
         }
     except Exception:
         modbus_params = None

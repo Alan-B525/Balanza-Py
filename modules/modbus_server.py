@@ -61,6 +61,7 @@ class ModbusDataServer:
 
         # Legacy coil addresses (compatibilidad con clientes que revisan coils)
         self.COIL_DATA_AVAILABLE = 0
+        self.COIL_ACK = 1
 
         self.is_running = False
         self.last_error_msg: Optional[str] = None
@@ -164,6 +165,11 @@ class ModbusDataServer:
             self._context[0x00].setValues(3, self.holding_start, safe)
             # Mantener coil data_available=1 para clientes legacy
             self._context[0x00].setValues(1, self.COIL_DATA_AVAILABLE, [1])
+            # Dejar coil ack en 0 (cliente puede escribir 1 para confirmar)
+            try:
+                self._context[0x00].setValues(1, self.COIL_ACK, [0])
+            except Exception:
+                pass
             return True
         except Exception:
             log.exception("Error publicando registros Modbus")
