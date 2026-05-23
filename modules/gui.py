@@ -400,7 +400,7 @@ class BalanzaGUI(ttk.Window):
         self.style.configure('AngleTitle.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_MAIN, sf(36), "bold"))
         self.style.configure('AngleValue.TLabel', background=BG_CARD, foreground=TEXT_MAIN, font=(FONT_NUMBERS, sf(36), "bold"))
         self.style.configure('AngleTile.TFrame', background='#eef2ff', relief='solid', borderwidth=1)
-        self.style.configure('AngleTileTitle.TLabel', background='#eef2ff', foreground='#4f46e5',
+        self.style.configure('AngleTileTitle.TLabel', background='#eef2ff', foreground=TEXT_MUTED,
                              font=(FONT_MAIN, sf(16), 'bold'))
         self.style.configure('AngleTileValue.TLabel', background='#eef2ff', foreground='#1e1b4b',
                              font=(FONT_NUMBERS, sf(34), 'bold'))
@@ -3669,7 +3669,8 @@ class BalanzaGUI(ttk.Window):
                         font=('Segoe UI', self.scaled_font(15), 'bold'),
                         padding=(self.scaled(50), self.scaled(14)),
                         background='#e2e8f0',
-                        foreground='#475569')
+                        foreground='#475569',
+                        anchor='center')
         style.map('CfgTab.TNotebook.Tab',
                   background=[('selected', '#2563eb'), ('active', '#dbeafe')],
                   foreground=[('selected', 'white'), ('active', '#1e40af')])
@@ -3821,6 +3822,34 @@ class BalanzaGUI(ttk.Window):
         # === NOTEBOOK (TABS) — estilo CfgTab ===
         notebook = ttk.Notebook(main_frame, style='CfgTab.TNotebook')
         notebook.pack(fill=BOTH, expand=True, pady=(6, 0))
+
+        def _sync_cfg_tab_width(event=None):
+            try:
+                tab_count = len(notebook.tabs())
+                if tab_count <= 0:
+                    return
+                w = int(notebook.winfo_width())
+                if w <= 1:
+                    return
+                avail = max(1, w - self.scaled(16))
+                per_tab_px = max(1, int(avail / tab_count))
+                try:
+                    import tkinter.font as tkfont
+                    tab_font = style.lookup('CfgTab.TNotebook.Tab', 'font')
+                    f = tkfont.Font(font=tab_font) if tab_font else tkfont.nametofont('TkDefaultFont')
+                    char_w = max(1, int(f.measure('0')))
+                except Exception:
+                    char_w = 8
+                tab_chars = max(6, int(per_tab_px / char_w))
+                style.configure('CfgTab.TNotebook.Tab', width=tab_chars)
+            except Exception:
+                pass
+
+        try:
+            notebook.bind('<Configure>', _sync_cfg_tab_width, add='+')
+            notebook.after(50, _sync_cfg_tab_width)
+        except Exception:
+            pass
 
         # --- TAB 1: Configuração (Existing) ---
         tab_config = ttk.Frame(notebook, padding=10)
@@ -4019,6 +4048,12 @@ class BalanzaGUI(ttk.Window):
             self.option_add('*TCombobox*Listbox.font', base_font)
         except Exception:
             pass
+        try:
+            style = ttk.Style()
+            style.configure('Trans.Check.TCheckbutton', font=base_font)
+            style.configure('Trans.CheckBig.TCheckbutton', font=base_font)
+        except Exception:
+            pass
         
         
         # Preparar lista de puertos COM disponibles (se usará tanto para nodos como para transmisión)
@@ -4061,7 +4096,11 @@ class BalanzaGUI(ttk.Window):
         modbus_content.columnconfigure(0, weight=1)
         modbus_content.rowconfigure(0, weight=1)
 
-        discover_frame = ttk.Labelframe(modbus_content, text="Transmissão de Dados", padding=15, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Panel.TLabelframe')
+        discover_frame = ttk.Labelframe(
+            modbus_content, text="Transmissão de Dados",
+            padding=15, borderwidth=self.scaled(3),
+            relief='solid', labelanchor='n', style='Panel.TLabelframe'
+        )
         discover_frame.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
         discover_frame.rowconfigure(0, weight=1)
         discover_frame.columnconfigure(0, weight=1)
@@ -4092,51 +4131,82 @@ class BalanzaGUI(ttk.Window):
         trans_grid = ttk.Frame(discover_frame)
         trans_grid.pack(fill=BOTH, expand=True, pady=10)
         trans_grid.columnconfigure(0, weight=0, minsize=self.scaled(140))
-        trans_grid.columnconfigure(1, weight=1)
-        for r in range(5):
-            trans_grid.rowconfigure(r, weight=1)
+        trans_grid.columnconfigure(1, weight=0)
+        for r in range(7):
+            trans_grid.rowconfigure(r, weight=0)
+        row_pad = self.scaled(6)
 
-        ttk.Label(trans_grid, text="Porta:", font=base_font_bold).grid(row=0, column=0, sticky='w', padx=(0, 20), pady=6)
+        ttk.Label(trans_grid, text="Porta:", font=base_font_bold).grid(row=0, column=0, sticky='w', padx=(0, 20), pady=row_pad)
         try:
             entry_trans = ttk.Combobox(trans_grid, font=base_font, values=com_values)
             entry_trans.set(current_port)
         except Exception:
             entry_trans = ttk.Entry(trans_grid, font=base_font)
             entry_trans.insert(0, current_port)
-        entry_trans.grid(row=0, column=1, sticky='ew', ipady=self.scaled(6), pady=6)
+        entry_trans.grid(row=0, column=1, sticky='w', ipady=self.scaled(4), pady=row_pad)
+        try:
+            entry_trans.configure(width=14)
+        except Exception:
+            pass
 
-        ttk.Label(trans_grid, text="Velocidade:", font=base_font_bold).grid(row=1, column=0, sticky='w', padx=(0, 20), pady=6)
+        ttk.Label(trans_grid, text="Velocidade:", font=base_font_bold).grid(row=1, column=0, sticky='w', padx=(0, 20), pady=row_pad)
         entry_baud = ttk.Combobox(trans_grid, font=base_font, values=['9600', '19200', '38400', '57600', '115200'])
         modbus_cfg = current_config.get('transmissao', {})
         baud_val = modbus_cfg.get('velocidade', current_config.get('baudrate', 115200))
         entry_baud.set(str(baud_val))
-        entry_baud.grid(row=1, column=1, sticky='ew', ipady=self.scaled(5), pady=6)
+        entry_baud.grid(row=1, column=1, sticky='w', ipady=self.scaled(4), pady=row_pad)
+        try:
+            entry_baud.configure(width=14)
+        except Exception:
+            pass
 
-        ttk.Label(trans_grid, text="Paridade:", font=base_font_bold).grid(row=2, column=0, sticky='w', padx=(0, 20), pady=6)
-        combo_parity = ttk.Combobox(trans_grid, font=base_font, values=['Nenhuma', 'Par', 'Ímpar'])
+        try:
+            style = ttk.Style()
+            style.configure('Modbus.Radio.TRadiobutton', font=base_font_bold, padding=(self.scaled(14), self.scaled(8)))
+        except Exception:
+            pass
+
+        ttk.Label(trans_grid, text="Paridade:", font=base_font_bold).grid(row=4, column=0, sticky='w', padx=(0, 20), pady=row_pad)
         parity_val = modbus_cfg.get('paridade', current_config.get('paridade', 'Nenhuma'))
-        combo_parity.set(parity_val)
-        combo_parity.grid(row=2, column=1, sticky='ew', ipady=self.scaled(5), pady=6)
+        parity_var = tk.StringVar(value=parity_val)
+        parity_frame = ttk.Frame(trans_grid)
+        parity_frame.grid(row=4, column=1, sticky='w', pady=row_pad)
+        for label in ['Nenhuma', 'Par', 'Ímpar']:
+            rb = ttk.Radiobutton(
+                parity_frame,
+                text=label,
+                value=label,
+                variable=parity_var,
+                bootstyle='info',
+                style='Modbus.Radio.TRadiobutton'
+            )
+            rb.pack(side=LEFT, padx=self.scaled(8))
 
-        ttk.Label(trans_grid, text="ID Escravo:", font=base_font_bold).grid(row=3, column=0, sticky='w', padx=(0, 20), pady=6)
+        ttk.Label(trans_grid, text="ID Escravo:", font=base_font_bold).grid(row=3, column=0, sticky='w', padx=(0, 20), pady=row_pad)
         e_slave = ttk.Entry(trans_grid, font=base_font)
         slave_val = modbus_cfg.get('id_escravo_pc', current_config.get('id_escravo_pc', 1))
         e_slave.insert(0, str(slave_val))
-        e_slave.grid(row=3, column=1, sticky='ew', ipady=self.scaled(5), pady=6)
+        e_slave.grid(row=3, column=1, sticky='w', ipady=self.scaled(4), pady=row_pad)
+        try:
+            e_slave.configure(width=14)
+        except Exception:
+            pass
 
         swap_val = modbus_cfg.get('swap_words', current_config.get('swap_words', False))
-        swap_var = tk.BooleanVar(value=bool(swap_val))
-        try:
-            ttk.Checkbutton(
-                trans_grid, text='Inverter Bytes (Swap Words)',
-                variable=swap_var, bootstyle='secondary',
-                style='Trans.Check.TCheckbutton'
-            ).grid(row=4, column=0, columnspan=2, sticky='w', pady=(10, 0))
-        except Exception:
-            ttk.Checkbutton(
-                trans_grid, text='Inverter Bytes (Swap Words)',
-                variable=swap_var, bootstyle='secondary'
-            ).grid(row=4, column=0, columnspan=2, sticky='w', pady=(10, 0))
+        swap_var = tk.StringVar(value='Sim' if bool(swap_val) else 'Não')
+        swap_frame = ttk.Frame(trans_grid)
+        swap_frame.grid(row=5, column=0, columnspan=2, sticky='w', pady=row_pad)
+        ttk.Label(swap_frame, text='Inverter Bytes (Swap Words):', font=base_font_bold).pack(side=LEFT, padx=(0, 10))
+        for label in ['Sim', 'Não']:
+            rb = ttk.Radiobutton(
+                swap_frame,
+                text=label,
+                value=label,
+                variable=swap_var,
+                bootstyle='info',
+                style='Modbus.Radio.TRadiobutton'
+            )
+            rb.pack(side=LEFT, padx=self.scaled(8))
 
         # Spacer no longer needed as trans_grid expands with grid weights
         
@@ -4511,11 +4581,11 @@ class BalanzaGUI(ttk.Window):
             except Exception:
                 _porta = current_config.get('transmissao', {}).get('porta', 'COM10')
             try:
-                _paridade = combo_parity.get()
+                _paridade = parity_var.get()
             except Exception:
                 _paridade = current_config.get('transmissao', {}).get('paridade', 'Nenhuma')
             try:
-                _swap = bool(swap_var.get())
+                _swap = True if swap_var.get() == 'Sim' else False
             except Exception:
                 _swap = current_config.get('transmissao', {}).get('swap_words', False)
 
@@ -4681,20 +4751,39 @@ class BalanzaGUI(ttk.Window):
 
         # Modal behavior
         dialog.transient(self)
-        # Sincronizar tamanho e maximização com a janela principal (evitando ultrapassar a barra de tarefas)
+        # Sincronizar tamanho com a janela principal respeitando a barra de tarefas
         try:
-            dialog.geometry(self.geometry())
-            if self.state() == 'zoomed':
-                dialog.state('zoomed')
+            self.update_idletasks()
+            wx = self.winfo_rootx()
+            wy = self.winfo_rooty()
+            ww = self.winfo_width()
+            wh = self.winfo_height()
+            if ww > 1 and wh > 1:
+                dialog.geometry(f"{ww}x{wh}+{wx}+{wy}")
+            else:
+                dialog.geometry(self.geometry())
         except Exception:
             try:
-                dialog.state('zoomed')
+                dlg_h = int(screen_h * 0.94)
+                dialog.geometry(f"{screen_w}x{dlg_h}+0+0")
             except Exception:
-                try:
-                    dialog.attributes('-zoomed', True)
-                except Exception:
-                    dlg_h = int(screen_h * 0.94)
-                    dialog.geometry(f"{screen_w}x{dlg_h}+0+0")
+                pass
+        # Ajustar a posicao para o canto superior esquerdo da area utilizavel
+        try:
+            import ctypes
+            from ctypes import wintypes
+            class RECT(ctypes.Structure):
+                _fields_ = [("left", wintypes.LONG), ("top", wintypes.LONG),
+                            ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
+            SPI_GETWORKAREA = 0x0030
+            rect = RECT()
+            if ctypes.windll.user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(rect), 0):
+                work_w = rect.right - rect.left
+                work_h = rect.bottom - rect.top
+                if work_w > 1 and work_h > 1:
+                    dialog.geometry(f"{work_w}x{work_h}+{rect.left}+{rect.top}")
+        except Exception:
+            pass
 
         # Mostrar la ventana ahora que todos los widgets están construidos
         try:
@@ -4718,15 +4807,18 @@ class BalanzaGUI(ttk.Window):
     def _setup_calibration_tab(self, parent, current_config, close_config_dialog=None, config_dialog=None):
         """Configura a aba de calibração de sensores (Layout Tablet Grande)."""
         from modules.calibration import CalibrationManager
+
+        base_font = ("Segoe UI", self.scaled_font(16))
+        base_font_bold = ("Segoe UI", self.scaled_font(16), "bold")
         
         # Mapeo de nombres internos a nombres en portugués para display
         def get_display_name(internal_name):
             """Convierte nombre interno a nombre legible en portugués."""
             display_map = {
-                'celda_1': 'Célula 1',
-                'celda_2': 'Célula 2', 
-                'celda_3': 'Célula 3',
-                'celda_4': 'Célula 4',
+                'celda_1': 'Nó 1',
+                'celda_2': 'Nó 2',
+                'celda_3': 'Nó 3',
+                'celda_4': 'Nó 4',
             }
             return display_map.get(internal_name, internal_name.replace('_', ' ').title())
         
@@ -4735,8 +4827,8 @@ class BalanzaGUI(ttk.Window):
         
         # Descricao breve
         ttk.Label(parent, 
-                  text="Selecione o sensor para iniciar o ensaio de calibração.",
-                  font=("Segoe UI", 12), foreground="#64748b",
+                  text="Selecione o nó e o canal de carga para iniciar a calibração.",
+                  font=base_font, foreground="#64748b",
                   wraplength=800).pack(anchor="w", pady=(0, 15))
         
         # === SELECCION DE SENSOR (GRIGO DE BOTONES GRANDES) ===
@@ -4749,6 +4841,7 @@ class BalanzaGUI(ttk.Window):
         # Container interior con borde para diferenciar visualmente la zona
         inner_container = ttk.Frame(select_frame, style='CardNoBorder.TFrame') 
         inner_container.pack(fill=X)
+        inner_container.columnconfigure(1, weight=1)
         # Guardar referencia para poder refrescar los números de serie cuando cambien
         try:
             self._cal_select_inner = inner_container
@@ -4756,16 +4849,64 @@ class BalanzaGUI(ttk.Window):
             pass
         
         sensor_names = list(current_config.get("nodes", {}).keys())
-        # En modo single-node mostrar un único botón grande que inicie la calibración
-        # directamente en la primera celda (celda_1). No es necesario seleccionar.
+        if not sensor_names:
+            sensor_names = ["celda_1"]
         selected_key = next(iter(sensor_names), "celda_1")
         self._cal_sensor_selected = tk.StringVar(value=selected_key)
+
+        node_display_to_internal = {}
+        node_display_values = []
+        for internal in sensor_names:
+            display = get_display_name(internal)
+            node_display_to_internal[display] = internal
+            node_display_values.append(display)
+
+        def _get_default_load_channel(internal_name):
+            try:
+                cfg = current_config.get('nodes', {}).get(internal_name, {})
+                ch = cfg.get('ch_load') or cfg.get('ch')
+                if ch:
+                    return ch
+            except Exception:
+                pass
+            return 'ch1'
+
+        node_display_default = get_display_name(selected_key)
+        node_var = tk.StringVar(value=node_display_default)
+        channel_var = tk.StringVar(value=_get_default_load_channel(selected_key))
+        self._cal_channel_selected = channel_var
+
+        ttk.Label(inner_container, text="Nó:", font=base_font_bold).grid(row=0, column=0, sticky='w', padx=(0, 12), pady=6)
+        node_combo = ttk.Combobox(inner_container, values=node_display_values, textvariable=node_var, font=base_font, state='readonly')
+        node_combo.grid(row=0, column=1, sticky='ew', ipady=self.scaled(3), pady=6)
+
+        ttk.Label(inner_container, text="Canal de Carga:", font=base_font_bold).grid(row=1, column=0, sticky='w', padx=(0, 12), pady=6)
+        channel_combo = ttk.Combobox(inner_container, values=['ch1', 'ch2', 'ch3'], textvariable=channel_var, font=base_font, state='readonly')
+        channel_combo.grid(row=1, column=1, sticky='ew', ipady=self.scaled(3), pady=6)
+
+        def _on_node_change(event=None):
+            internal = node_display_to_internal.get(node_var.get(), selected_key)
+            try:
+                self._cal_sensor_selected.set(internal)
+            except Exception:
+                pass
+            channel_var.set(_get_default_load_channel(internal))
+
+        try:
+            node_combo.bind("<<ComboboxSelected>>", _on_node_change)
+        except Exception:
+            pass
 
         action_frame = ttk.Frame(parent)
         action_frame.pack(fill=X, pady=self.scaled(8))
 
         def start_calibration_action():
             sensor_name = self._cal_sensor_selected.get() or "celda_1"
+            channel_name = None
+            try:
+                channel_name = self._cal_channel_selected.get()
+            except Exception:
+                channel_name = None
             if config_dialog:
                 try:
                     config_dialog.grab_release()
@@ -4773,7 +4914,7 @@ class BalanzaGUI(ttk.Window):
                     pass
             # Abrir wizard directamente para la celda seleccionada
             try:
-                self._open_calibration_wizard(current_config, sensor_name, config_dialog)
+                self._open_calibration_wizard(current_config, sensor_name, config_dialog, channel_override=channel_name)
             except Exception as e:
                 try:
                     self.show_alert("Erro", f"Não foi possível iniciar calibração: {e}", "error", parent=parent)
@@ -5173,7 +5314,7 @@ class BalanzaGUI(ttk.Window):
         except Exception:
             pass
     
-    def _open_calibration_wizard(self, current_config, sensor_name_override=None, config_dialog=None):
+    def _open_calibration_wizard(self, current_config, sensor_name_override=None, config_dialog=None, channel_override=None):
         """
         Wizard de Calibração Avançado.
         Permite entrada manual ou captura, múltiplos pontos, e seleção de curva.
@@ -5241,6 +5382,23 @@ class BalanzaGUI(ttk.Window):
             except Exception:
                 pass
 
+        # Canal seleccionado para calibración (por defecto carga del nodo)
+        cal_channel = None
+        try:
+            if channel_override:
+                cal_channel = channel_override
+        except Exception:
+            cal_channel = None
+        if not cal_channel:
+            try:
+                if current_config and isinstance(current_config, dict) and internal_name:
+                    cfg = current_config.get('nodes', {}).get(internal_name, {})
+                    cal_channel = cfg.get('ch_load') or cfg.get('ch')
+            except Exception:
+                cal_channel = None
+        if not cal_channel:
+            cal_channel = 'ch1'
+
 
         self._cal_manager = CalibrationManager(self.data_processor, celda_id=celda_id, serial=serial)
         # Forzar recarga de puntos desde disco
@@ -5287,7 +5445,7 @@ class BalanzaGUI(ttk.Window):
                         serial_num = nodos_cfg[internal_name].get('serial', '?')
             except Exception:
                 pass
-        wizard.title(f"Calibração - Célula {celda_num} (Série {serial_num})")
+        wizard.title(f"Calibração - Nó {celda_num} (Carga {cal_channel})")
         try:
             self._apply_window_icon(wizard)
         except Exception:
@@ -5311,10 +5469,12 @@ class BalanzaGUI(ttk.Window):
             wizard.attributes('-fullscreen', False)
         except Exception:
             pass
-        # Mantener el wizard asociado a la ventana principal para evitar
-        # conflictos de foco con el grab modal del diálogo de configuración.
+        # Mantener el wizard asociado a la ventana principal o diálogo de configuración
         try:
-            wizard.transient(self)
+            if self._config_dialog_ref and self._config_dialog_ref.winfo_exists():
+                wizard.transient(self._config_dialog_ref)
+            else:
+                wizard.transient(self)
         except Exception:
             pass
         try:
@@ -5322,12 +5482,17 @@ class BalanzaGUI(ttk.Window):
             wizard.deiconify()
         except Exception:
             pass
-        # Ocultar la ventana de configuración mientras el wizard esté activo
+        # Desactivar la ventana de configuración mientras el wizard esté activo
+        config_dialog_disabled = False
         if self._config_dialog_ref:
             try:
                 if self._config_dialog_ref.winfo_exists():
-                    self._config_dialog_ref.withdraw()
-                    config_dialog_hidden = True
+                    try:
+                        self._config_dialog_ref.attributes('-disabled', True)
+                        config_dialog_disabled = True
+                    except Exception:
+                        self._config_dialog_ref.withdraw()
+                        config_dialog_hidden = True
             except Exception:
                 pass
         # Evitar grab_set aquí para no bloquear la UI en escenarios de primer guardado
@@ -5366,9 +5531,23 @@ class BalanzaGUI(ttk.Window):
             # Restaurar grab del diálogo de configuración
             if self._config_dialog_ref:
                 try:
-                    if config_dialog_hidden and self._config_dialog_ref.winfo_exists():
-                        self._config_dialog_ref.deiconify()
-                        self._config_dialog_ref.update_idletasks()
+                    if self._config_dialog_ref.winfo_exists():
+                        if config_dialog_hidden:
+                            self._config_dialog_ref.deiconify()
+                            self._config_dialog_ref.update_idletasks()
+                        if config_dialog_disabled:
+                            try:
+                                self._config_dialog_ref.attributes('-disabled', False)
+                            except Exception:
+                                pass
+                        try:
+                            if self._config_dialog_ref.state() != 'zoomed':
+                                self._config_dialog_ref.state('zoomed')
+                        except Exception:
+                            try:
+                                self._config_dialog_ref.attributes('-zoomed', True)
+                            except Exception:
+                                pass
                     self._config_dialog_ref.grab_set()
                     self._config_dialog_ref.lift()
                     self._config_dialog_ref.focus_force()
@@ -5388,11 +5567,22 @@ class BalanzaGUI(ttk.Window):
             selected = None
             if hasattr(self, '_cal_sensor_selected'):
                 selected = self._cal_sensor_selected.get()
+            selected_comp = None
+            try:
+                if current_config and isinstance(current_config, dict) and selected:
+                    cfg = current_config.get('nodes', {}).get(selected, {})
+                    nid = cfg.get('id')
+                    if nid is not None:
+                        selected_comp = f"{nid}:{cal_channel}"
+            except Exception:
+                selected_comp = None
 
             # Priorizar lectura RAW por sensor seleccionado
             try:
                 raw = 0.0
-                if selected:
+                if selected_comp:
+                    raw = float(self.data_processor.get_last_raw_for(selected_comp))
+                elif selected:
                     raw = float(self.data_processor.get_last_raw_for(selected))
                 else:
                     raw = float(self.data_processor.get_last_total_raw())
@@ -5406,15 +5596,23 @@ class BalanzaGUI(ttk.Window):
             if unit == "t":
                 try:
                     proc = getattr(self, '_last_sensor_data', None)
-                    if proc and 'sensores' in proc and selected in proc['sensores']:
-                        val = proc['sensores'][selected].get('valor')
-                        if val is not None:
-                            return float(val) / 1000.0
+                    if proc and 'sensores' in proc:
+                        if selected_comp and selected_comp in proc['sensores']:
+                            val = proc['sensores'][selected_comp].get('valor')
+                            if val is not None:
+                                return float(val) / 1000.0
+                        if selected in proc['sensores']:
+                            val = proc['sensores'][selected].get('valor')
+                            if val is not None:
+                                return float(val) / 1000.0
                 except Exception:
                     pass
                 # Fallback: intentar convertir la lectura CRUDA a peso
                 try:
-                    raw_f = float(self.data_processor.get_last_raw_for(selected))
+                    if selected_comp:
+                        raw_f = float(self.data_processor.get_last_raw_for(selected_comp))
+                    else:
+                        raw_f = float(self.data_processor.get_last_raw_for(selected))
                 except Exception:
                     try:
                         raw_f = float(raw)
@@ -5461,10 +5659,15 @@ class BalanzaGUI(ttk.Window):
             if unit == "kg":
                 try:
                     proc = getattr(self, '_last_sensor_data', None)
-                    if proc and 'sensores' in proc and selected in proc['sensores']:
-                        val = proc['sensores'][selected].get('valor')
-                        if val is not None:
-                            return float(val)
+                    if proc and 'sensores' in proc:
+                        if selected_comp and selected_comp in proc['sensores']:
+                            val = proc['sensores'][selected_comp].get('valor')
+                            if val is not None:
+                                return float(val)
+                        if selected in proc['sensores']:
+                            val = proc['sensores'][selected].get('valor')
+                            if val is not None:
+                                return float(val)
                 except Exception:
                     pass
                 try:
@@ -5567,7 +5770,7 @@ class BalanzaGUI(ttk.Window):
 
         # Icono y título
         # Usar el mismo texto que el título de la ventana
-        label_titulo = f"Curva da Célula {celda_num} (Nº Série {serial_num})"
+        label_titulo = f"Calibração de Carga — Nó {celda_num} ({cal_channel})"
         ttk.Label(header_inner, text=label_titulo,
                   font=("Segoe UI", 22, "bold"),
                   foreground="#1e293b").pack(side=LEFT)
