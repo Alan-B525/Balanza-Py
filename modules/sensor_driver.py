@@ -215,6 +215,17 @@ class MSCLDriver(ISistemaPesaje):
                     return False
                 self._network = mscl.SyncSamplingNetwork(self._base_station)
 
+            # 3.5 ACTIVAR BEACON PARA DESPERTAR NODOS EN SLEEP
+            self._emit_progress("Passo 2: Ativando Beacon para despertar nós (sleep)...")
+            try:
+                with self._lock:
+                    if self._base_station:
+                        self._base_station.enableBeacon()
+            except Exception as e:
+                self._log(f"Aviso: Não foi posible ativar beacon: {e}")
+            
+            time.sleep(1) # Pequeña espera para estabilizar red
+
             # 4. GESTIÓN Y RECUPERACIÓN DE NODOS
             nodos_recuperados = 0
             if not self._config_node_ids:

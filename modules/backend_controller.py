@@ -680,25 +680,10 @@ class BackendController:
             if latest_ts is not None:
                 self.last_modbus_sample_ts = latest_ts
 
-            # Obtener y normalizar ángulos (exactamente 5 floats)
-            angles = datos_procesados.get('angles', [])
-            if not isinstance(angles, list):
-                angles = []
-            
-            modbus_angles = []
-            for i in range(5):
-                if i < len(angles):
-                    modbus_angles.append(float(angles[i]))
-                else:
-                    modbus_angles.append(0.0)
-
             swap_words = bool(mb_params.get('swap_words', False))
             
-            # Serializar peso bruto + 5 ángulos en 12 holding registers
-            regs = []
-            regs.extend(self._float_to_float32_registers(modbus_value, swap_words))
-            for ang in modbus_angles:
-                regs.extend(self._float_to_float32_registers(ang, swap_words))
+            # Serializar peso bruto de la celda 1 en 2 holding registers (float32)
+            regs = self._float_to_float32_registers(modbus_value, swap_words)
 
             modbus_ok = False
             try:

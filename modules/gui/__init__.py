@@ -168,10 +168,7 @@ class BalanzaGUI(ttk.Window):
         
         # Control de visualización de decimales (por defecto: SIN decimales)
         self._show_decimals = False
-        # Throttle para ajuste dinámico de fuentes (operación costosa)
-        self._font_fit_interval_s = 0.35
-        self._last_total_font_fit_ts = 0.0
-        self._last_sensor_font_fit_ts = {}
+
         
         # Variables para conexin asncrona
         self._connection_thread = None
@@ -307,6 +304,23 @@ class BalanzaGUI(ttk.Window):
         """
         try:
             import tkinter.font as tkfont
+            # Si el label tiene un estilo configurado, intentar extraer la tipografía real del estilo
+            style_name = label.cget('style')
+            style_font_family = family
+            if style_name:
+                try:
+                    style_font = self.style.lookup(style_name, 'font')
+                    if style_font:
+                        if isinstance(style_font, str):
+                            parts = style_font.split()
+                            if parts:
+                                style_font_family = parts[0].strip('{}')
+                        elif isinstance(style_font, (list, tuple)) and len(style_font) > 0:
+                            style_font_family = style_font[0]
+                except Exception:
+                    pass
+            family = style_font_family
+
             # Determinar ancho disponible: preferir explicit_width si hay
             if explicit_width and isinstance(explicit_width, int) and explicit_width > 0:
                 avail_w = explicit_width
@@ -380,10 +394,12 @@ class BalanzaGUI(ttk.Window):
         self.style.configure('TotalTick.TLabel', background=PRIMARY, foreground="white", font=(FONT_MAIN, sf(12), "bold"))
         
         # Total Panel DANGER - Cuando hay sensor desconectado (ROJO)
+        # IMPORTANTE: usar mismos tamaños de fuente que los estilos normales
+        # para evitar reflow/parpadeo al cambiar entre estados.
         self.style.configure('TotalPanelDanger.TFrame', background=DANGER)
-        self.style.configure('TotalLabelDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MAIN, sf(24), "bold"))
-        self.style.configure('TotalValueDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MONO, sf(72), "bold"))
-        self.style.configure('TotalUnitDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MAIN, sf(20)))
+        self.style.configure('TotalLabelDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MAIN, sf(30), "bold"))
+        self.style.configure('TotalValueDanger.TLabel', background=DANGER, foreground="white", font=(FONT_NUMBERS, sf(94), "bold"))
+        self.style.configure('TotalUnitDanger.TLabel', background=DANGER, foreground="white", font=(FONT_MAIN, sf(32), "bold"))
         
         # Tara Info - Más visible
         self.style.configure('TareInfo.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, sf(14), "bold"))
@@ -805,24 +821,22 @@ class BalanzaGUI(ttk.Window):
         
         # Container for centering horizontal content (Value + Unit)
         load_center_frame = ttk.Frame(load_card, style='TotalPanel.TFrame')
-        load_center_frame.pack(expand=YES, fill=X)
+        load_center_frame.pack(expand=YES, fill=BOTH)
         
-        # Inner container for tight packing
-        inner_center = ttk.Frame(load_center_frame, style='TotalPanel.TFrame')
-        inner_center.pack(anchor="center") # Centered horizontally
+        # Layout: 3 columnas — spacer | número | kg + spacer
+        # uniform="spacer" fuerza cols 0 y 2 al mismo ancho → número centrado exacto
+        load_center_frame.columnconfigure(0, weight=1, uniform="spacer")
+        load_center_frame.columnconfigure(1, weight=0)
+        load_center_frame.columnconfigure(2, weight=1, uniform="spacer")
+        load_center_frame.rowconfigure(0, weight=1)
 
-        # Valor Numérico Grande
-        self.lbl_total = ttk.Label(inner_center, text="0", style='TotalValue.TLabel')
-        self.lbl_total.pack(side=LEFT)
-        try:
-            self.lbl_total.target_width = self.scaled(400) # Para ajuste de fuente
-        except Exception:
-            self.lbl_total.target_width = None
+        # Valor Numérico Grande — centrado (columna 1, tamaño natural)
+        self.lbl_total = ttk.Label(load_center_frame, text="0", style='TotalValue.TLabel')
+        self.lbl_total.grid(row=0, column=1)
         
-        # Unidad - Side LEFT, vertically aligned to bottom (using pack options if possible, or font adjustment)
-        # Using a slightly smaller font for unit or same style
-        self.lbl_total_unit = ttk.Label(inner_center, text="kg", style='TotalUnit.TLabel')
-        self.lbl_total_unit.pack(side=LEFT, padx=(5, 0), anchor="se", pady=(0, 15)) # Anchor south-east to align baseline roughly
+        # Unidad "kg" justo después del número (columna 2, pegada a la izquierda)
+        self.lbl_total_unit = ttk.Label(load_center_frame, text="kg", style='TotalUnit.TLabel')
+        self.lbl_total_unit.grid(row=0, column=2, sticky='sw', padx=(self.scaled(8), 0), pady=(0, self.scaled(12)))
 
         # --- BARRA DE COLOR (0 - 1200) ---
         try:
@@ -1123,6 +1137,43 @@ class BalanzaGUI(ttk.Window):
         except Exception:
             pass
 
+    def _reposition_kg_unit(self):
+        """Reposiciona 'kg' justo después del texto del número, alineado abajo."""
+        try:
+            import tkinter.font as tkfont
+            # Obtener la fuente actual del label
+            font_info = self.lbl_total.cget('font')
+            if isinstance(font_info, str) and font_info:
+                try:
+                    f = tkfont.nametofont(font_info)
+                except Exception:
+                    f = tkfont.Font(font=font_info)
+            else:
+                f = tkfont.Font(font=font_info)
+            text = self.lbl_total.cget('text') or "0"
+            text_width = f.measure(text)
+            
+            container_width = self.lbl_total.winfo_width()
+            if container_width <= 1:
+                return  # aún no se renderizó
+            
+            # El texto está centrado → empieza en (ancho - texto) / 2
+            text_end_x = (container_width + text_width) // 2
+            
+            # Altura: alinear "kg" al fondo del número
+            container_height = self.lbl_total.winfo_height()
+            kg_height = self.lbl_total_unit.winfo_reqheight()
+            # Posicionar en la base del label, con un pequeño offset hacia arriba
+            kg_y = container_height - kg_height - self.scaled(4)
+            
+            self.lbl_total_unit.place(
+                in_=self.lbl_total,
+                x=text_end_x + self.scaled(6),
+                y=kg_y
+            )
+        except Exception:
+            pass
+
     def _update_footer_time(self):
         """Actualiza `self.footer_time` cada segundo con fecha y hora en formato DD/MM/YYYY HH:MM:SS."""
         try:
@@ -1267,19 +1318,7 @@ class BalanzaGUI(ttk.Window):
                     self._first_sample_received = True
         except Exception:
             pass
-        # Tamaños de fuente base para panels y total (usados en ajuste estático)
-        try:
-            normal_beam = self.scaled_font(60)
-        except Exception:
-            normal_beam = 60
-        try:
-            normal_total = self.scaled_font(120)
-        except Exception:
-            normal_total = 120
 
-        beam_tgt = max(20, int(normal_beam * 0.75)) if self._show_decimals else normal_beam
-        total_tgt = max(40, int(normal_total * 0.85)) if self._show_decimals else normal_total
-        min_font = self.scaled_font(14)
         
         # Atualizar Tara Acumulada em Toneladas
         if 'total_tare' in data:
@@ -1297,13 +1336,15 @@ class BalanzaGUI(ttk.Window):
             # Actualizar label en pestaña de mantenimiento
             try:
                 if hasattr(self, 'lbl_tare_value') and self.lbl_tare_value:
-                    self.lbl_tare_value.configure(text=tare_text)
+                    if self.lbl_tare_value.cget('text') != tare_text:
+                        self.lbl_tare_value.configure(text=tare_text)
             except Exception:
                 pass
             # Actualizar label en vista principal (si existe)
             try:
                 if hasattr(self, 'lbl_tare_value_main') and self.lbl_tare_value_main:
-                    self.lbl_tare_value_main.configure(text=tare_text)
+                    if self.lbl_tare_value_main.cget('text') != tare_text:
+                        self.lbl_tare_value_main.configure(text=tare_text)
             except Exception:
                 pass
         
@@ -1336,24 +1377,51 @@ class BalanzaGUI(ttk.Window):
         # Mudar cor do painel TOTAL segundo estado de sensores - FAIL-SAFE
         if any_disconnected:
             # VERMELHO - UI simplificada: solo estado de error
-            self.total_section.configure(style='TotalPanelDanger.TFrame')
-            self.lbl_total_title.configure(text="ERROR", style='TotalLabelDanger.TLabel')
-            self.lbl_total.configure(text="ERROR", style='TotalValueDanger.TLabel')
-            self.lbl_total_unit.configure(text="", style='TotalUnitDanger.TLabel')
+            try:
+                if self.total_section.cget('style') != 'TotalPanelDanger.TFrame':
+                    self.total_section.configure(style='TotalPanelDanger.TFrame')
+            except Exception:
+                pass
+            try:
+                if self.lbl_total_title.cget('text') != "ERROR" or self.lbl_total_title.cget('style') != 'TotalLabelDanger.TLabel':
+                    self.lbl_total_title.configure(text="ERROR", style='TotalLabelDanger.TLabel')
+            except Exception:
+                pass
+            try:
+                if self.lbl_total.cget('text') != "ERROR" or self.lbl_total.cget('style') != 'TotalValueDanger.TLabel':
+                    self.lbl_total.configure(text="ERROR", style='TotalValueDanger.TLabel')
+            except Exception:
+                pass
+            try:
+                if self.lbl_total_unit.cget('text') != "" or self.lbl_total_unit.cget('style') != 'TotalUnitDanger.TLabel':
+                    self.lbl_total_unit.configure(text="", style='TotalUnitDanger.TLabel')
+            except Exception:
+                pass
             # Mantener paridad visual en la pestaña de mantenimiento si existe
             try:
                 if hasattr(self, 'lbl_maint_total') and self.lbl_maint_total:
-                    self.lbl_maint_total.configure(text="ERROR", style='TotalValueDanger.TLabel')
+                    if self.lbl_maint_total.cget('text') != "ERROR" or self.lbl_maint_total.cget('style') != 'TotalValueDanger.TLabel':
+                        self.lbl_maint_total.configure(text="ERROR", style='TotalValueDanger.TLabel')
                 if hasattr(self, 'lbl_maint_total_title') and self.lbl_maint_total_title:
-                    self.lbl_maint_total_title.configure(text="ERROR", style='TotalLabelDanger.TLabel')
+                    if self.lbl_maint_total_title.cget('text') != "ERROR" or self.lbl_maint_total_title.cget('style') != 'TotalLabelDanger.TLabel':
+                        self.lbl_maint_total_title.configure(text="ERROR", style='TotalLabelDanger.TLabel')
                 if hasattr(self, 'lbl_maint_total_unit') and self.lbl_maint_total_unit:
-                    self.lbl_maint_total_unit.configure(text="", style='TotalUnitDanger.TLabel')
+                    if self.lbl_maint_total_unit.cget('text') != "" or self.lbl_maint_total_unit.cget('style') != 'TotalUnitDanger.TLabel':
+                        self.lbl_maint_total_unit.configure(text="", style='TotalUnitDanger.TLabel')
             except Exception:
                 pass
         else:
             # AZUL - Todos os sensores conectados (normal)
-            self.total_section.configure(style='TotalPanel.TFrame')
-            self.lbl_total_title.configure(text="CARGA", style='TotalLabel.TLabel')
+            try:
+                if self.total_section.cget('style') != 'TotalPanel.TFrame':
+                    self.total_section.configure(style='TotalPanel.TFrame')
+            except Exception:
+                pass
+            try:
+                if self.lbl_total_title.cget('text') != "CARGA" or self.lbl_total_title.cget('style') != 'TotalLabel.TLabel':
+                    self.lbl_total_title.configure(text="CARGA", style='TotalLabel.TLabel')
+            except Exception:
+                pass
             # Actualizar total usando timestamp (permitiendo totals negativos).
             incoming_total_last = data.get('total_last_seen', 0.0) or 0.0
             # Ignoramos la comprobación 'total_raw>0' para que valores negativos
@@ -1363,30 +1431,12 @@ class BalanzaGUI(ttk.Window):
             if incoming_total_last > self._widget_last_total:
                 peso_ton = data.get('total', 0.0)
                 total_text = f"{self._format_weight(peso_ton)}"
-                # Ajustar fuente del TOTAL según decimales y signo negativo
+                # Solo actualizar texto; la fuente permanece fija (definida por el estilo)
+                # para evitar parpadeos y cambios de tamaño durante la operación.
                 try:
-                    # Derivar tamaños base
-                    normal_total = self.scaled_font(120)
+                    if self.lbl_total.cget('text') != total_text or self.lbl_total.cget('style') != 'TotalValue.TLabel':
+                        self.lbl_total.configure(text=total_text, style='TotalValue.TLabel')
                 except Exception:
-                    normal_total = 120
-                total_small = max(40, int(normal_total * 0.9))
-                total_extra_small = max(30, int(normal_total * 0.7))
-                try:
-                    # Ajustar el texto primero y luego adaptar la fuente para que quepa
-                    self.lbl_total.configure(text=total_text, style='TotalValue.TLabel')
-                    if self._show_decimals and str(total_text).strip().startswith("-"):
-                        tgt = total_extra_small
-                    elif self._show_decimals:
-                        tgt = total_small
-                    else:
-                        tgt = normal_total
-                    fixed_total_w = getattr(self.lbl_total, 'target_width', self.scaled(360))
-                    now_fit = time.time()
-                    if (now_fit - float(getattr(self, '_last_total_font_fit_ts', 0.0) or 0.0)) >= float(getattr(self, '_font_fit_interval_s', 0.20)):
-                        self._fit_label_font(self.lbl_total, str(total_text), 'Segoe UI', max_size=tgt, min_size=total_extra_small, explicit_width=fixed_total_w)
-                        self._last_total_font_fit_ts = now_fit
-                except Exception:
-                    # Fallback conservador
                     try:
                         self.lbl_total.configure(text=total_text)
                     except Exception:
@@ -1395,20 +1445,20 @@ class BalanzaGUI(ttk.Window):
                 try:
                     if hasattr(self, 'lbl_maint_total') and self.lbl_maint_total:
                         try:
-                            self.lbl_maint_total.configure(text=total_text, style='TotalValue.TLabel')
-                            fw_m = getattr(self.lbl_maint_total, 'target_width', getattr(self.lbl_total, 'target_width', self.scaled(260)))
-                            now_fit_m = time.time()
-                            if (now_fit_m - float(getattr(self, '_last_total_font_fit_ts', 0.0) or 0.0)) >= float(getattr(self, '_font_fit_interval_s', 0.20)):
-                                self._fit_label_font(self.lbl_maint_total, str(total_text), 'Segoe UI', max_size=tgt, min_size=total_extra_small, explicit_width=fw_m)
+                            if self.lbl_maint_total.cget('text') != total_text or self.lbl_maint_total.cget('style') != 'TotalValue.TLabel':
+                                self.lbl_maint_total.configure(text=total_text, style='TotalValue.TLabel')
                         except Exception:
                             try:
-                                self.lbl_maint_total.configure(text=total_text)
+                                if self.lbl_maint_total.cget('text') != total_text:
+                                    self.lbl_maint_total.configure(text=total_text)
                             except Exception:
                                 pass
                     if hasattr(self, 'lbl_maint_total_unit') and self.lbl_maint_total_unit:
-                        self.lbl_maint_total_unit.configure(text="kg", style='TotalUnit.TLabel')
+                        if self.lbl_maint_total_unit.cget('text') != "kg":
+                            self.lbl_maint_total_unit.configure(text="kg", style='TotalUnit.TLabel')
                     if hasattr(self, 'lbl_maint_total_title') and self.lbl_maint_total_title:
-                        self.lbl_maint_total_title.configure(text="CARGA", style='TotalLabel.TLabel')
+                        if self.lbl_maint_total_title.cget('text') != "CARGA":
+                            self.lbl_maint_total_title.configure(text="CARGA", style='TotalLabel.TLabel')
                 except Exception:
                     pass
                 self._widget_last_total = incoming_total_last
@@ -1544,12 +1594,17 @@ class BalanzaGUI(ttk.Window):
                                     text = f"{val:.2f}".replace('.', ',') + "°"
                                 else:
                                     text = "0,00°"
-                                lbl.configure(text=text)
+                                if lbl.cget('text') != text:
+                                    lbl.configure(text=text)
                             except Exception:
                                 pass
                 except Exception:
                     pass
-            self.lbl_total_unit.configure(text="kg", style='TotalUnit.TLabel')
+            try:
+                if self.lbl_total_unit.cget('text') != "kg" or self.lbl_total_unit.cget('style') != 'TotalUnit.TLabel':
+                    self.lbl_total_unit.configure(text="kg", style='TotalUnit.TLabel')
+            except Exception:
+                pass
         
         # Actualizar Sensores Individuales (datos pueden ser parciales; usar get para evitar KeyError)
         sensores = data.get('sensores', {})
@@ -1578,79 +1633,64 @@ class BalanzaGUI(ttk.Window):
                 if incoming_last > prev_last:
                     display_text = self._format_weight(valor_ton)
                     try:
-                        val_widget.configure(text=display_text)
+                        if val_widget.cget('text') != display_text:
+                            val_widget.configure(text=display_text)
                     except Exception:
                         # Ignorar errores de Tk (widget ya destruido u otro fallo)
                         try:
                             val_widget['text'] = display_text
                         except Exception:
                             pass
-                    # Ajustar la fuente para que el texto encaje sin cambiar el contenedor
-                    try:
-                        try:
-                            normal_cell = self.scaled_font(64)
-                        except Exception:
-                            normal_cell = 64
-                        cell_small = max(10, int(normal_cell * 0.75))
-                        cell_extra_small = max(8, int(normal_cell * 0.6))
 
-                        if self._show_decimals and str(display_text).strip().startswith("-"):
-                            tgt = cell_extra_small
-                        elif self._show_decimals:
-                            tgt = cell_small
-                        else:
-                            tgt = normal_cell
-
-                        fixed_w = getattr(val_widget, 'target_width', self.scaled(260))
-                        now_sensor_fit = time.time()
-                        last_fit = float(self._last_sensor_font_fit_ts.get(key, 0.0) or 0.0)
-                        if (now_sensor_fit - last_fit) >= float(getattr(self, '_font_fit_interval_s', 0.20)):
-                            self._fit_label_font(val_widget, str(display_text), 'Segoe UI', max_size=tgt, min_size=cell_extra_small, explicit_width=fixed_w)
-                            self._last_sensor_font_fit_ts[key] = now_sensor_fit
-                    except Exception:
-                        pass
                     self._widget_last_seen[key] = incoming_last
 
                 # Atualizar estado visual segundo conexo
                 try:
                     if info.get('connected', True):
                         try:
-                            val_widget.configure(foreground="#1e293b")
+                            if val_widget.cget('foreground') != "#1e293b":
+                                val_widget.configure(foreground="#1e293b")
                         except Exception:
                             pass
                         rssi_widget = widgets.get('rssi')
                         if rssi_widget and hasattr(rssi_widget, 'winfo_exists') and rssi_widget.winfo_exists():
                             try:
-                                rssi_widget.configure(text="", foreground="#22c55e")
+                                if rssi_widget.cget('text') != "" or rssi_widget.cget('foreground') != "#22c55e":
+                                    rssi_widget.configure(text="", foreground="#22c55e")
                             except Exception:
                                 pass
                         if 'status' in widgets:
                             st = widgets.get('status')
                             if st and hasattr(st, 'winfo_exists') and st.winfo_exists():
                                 try:
-                                    st.configure(text="Ativo", foreground="#22c55e")
+                                    if st.cget('text') != "Ativo" or st.cget('foreground') != "#22c55e":
+                                        st.configure(text="Ativo", foreground="#22c55e")
                                 except Exception:
                                     pass
                     else:
                         try:
-                            val_widget.configure(foreground="#cbd5e1")
+                            if val_widget.cget('foreground') != "#cbd5e1":
+                                val_widget.configure(foreground="#cbd5e1")
                         except Exception:
                             pass
                         rssi_widget = widgets.get('rssi')
                         if rssi_widget and hasattr(rssi_widget, 'winfo_exists') and rssi_widget.winfo_exists():
                             try:
-                                rssi_widget.configure(text="", foreground="#ef4444")
+                                if rssi_widget.cget('text') != "" or rssi_widget.cget('foreground') != "#ef4444":
+                                    rssi_widget.configure(text="", foreground="#ef4444")
                             except Exception:
                                 pass
                         if 'status' in widgets:
                             st = widgets.get('status')
                             if st and hasattr(st, 'winfo_exists') and st.winfo_exists():
                                 try:
-                                    st.configure(text="Sem Sinal", foreground="#ef4444")
+                                    if st.cget('text') != "Sem Sinal" or st.cget('foreground') != "#ef4444":
+                                        st.configure(text="Sem Sinal", foreground="#ef4444")
                                 except Exception:
                                     pass
                 except Exception:
                     pass
+
 
     def _update_status(self, connected):
         self.connected = connected
@@ -2215,10 +2255,21 @@ class BalanzaGUI(ttk.Window):
 
         if has_tare:
             try:
-                confirm = self.show_large_confirmation("Confirmação", "Já existe uma tara aplicada. Deseja sobrescrever?")
-            except Exception:
-                confirm = False
-            if not confirm:
+                confirm = self.show_large_tare_confirmation("Confirmação", "Já existe uma tara aplicada. Deseja sobrescrever ou limpar a tara?")
+            except Exception as e:
+                self.log_message(f"Erro ao mostrar diálogo de tara: {e}")
+                confirm = "cancel"
+            
+            if confirm == "overwrite":
+                pass
+            elif confirm == "clear":
+                try:
+                    self.command_queue.put({'cmd': 'RESET_TARE'})
+                    self.log_message("Solicitado limpar tara a partir da confirmação.")
+                except Exception:
+                    pass
+                return
+            else: # "cancel"
                 return
 
         try:
@@ -2230,45 +2281,8 @@ class BalanzaGUI(ttk.Window):
         """Alterna entre mostrar valores con o sin decimales."""
         # Toggle flag only; keep the button label as '0.00'
         self._show_decimals = not self._show_decimals
-        # Simplified: only two font states exist now - with decimals and without decimals.
-        try:
-            normal_cell = self.scaled_font(64)
-        except Exception:
-            normal_cell = 64
-        try:
-            normal_total = self.scaled_font(120)
-        except Exception:
-            normal_total = 120
-
-        if self._show_decimals:
-            sensor_target = max(12, int(normal_cell * 0.85))
-            total_target = max(40, int(normal_total * 0.85))
-        else:
-            sensor_target = normal_cell
-            total_target = normal_total
-
-        min_sensor = max(8, int(sensor_target * 0.6))
-        min_total = max(20, int(total_target * 0.6))
-
-        # Aplicar tamaño de fuente a widgets individuales sin cambiar el tamaño del contenedor
-        for key, widgets in getattr(self, 'sensor_widgets', {}).items():
-            try:
-                txt = widgets['value'].cget('text') or "0"
-                fixed_w = getattr(widgets['value'], 'target_width', self.scaled(260))
-                self._fit_label_font(widgets['value'], str(txt), 'Consolas', max_size=sensor_target, min_size=min_sensor, explicit_width=fixed_w)
-            except Exception:
-                pass
-
-        # Ajustar TOTAL sin alterar contenedor central (dos estados solamente)
-        try:
-            if hasattr(self, 'lbl_total') and self.lbl_total:
-                txt_total = self.lbl_total.cget('text') or "0"
-                fixed_total_w = getattr(self.lbl_total, 'target_width', self.scaled(360))
-                self._fit_label_font(self.lbl_total, str(txt_total), 'Consolas', max_size=total_target, min_size=min_total, explicit_width=fixed_total_w)
-        except Exception:
-            pass
-
         # Forzar actualización visual inmediata de todos los valores
+        # (sin cambiar fuentes — solo se reformatea el texto)
         self.after(10, self._refresh_all_displays)
     
     def _apply_saved_calibrations_on_connect(self):
@@ -2506,14 +2520,30 @@ class BalanzaGUI(ttk.Window):
 
     def _format_weight(self, value):
         """Formatea el peso según configuración de decimales (redondeo bancario/IEEE 754)."""
-        if self._show_decimals:
-            # Con decimales: 2 posiciones usando redondeo bancario
-            from decimal import Decimal, ROUND_HALF_EVEN
-            d = Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_EVEN)
-            return f"{d}".replace('.', ',')
-        else:
-            # Sin decimales: redondeo al entero más cercano (norma ISO 80000-1)
-            return f"{round(value)}"
+        if value is None:
+            return "--"
+        try:
+            if isinstance(value, str):
+                cleaned = value.strip().replace(' kg', '').replace(' ', '')
+                if cleaned == "--" or cleaned == "-" or not cleaned:
+                    return "--"
+                val_float = float(cleaned)
+            else:
+                val_float = float(value)
+        except Exception:
+            return "--"
+
+        try:
+            if self._show_decimals:
+                # Con decimales: 2 posiciones usando redondeo bancario
+                from decimal import Decimal, ROUND_HALF_EVEN
+                d = Decimal(str(val_float)).quantize(Decimal('0.01'), rounding=ROUND_HALF_EVEN)
+                return f"{d}".replace('.', ',')
+            else:
+                # Sin decimales: redondeo al entero más cercano (norma ISO 80000-1)
+                return f"{round(val_float)}"
+        except Exception:
+            return "--"
 
     def export_calibrations_gui(self):
         """Exporta todas las calibraciones JSON a un único CSV en el directorio de calibraciones."""
@@ -2804,6 +2834,110 @@ class BalanzaGUI(ttk.Window):
         except:
             pass
         
+        return result['value']
+
+    def show_large_tare_confirmation(self, title, message):
+        """Mostra um diálogo modal personalizado com 3 botões (SOBRESCREVER, LIMPAR TARA, CANCELAR)."""
+        result = {'value': 'cancel', 'done': False}
+        
+        # Obtener la ventana padre
+        parent = self._cal_wizard if hasattr(self, '_cal_wizard') and self._cal_wizard else self
+        
+        # ... Liberar grab del padre si existe ...
+        try:
+            parent.grab_release()
+        except:
+            pass
+        
+        # Crear janela secundária SIN BARRA DE TÍTULO
+        dialog = ttk.Toplevel(parent)
+        dialog.overrideredirect(True)  # Quitar barra de Windows
+        
+        # Centralizar em relação a la tela (un poco más ancha para 3 botones grandes)
+        screen_w = dialog.winfo_screenwidth()
+        screen_h = dialog.winfo_screenheight()
+        x = (screen_w // 2) - 375
+        y = (screen_h // 2) - 225
+        dialog.geometry(f"750x450+{x}+{y}")
+        
+        # Forzar que aparezca arriba de todo
+        dialog.attributes('-topmost', True)
+            
+        # Container con borde para definir el diálogo
+        outer_frame = ttk.Frame(dialog, bootstyle="dark", padding=4)
+        outer_frame.pack(fill=BOTH, expand=YES)
+        
+        frame = ttk.Frame(outer_frame, padding=40)
+        frame.pack(fill=BOTH, expand=YES)
+        
+        # Título personalizado
+        title_lbl = ttk.Label(frame, text=title.upper(), font=("Segoe UI", 22, "bold"), foreground="#1e293b")
+        title_lbl.pack(pady=(0, 25))
+        
+        # Mensagem grande
+        lbl = ttk.Label(frame, text=message, font=("Segoe UI", 18), wraplength=650, justify="center")
+        lbl.pack(pady=(10, 50), expand=YES)
+        
+        # Botões grandes
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill=X, pady=10)
+        
+        def on_overwrite():
+            result['value'] = 'overwrite'
+            result['done'] = True
+            
+        def on_clear():
+            result['value'] = 'clear'
+            result['done'] = True
+
+        def on_cancel():
+            result['value'] = 'cancel'
+            result['done'] = True
+            
+        btn_overwrite = ttk.Button(btn_frame, text="SOBRESCREVER", bootstyle="success", width=15, 
+                                   command=on_overwrite, padding=(10, 20))
+        btn_overwrite.pack(side=LEFT, padx=10, expand=YES, fill=X)
+        
+        btn_clear = ttk.Button(btn_frame, text="LIMPAR TARA", bootstyle="warning", width=15, 
+                               command=on_clear, padding=(10, 20))
+        btn_clear.pack(side=LEFT, padx=10, expand=YES, fill=X)
+        
+        btn_cancel = ttk.Button(btn_frame, text="CANCELAR", bootstyle="danger", width=15, 
+                                command=on_cancel, padding=(10, 20))
+        btn_cancel.pack(side=LEFT, padx=10, expand=YES, fill=X)
+
+        # Configurar cierre con protocolo
+        dialog.protocol("WM_DELETE_WINDOW", on_cancel)
+
+        dialog.transient(parent)
+        dialog.deiconify()
+        dialog.grab_set()
+        dialog.lift()
+        dialog.focus_force()
+        try:
+            dialog.attributes('-topmost', True)
+        except Exception:
+            pass
+        
+        # Esperar respuesta con loop manual
+        while not result['done']:
+            dialog.update()
+            self.update()
+        
+        # Limpiar
+        try:
+            dialog.grab_release()
+            dialog.destroy()
+        except:
+            pass
+        
+        # Restaurar grab del padre
+        try:
+            if parent and parent.winfo_exists():
+                parent.grab_set()
+        except:
+            pass
+            
         return result['value']
 
     def show_alert(self, title, message, alert_type="info", parent=None):
