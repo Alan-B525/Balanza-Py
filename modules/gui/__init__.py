@@ -834,8 +834,8 @@ class BalanzaGUI(ttk.Window):
         self.lbl_total = ttk.Label(load_center_frame, text="0", style='TotalValue.TLabel')
         self.lbl_total.grid(row=0, column=1)
         
-        # Unidad "kg" justo después del número (columna 2, pegada a la izquierda)
-        self.lbl_total_unit = ttk.Label(load_center_frame, text="kg", style='TotalUnit.TLabel')
+        # Unidad "kgf" justo después del número (columna 2, pegada a la izquierda)
+        self.lbl_total_unit = ttk.Label(load_center_frame, text="kgf", style='TotalUnit.TLabel')
         self.lbl_total_unit.grid(row=0, column=2, sticky='sw', padx=(self.scaled(8), 0), pady=(0, self.scaled(12)))
 
         # --- BARRA DE COLOR (0 - 1200) ---
@@ -923,7 +923,7 @@ class BalanzaGUI(ttk.Window):
 
             value_lbl = ttk.Label(
                 tile,
-                text="0,00°",
+                text="0,0°",
                 style='AngleTileValue.TLabel',
                 anchor='center',
                 width=10
@@ -1042,7 +1042,7 @@ class BalanzaGUI(ttk.Window):
                 val_font = ("Consolas", self.scaled_font(32), 'bold')
             except Exception:
                 val_font = ("Consolas", 32, 'bold')
-            self.lbl_tare_value_main = ttk.Label(center_frame, text="0 kg", style='TareMaintValue.TLabel', font=val_font, anchor='center')
+            self.lbl_tare_value_main = ttk.Label(center_frame, text="0 kgf", style='TareMaintValue.TLabel', font=val_font, anchor='center')
             # Ocultar el valor de la tara en la vista principal (se mantiene el widget para compatibilidad)
             try:
                 # No grid() para mantener oculto en la vista principal
@@ -1332,7 +1332,7 @@ class BalanzaGUI(ttk.Window):
                 except Exception:
                     pass
             # Actualizar el widget nuevo si existe, sino mantener compatibilidad
-            tare_text = f"{self._format_weight(tara_ton)} kg"
+            tare_text = f"{self._format_weight(tara_ton)} kgf"
             # Actualizar label en pestaña de mantenimiento
             try:
                 if hasattr(self, 'lbl_tare_value') and self.lbl_tare_value:
@@ -1454,8 +1454,8 @@ class BalanzaGUI(ttk.Window):
                             except Exception:
                                 pass
                     if hasattr(self, 'lbl_maint_total_unit') and self.lbl_maint_total_unit:
-                        if self.lbl_maint_total_unit.cget('text') != "kg":
-                            self.lbl_maint_total_unit.configure(text="kg", style='TotalUnit.TLabel')
+                        if self.lbl_maint_total_unit.cget('text') != "kgf":
+                            self.lbl_maint_total_unit.configure(text="kgf", style='TotalUnit.TLabel')
                     if hasattr(self, 'lbl_maint_total_title') and self.lbl_maint_total_title:
                         if self.lbl_maint_total_title.cget('text') != "CARGA":
                             self.lbl_maint_total_title.configure(text="CARGA", style='TotalLabel.TLabel')
@@ -1591,9 +1591,9 @@ class BalanzaGUI(ttk.Window):
                             try:
                                 if idx < len(angles):
                                     val = float(angles[idx])
-                                    text = f"{val:.2f}".replace('.', ',') + "°"
+                                    text = f"{val:.1f}".replace('.', ',') + "°"
                                 else:
-                                    text = "0,00°"
+                                    text = "0,0°"
                                 if lbl.cget('text') != text:
                                     lbl.configure(text=text)
                             except Exception:
@@ -1601,8 +1601,8 @@ class BalanzaGUI(ttk.Window):
                 except Exception:
                     pass
             try:
-                if self.lbl_total_unit.cget('text') != "kg" or self.lbl_total_unit.cget('style') != 'TotalUnit.TLabel':
-                    self.lbl_total_unit.configure(text="kg", style='TotalUnit.TLabel')
+                if self.lbl_total_unit.cget('text') != "kgf" or self.lbl_total_unit.cget('style') != 'TotalUnit.TLabel':
+                    self.lbl_total_unit.configure(text="kgf", style='TotalUnit.TLabel')
             except Exception:
                 pass
         
@@ -2524,7 +2524,7 @@ class BalanzaGUI(ttk.Window):
             return "--"
         try:
             if isinstance(value, str):
-                cleaned = value.strip().replace(' kg', '').replace(' ', '')
+                cleaned = value.strip().replace(' kgf', '').replace(' kg', '').replace(' ', '')
                 if cleaned == "--" or cleaned == "-" or not cleaned:
                     return "--"
                 val_float = float(cleaned)
@@ -3412,7 +3412,7 @@ class BalanzaGUI(ttk.Window):
                         
                         ttk.Label(frm, text="⚠  Valor Fora do Intervalo", 
                                   font=("Segoe UI", 16, "bold"), foreground="#dc2626").pack(pady=(0, 10))
-                        ttk.Label(frm, text="Os valores devem estar entre 0 e 1200 kg.\nPor favor, insira um valor válido.",
+                        ttk.Label(frm, text="Os valores devem estar entre 0 e 1200 kgf.\nPor favor, insira um valor válido.",
                                   font=("Segoe UI", 13), justify="center").pack(pady=(0, 15))
                         
                         def close_alert():
@@ -4069,8 +4069,8 @@ class BalanzaGUI(ttk.Window):
         tv = ttk.Treeview(frame_list, columns=cols, show='headings', height=5)
         tv.heading("status", text="Ativo")
         tv.heading("name", text="Nome")
-        tv.heading("min", text="Mín (kg)")
-        tv.heading("max", text="Máx (kg)")
+        tv.heading("min", text="Mín (kgf)")
+        tv.heading("max", text="Máx (kgf)")
         # Columnas iguales, se ajustan al espacio disponible
         for c in cols:
             tv.column(c, width=80, minwidth=60, anchor="center", stretch=True)
@@ -4099,11 +4099,11 @@ class BalanzaGUI(ttk.Window):
         
         vcmd = (self.register(self._validate_numeric_input), '%P')
 
-        ttk.Label(frame_editor, text="Peso Mínimo (kg):", font=maint_font_bold).grid(row=2, column=0, sticky="w", pady=2)
+        ttk.Label(frame_editor, text="Peso Mínimo (kgf):", font=maint_font_bold).grid(row=2, column=0, sticky="w", pady=2)
         e_pmin = ttk.Entry(frame_editor, font=maint_font, validate="key", validatecommand=vcmd)
         e_pmin.grid(row=3, column=0, sticky="ew", ipady=self.scaled(4), pady=2)
 
-        ttk.Label(frame_editor, text="Peso Máximo (kg):", font=maint_font_bold).grid(row=4, column=0, sticky="w", pady=2)
+        ttk.Label(frame_editor, text="Peso Máximo (kgf):", font=maint_font_bold).grid(row=4, column=0, sticky="w", pady=2)
         e_pmax = ttk.Entry(frame_editor, font=maint_font, validate="key", validatecommand=vcmd)
         e_pmax.grid(row=5, column=0, sticky="ew", ipady=self.scaled(4), pady=2)
 
@@ -5990,12 +5990,12 @@ class BalanzaGUI(ttk.Window):
         # Weight (en kg)
         f_w = ttk.Frame(f_fields)
         f_w.grid(row=0, column=0, sticky="ew", padx=(0, 10))
-        ttk.Label(f_w, text="Peso Padrão (kg):", font=("Segoe UI", 11)).pack(anchor="w")
+        ttk.Label(f_w, text="Peso Padrão (kgf):", font=("Segoe UI", 11)).pack(anchor="w")
         e_weight = ttk.Entry(f_w, textvariable=self._cal_input_weight, font=("Consolas", 16))
         e_weight.pack(fill=X, ipady=8)
         e_weight.bind("<Return>", on_weight_enter)
         e_weight.bind("<KP_Enter>", on_weight_enter)
-        self._bind_numeric_keypad(e_weight, "Peso Padrão (kg)")
+        self._bind_numeric_keypad(e_weight, "Peso Padrão (kgf)")
         
         # Botón ADICIONAR debajo de Peso
         btn_add = ttk.Button(f_w, text="ADICIONAR PONTO", 
@@ -6028,7 +6028,7 @@ class BalanzaGUI(ttk.Window):
         h_frame.columnconfigure(0, weight=1)
         h_frame.columnconfigure(1, weight=1)
         h_frame.columnconfigure(2, weight=0)
-        ttk.Label(h_frame, text="PESO (kg)", font=("Segoe UI", 10, "bold"), 
+        ttk.Label(h_frame, text="PESO (kgf)", font=("Segoe UI", 10, "bold"), 
             bootstyle="inverse-dark", anchor="center").grid(row=0, column=0, sticky="ew")
         ttk.Label(h_frame, text="LEITURA", font=("Segoe UI", 10, "bold"),
             bootstyle="inverse-dark", anchor="center").grid(row=0, column=1, sticky="ew")
@@ -6068,7 +6068,7 @@ class BalanzaGUI(ttk.Window):
                 self._cal_ax = self._cal_fig.add_subplot(111)
                 self._cal_ax.set_facecolor('#ffffff')
                 self._cal_ax.set_xlabel("Leitura Sensor", fontsize=10)
-                self._cal_ax.set_ylabel("Peso (kg)", fontsize=10)
+                self._cal_ax.set_ylabel("Peso (kgf)", fontsize=10)
                 self._cal_ax.grid(True, linestyle='--', alpha=0.5)
                 # Diferir la creación del canvas de matplotlib al loop de eventos
                 # para que la ventana aparezca rápido y el gráfico cargue después
@@ -6187,7 +6187,7 @@ class BalanzaGUI(ttk.Window):
         # Mostrar confirmación con el estilo del programa
         if self.show_large_confirmation(
             "Eliminar Ponto", 
-            f"Tem certeza que deseja eliminar o ponto?\n\nPeso: {peso:.2f} kg\nLeitura: {lectura:.2f}"
+            f"Tem certeza que deseja eliminar o ponto?\n\nPeso: {peso:.2f} kgf\nLeitura: {lectura:.2f}"
         ):
             self._cal_manager.remove_point(idx)
             self._refresh_cal_wizard_table_ui()
@@ -6205,7 +6205,7 @@ class BalanzaGUI(ttk.Window):
         try:
             self._cal_ax.clear()
             self._cal_ax.set_xlabel("Leitura Sensor", fontsize=10)
-            self._cal_ax.set_ylabel("Peso (kg)", fontsize=10)
+            self._cal_ax.set_ylabel("Peso (kgf)", fontsize=10)
             self._cal_ax.grid(True, linestyle='--', alpha=0.5)
             self._cal_ax.set_facecolor('#ffffff')
 
