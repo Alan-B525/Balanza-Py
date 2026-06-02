@@ -99,10 +99,22 @@ class MSCLDriver(ISistemaPesaje):
         self._value_cache: Dict[str, deque] = {} # Para estadísticas o debug
         # Callback opcional para informar progreso a la UI
         self._progress_cb = None
+        self._port_autodetected_cb = None
 
         self._parse_config()
         # Último recuento de nodos recuperados tras intentar conectar
         self._last_recovered_count = 0
+
+    def set_port_autodetected_callback(self, cb):
+        """Registra un callback para informar la autodetección de un puerto COM."""
+        try:
+            if cb is None:
+                self._port_autodetected_cb = None
+            elif callable(cb):
+                self._port_autodetended_cb = cb  # Mantener compatibilidad si hay typos
+                self._port_autodetected_cb = cb
+        except Exception:
+            self._port_autodetected_cb = None
 
     def set_progress_callback(self, cb):
         """Registra un callback callable(msg: str) para progreso de conexión."""
@@ -175,25 +187,89 @@ class MSCLDriver(ISistemaPesaje):
             self._state = ConnectionState.CONNECTING
             self._emit_progress(f"Iniciando Conexão em {puerto} @ {self.BAUD_RATE}...")
 
-        # Validación temprana de puerto
-        try:
-            import serial.tools.list_ports
-            available_ports = {str(p.device).strip().upper() for p in serial.tools.list_ports.comports()}
-            normalized = str(puerto or '').strip().upper()
-            if normalized and available_ports and normalized not in available_ports:
-                self._emit_progress(f"Falha geral na conexão: Invalid Com Port ({puerto}).")
-                self._emit_progress(f"Portas disponíveis: {', '.join(sorted(available_ports))}")
-                self.desconectar()
-                return False
-        except Exception:
-            pass
+        # Validación temprana de puerto y autodetección
+        import serial.tools.list_ports
+        ports = list(serial.tools.list_ports.comports())
+        available_ports = [p.device for p in ports]
+        available_ports_upper = {str(p).strip().upper() for p in available_ports}
+
+        target_port = puerto
+        autodetect_triggered = False
+
+        normalized_requested = str(puerto or '').strip().upper()
+        if not normalized_requested or normalized_requested not in available_ports_upper:
+            self._emit_progress(f"Porta {puerto} indisponível. Iniciando autodetección...")
+            autodetect_triggered = True
+        else:
+            # Probar puerto configurado con un ping rápido
+            self._emit_progress(f"Testando porta configurada {puerto}...")
+            try:
+                temp_conn = mscl.Connection.Serial(puerto, self.BAUD_RATE)
+                temp_bs = mscl.BaseStation(temp_conn)
+                if temp_bs.ping():
+                    self._emit_progress(f"BaseStation encontrada em {puerto}!")
+                    temp_conn.disconnect()
+                else:
+                    self._emit_progress(f"BaseStation no responde en {puerto}. Buscando alternativas...")
+                    temp_conn.disconnect()
+                    autodetect_triggered = True
+            except Exception as e:
+                self._emit_progress(f"Erro ao testar {puerto}: {e}. Buscando alternativas...")
+                autodetect_triggered = True
+
+        if autodetect_triggered:
+            # Buscar BaseStation escaneando todos los puertos
+            sorted_ports = []
+            for p in ports:
+                desc = str(p.description or '').lower()
+                device = p.device
+                if device.upper() == normalized_requested:
+                    continue  # Ya lo probamos
+                
+                # Priorizar los puertos que tengan descripciones asociadas a Silicon Labs CP210x o UART
+                if 'silicon' in desc or 'cp210' in desc or 'uart' in desc or 'bridge' in desc:
+                    sorted_ports.insert(0, device)
+                else:
+                    sorted_ports.append(device)
+            
+            detected_port = None
+            for p in sorted_ports:
+                self._emit_progress(f"Escaneando porta {p}...")
+                try:
+                    temp_conn = mscl.Connection.Serial(p, self.BAUD_RATE)
+                    temp_bs = mscl.BaseStation(temp_conn)
+                    if temp_bs.ping():
+                        self._emit_progress(f"BaseStation detectada con éxito en {p}!")
+                        detected_port = p
+                        temp_conn.disconnect()
+                        break
+                    temp_conn.disconnect()
+                except Exception:
+                    pass
+            
+            if detected_port:
+                target_port = detected_port
+                self._emit_progress(f"Autoconexão: Mudando porta serial para {target_port}")
+                # Notificar callback de autodetección
+                if getattr(self, '_port_autodetected_cb', None):
+                    try:
+                        self._port_autodetected_cb(target_port)
+                    except Exception:
+                        pass
+            else:
+                self._emit_progress("Autodetección finalizada: nenhuma BaseStation foi encontrada.")
+                # Si falló la autodetección y el puerto original no estaba disponible, abortamos
+                if normalized_requested not in available_ports_upper:
+                    self.desconectar()
+                    return False
+                self._emit_progress(f"Tentando continuar con la porta original {puerto} como último recurso...")
 
         try:
             # 2. Conexión Física (con el lock para asegurar creación segura de objetos)
             with self._lock:
                 if self._state == ConnectionState.DISCONNECTED:
                     return False
-                self._connection = mscl.Connection.Serial(puerto, self.BAUD_RATE)
+                self._connection = mscl.Connection.Serial(target_port, self.BAUD_RATE)
                 self._base_station = mscl.BaseStation(self._connection)
 
             # 3. SILENCIO RADIAL (CRÍTICO)

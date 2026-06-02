@@ -128,6 +128,7 @@ def main():
     
     with _GLOBAL_STATE_LOCK:
         mode = ACTIVE_MODE
+        com_port = ACTIVE_COM
         nodos = ACTIVE_NODOS
         use_sensor_cfg = USE_SENSOR_CONFIG
 
@@ -240,7 +241,10 @@ def main():
         sistema_pesaje=sistema_pesaje,
         procesador=procesador,
         modbus_params=modbus_params,
-        execution_mode=mode
+        execution_mode=mode,
+        active_com=com_port,
+        active_nodos=nodos,
+        use_sensor_config=use_sensor_cfg
     )
     controller.start()
 

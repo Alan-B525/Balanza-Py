@@ -27,6 +27,9 @@ class BackendController:
         procesador,
         modbus_params: Optional[Dict[str, Any]] = None,
         execution_mode: str = "MOCK",
+        active_com: Optional[str] = None,
+        active_nodos: Optional[Dict[str, Any]] = None,
+        use_sensor_config: bool = True,
     ):
         self.data_queue = data_queue
         self.command_queue = command_queue
@@ -38,9 +41,9 @@ class BackendController:
         self.state_lock = threading.Lock()
         
         # Parámetros compartidos (protegidos por state_lock)
-        self.active_com = config.PUERTO_COM
-        self.active_nodos = config.NODOS_CONFIG
-        self.use_sensor_config = True
+        self.active_com = active_com or config.PUERTO_COM
+        self.active_nodos = active_nodos if active_nodos is not None else config.NODOS_CONFIG
+        self.use_sensor_config = use_sensor_config
         self.modbus_params = modbus_params or {}
 
         # Modbus server lifecycle variables (protegidos por modbus_state_lock)
@@ -85,6 +88,19 @@ class BackendController:
 
         # Referencia al thread principal
         self._thread: Optional[threading.Thread] = None
+
+        # Registrar callback de puerto autodetectado
+        if hasattr(self.sistema_pesaje, 'set_port_autodetected_callback'):
+            try:
+                self.sistema_pesaje.set_port_autodetected_callback(self._handle_port_autodetected)
+            except Exception:
+                pass
+
+    def _handle_port_autodetected(self, port: str) -> None:
+        """Maneja el evento de puerto COM autodetectado."""
+        with self.state_lock:
+            self.active_com = port
+        self.data_queue.put({'type': 'PORT_AUTODETECTED', 'payload': port})
 
     def start(self) -> None:
         """Inicia el bucle de procesamiento del controlador en segundo plano."""

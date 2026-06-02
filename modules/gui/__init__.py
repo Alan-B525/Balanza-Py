@@ -1213,6 +1213,8 @@ class BalanzaGUI(ttk.Window):
                     latest_data = msg['payload']
                 elif msg['type'] == 'STATUS':
                     self._update_status(msg['payload'])
+                elif msg['type'] == 'PORT_AUTODETECTED':
+                    self._handle_port_autodetected(msg['payload'])
                 elif msg['type'] == 'ERROR':
                     self.show_alert("Erro", msg['payload'], "error")
                     self.log_message(f"[ERRO] {msg['payload']}")
@@ -1691,6 +1693,36 @@ class BalanzaGUI(ttk.Window):
                 except Exception:
                     pass
 
+
+    def _handle_port_autodetected(self, new_port):
+        """Actualiza el puerto COM detectado automáticamente en settings.json y en caliente."""
+        try:
+            from config import load_settings, save_settings
+            settings = load_settings()
+            
+            # Actualizar puerto a nivel superior
+            settings["serial_port"] = new_port
+            
+            # Actualizar com_port de todos los nodos configurados
+            if "nodes" in settings and isinstance(settings["nodes"], dict):
+                for node_key, node_cfg in settings["nodes"].items():
+                    if isinstance(node_cfg, dict):
+                        node_cfg["com_port"] = new_port
+            
+            # Guardar en disco
+            save_settings(settings)
+            
+            # Notificar en la interfaz
+            self.log_message(f"[AUTO] Porta COM do BaseStation atualizada automaticamente para {new_port}")
+            
+            # Si el procesador tiene una configuración, actualizarla en caliente
+            if self.data_processor:
+                try:
+                    self.data_processor.update_config(settings.get("nodes", {}))
+                except Exception:
+                    pass
+        except Exception as e:
+            self.log_message(f"[ERRO] Erro ao salvar porta autodetectada: {e}")
 
     def _update_status(self, connected):
         self.connected = connected
