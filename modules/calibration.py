@@ -67,7 +67,7 @@ class CalibrationManager:
         if serial and str(serial).strip():
             self.load_points()
         else:
-            self._log_to_file("Advertencia: serial no definido o vacío, no se cargará archivo de calibración.")
+            self._log_to_file("Aviso: serial não definido ou vazio, não será carregado o arquivo de calibração.")
     def _get_csv_path(self):
         return os.path.join(self._calib_dir, self.UNIFIED_CSV_NAME)
 
@@ -103,7 +103,7 @@ class CalibrationManager:
                     serial_key = str(internal)
             else:
                 serial_key = "unknown"
-            self._log_to_file(f"Advertencia: serial no disponible, usando clave alternativa '{serial_key}' para guardar calibración")
+            self._log_to_file(f"Aviso: serial não disponível, usando chave alternativa '{serial_key}' para salvar calibração")
 
         csv_path = self._get_csv_path()
         # Build mapping weight->reading for current points
@@ -144,7 +144,7 @@ class CalibrationManager:
 
         # Write back CSV
         self._write_csv(csv_path, new_weights, serials_map)
-        self._log_to_file(f"Guardada calibración en CSV: {csv_path} para clave={serial_key}")
+        self._log_to_file(f"Salva calibração em CSV: {csv_path} para chave={serial_key}")
 
     def load_points(self):
         csv_path = self._get_csv_path()
@@ -178,19 +178,19 @@ class CalibrationManager:
                         # Only accept this key if we actually found points for it
                         if tmp_loaded:
                             self.points = tmp_loaded
-                            self._log_to_file(f"Cargados {len(self.points)} puntos de calibración desde CSV: {csv_path} (clave={key})")
+                            self._log_to_file(f"Carregados {len(self.points)} pontos de calibração do CSV: {csv_path} (chave={key})")
                             found = True
                             break
                 csv_loaded = found
             else:
                 csv_loaded = False
         except Exception as e:
-            self._log_to_file(f"Error leyendo CSV de calibración: {e}")
+            self._log_to_file(f"Erro ao ler CSV de calibração: {e}")
             csv_loaded = False
 
         # If CSV not loaded, nothing to load (we no longer use per-serial JSON files)
         if not csv_loaded:
-            self._log_to_file(f"No se encontró CSV de calibración ({csv_path}) o serial no definido; no se cargaron puntos.")
+            self._log_to_file(f"Não foi encontrado CSV de calibração ({csv_path}) o serial não definido; não foram carregados pontos.")
             self.points = []
 
         # Si cargamos puntos, guardar en CSV (migración) y luego auto-aplicar
@@ -200,7 +200,7 @@ class CalibrationManager:
                     # Persistir puntos cargados (migración JSON->CSV o asegurar existencia en CSV)
                     self.save_points()
                 except Exception as e:
-                    self._log_to_file(f"Fallo guardando puntos después de cargar: {e}")
+                    self._log_to_file(f"Falha ao salvar pontos após carregar: {e}")
 
             if self.points and hasattr(self.dp, 'set_calibration_segments'):
                 pts = self.get_points()  # lista de (weight, reading)
@@ -223,9 +223,9 @@ class CalibrationManager:
 
                 try:
                     self.dp.set_calibration_segments(pts, serial=self.serial, composite=composite)
-                    self._log_to_file(f"Auto-aplicada calibración a serial={self.serial} composite={composite}")
+                    self._log_to_file(f"Auto-aplicada calibração ao serial={self.serial} composite={composite}")
                 except Exception as e:
-                    self._log_to_file(f"Fallo auto-aplicando calibración: {e}")
+                    self._log_to_file(f"Falha ao aplicar calibração automaticamente: {e}")
         except Exception:
             pass
     def _log_to_file(self, message):
@@ -437,7 +437,7 @@ class CalibrationManager:
             try:
                 self.save_points()
             except Exception as e:
-                self._log_to_file(f"Error guardando puntos al aplicar calibración: {e}")
+                self._log_to_file(f"Erro ao salvar pontos ao aplicar calibração: {e}")
 
         method = "segments"
 
@@ -467,14 +467,14 @@ class CalibrationManager:
 
                 try:
                     self.dp.set_calibration_segments(points, serial=self.serial, composite=composite)
-                    self._log_to_file(f"Aplicada calibración segments a serial={self.serial} composite={composite}")
+                    self._log_to_file(f"Aplicada calibração segments ao serial={self.serial} composite={composite}")
                 except Exception:
                     # Ultimo recurso: pasar solo points
                     try:
                         self.dp.set_calibration_segments(points)
-                        self._log_to_file(f"Aplicada calibración segments (fallback) sin target explícito")
+                        self._log_to_file(f"Aplicada calibração segments (fallback) sem target explícito")
                     except Exception as e:
-                        self._log_to_file(f"Error aplicando calibración: {e}")
+                        self._log_to_file(f"Erro ao aplicar calibração: {e}")
             elif points:
                 # Fallback: guardar en atributo
                 self.dp.calibration_segments = points

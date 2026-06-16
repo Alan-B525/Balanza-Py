@@ -14,10 +14,14 @@ import os
 import time
 import threading
 import traceback
+import re
 from typing import List, Dict, Any, Optional, Set
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
+
+_RE_CHANNEL_NUM = re.compile(r'\b(\d+)\b')
+_RE_CHANNEL_NAMED = re.compile(r'(?:ch|val|channel|analog|column|ch_)\s*(\d+)')
 
 # --- CONFIGURACIÓN DE RUTA MSCL ---
 _current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -104,6 +108,13 @@ class MSCLDriver(ISistemaPesaje):
         self._parse_config()
         # Último recuento de nodos recuperados tras intentar conectar
         self._last_recovered_count = 0
+        self._acquisition_active = False
+        self._consecutive_errors = 0
+        # Evento de sincronización: señaliza cuando no hay adquisición activa
+        self._acquisition_done_event = threading.Event()
+        self._acquisition_done_event.set()  # Inicialmente no hay adquisición
+        # Callback opcional para notificar auto-desconexión al backend
+        self._disconnect_callback = None
 
     def set_port_autodetected_callback(self, cb):
         """Registra un callback para informar la autodetección de un puerto COM."""
@@ -430,7 +441,7 @@ class MSCLDriver(ISistemaPesaje):
             status = node.setToIdle()
             # Evitar bucles infinitos si la librería no completa el estado.
             # complete(timeout_ms) ya espera internamente; limitamos intentos.
-            max_attempts = 10
+            max_attempts = 3
             attempts = 0
             while not status.complete(timeout_ms):
                 attempts += 1
@@ -542,40 +553,58 @@ class MSCLDriver(ISistemaPesaje):
 
     def desconectar(self):
         """Cierra conexión intentando dejar los nodos en IDLE."""
+        base_station = None
+        connection = None
+        active_node_ids = []
+        
         with self._lock:
             self._log("Iniciando desconexão...")
+            if self._state == ConnectionState.DISCONNECTED or self._state == ConnectionState.DISCONNECTING:
+                return
+            self._state = ConnectionState.DISCONNECTING
             
-            # 1. Intentar detener nodos individualmente (si es posible)
-            if self._base_station and self._active_node_ids:
-                self._log(f"Enviando comando STOP para {len(self._active_node_ids)} nós...")
-                for nid in list(self._active_node_ids):
-                    try:
-                        node = mscl.WirelessNode(nid, self._base_station)
-                        node.setToIdle()
-                    except Exception:
-                        pass # Si falla, no importa, ya lo intentamos
-
-            # 2. Apagar Beacon (Fundamental para detener sincronización)
-            if self._base_station:
-                try:
-                    self._base_station.disableBeacon()
-                    self._log("Beacon desativado.")
-                except Exception:
-                    pass
+            base_station = self._base_station
+            connection = self._connection
+            active_node_ids = list(self._active_node_ids) if self._active_node_ids else []
             
-            # 3. Cerrar conexión física
-            if self._connection:
-                try:
-                    self._connection.disconnect()
-                except Exception:
-                    pass
-
+            # Limpiar campos de la instancia inmediatamente bajo lock
             self._active_node_ids.clear()
             self._frame_buffer.clear()
             self._base_station = None
             self._connection = None
             self._network = None
             
+        # Esperar a que la adquisición actual termine (máximo 2s)
+        if hasattr(self, '_acquisition_done_event'):
+            self._acquisition_done_event.wait(timeout=2.0)
+
+        # Ahora hacemos todo fuera del lock principal
+        # 1. Intentar detener nodos individualmente (si es posible)
+        if base_station and active_node_ids:
+            self._log(f"Enviando comando STOP para {len(active_node_ids)} nós...")
+            for nid in active_node_ids:
+                try:
+                    node = mscl.WirelessNode(nid, base_station)
+                    node.setToIdle()
+                except Exception:
+                    pass # Si falla, no importa, ya lo intentamos
+
+        # 2. Apagar Beacon (Fundamental para detener sincronización)
+        if base_station:
+            try:
+                base_station.disableBeacon()
+                self._log("Beacon desativado.")
+            except Exception:
+                pass
+        
+        # 3. Cerrar conexión física
+        if connection:
+            try:
+                connection.disconnect()
+            except Exception:
+                pass
+
+        with self._lock:
             self._state = ConnectionState.DISCONNECTED
             self._log("Sistema desconectado.")
 
@@ -588,24 +617,55 @@ class MSCLDriver(ISistemaPesaje):
         Método llamado periódicamente por DataProcessor.
         Lee datos del buffer del Gateway y los agrega en tramas sincronizadas.
         """
+        base_station = None
+        state = None
         with self._lock:
-            if not self._base_station or self._state != ConnectionState.SAMPLING:
+            base_station = self._base_station
+            state = self._state
+            if not base_station or state != ConnectionState.SAMPLING:
                 return []
+            self._acquisition_active = True
+            if hasattr(self, '_acquisition_done_event'):
+                self._acquisition_done_event.clear()
 
-            # Leer del buffer interno del Gateway
-            try:
-                sweeps = self._base_station.getData(self.DATA_TIMEOUT_MS)
-            except Exception:
-                return []
+        sweeps = []
+        try:
+            sweeps = base_station.getData(self.DATA_TIMEOUT_MS)
+            with self._lock:
+                self._consecutive_errors = 0
+        except Exception as e:
+            with self._lock:
+                self._consecutive_errors = getattr(self, '_consecutive_errors', 0) + 1
+                curr_errors = self._consecutive_errors
+                
+            if curr_errors == 1 or curr_errors % 50 == 0:
+                self._log(f"Error en getData de BaseStation (consecutivos: {curr_errors}): {e}")
+                
+            if curr_errors >= 50:
+                self._log("Demasiados errores consecutivos en getData. Forzando desconexión automática...")
+                with self._lock:
+                    self._state = ConnectionState.DISCONNECTED
+                # Notificar al backend sobre la auto-desconexión
+                try:
+                    if self._disconnect_callback:
+                        self._disconnect_callback('auto_disconnect', f'50 errores consecutivos en getData: {e}')
+                except Exception:
+                    pass
+            return []
+        finally:
+            with self._lock:
+                self._acquisition_active = False
+            if hasattr(self, '_acquisition_done_event'):
+                self._acquisition_done_event.set()
 
-            now = time.time()
+        now = time.time()
 
-            # Procesar cada paquete individualmente
-            for sweep in sweeps:
-                self._process_single_sweep(sweep)
+        # Procesar cada paquete individualmente
+        for sweep in sweeps:
+            self._process_single_sweep(sweep)
 
-            # Recolectar tramas que estén completas o hayan expirado
-            return self._collect_ready_frames(now)
+        # Recolectar tramas que estén completas o hayan expirado
+        return self._collect_ready_frames(now)
 
     def _process_single_sweep(self, sweep):
         """Procesa un paquete de datos crudo y lo mete en el buffer de tramas."""
@@ -624,19 +684,28 @@ class MSCLDriver(ISistemaPesaje):
             for dp in sweep.data():
                 try:
                     # Mapeo de nombre de canal (ej: "Channel 1" -> "ch1")
-                    import re
                     ch_str = str(dp.channelName()).lower()
                     ch_key = None
                     
-                    # Extraer el número exacto del canal de forma robusta
-                    match = re.search(r'\b(\d+)\b', ch_str)
-                    num = None
-                    if match:
-                        num = int(match.group(1))
+                    # Ruta rápida sin regex (evitar false-match en canales multi-dígito)
+                    if 'ch1' in ch_str or ch_str.endswith(' 1'):
+                        num = 1
+                    elif 'ch2' in ch_str or ch_str.endswith(' 2'):
+                        num = 2
+                    elif 'ch3' in ch_str or ch_str.endswith(' 3'):
+                        num = 3
+                    elif 'ch4' in ch_str or ch_str.endswith(' 4'):
+                        num = 4
                     else:
-                        match_named = re.search(r'(?:ch|val|channel|analog|column|ch_)\s*(\d+)', ch_str)
-                        if match_named:
-                            num = int(match_named.group(1))
+                        match = _RE_CHANNEL_NUM.search(ch_str)
+                        if match:
+                            num = int(match.group(1))
+                        else:
+                            match_named = _RE_CHANNEL_NAMED.search(ch_str)
+                            if match_named:
+                                num = int(match_named.group(1))
+                            else:
+                                num = None
                     
                     if num == 1: ch_key = "ch1"
                     elif num == 2: ch_key = "ch2"
@@ -684,6 +753,13 @@ class MSCLDriver(ISistemaPesaje):
                     break
             
             if target_ts is None:
+                # Limitar el tamaño de _frame_buffer
+                if len(self._frame_buffer) >= 100:
+                    try:
+                        oldest_ts = min(self._frame_buffer.keys())
+                        del self._frame_buffer[oldest_ts]
+                    except Exception:
+                        pass
                 # Crear nuevo frame
                 frame = AggregatedFrame(timestamp_ns=ts_ns)
                 self._frame_buffer[ts_ns] = frame

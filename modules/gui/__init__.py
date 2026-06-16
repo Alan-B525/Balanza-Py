@@ -28,11 +28,31 @@ except ImportError:
     MATPLOTLIB_AVAILABLE = False
     # Mensaje de advertencia eliminado (solo log si es necesario)
 
+from decimal import Decimal, ROUND_HALF_EVEN
+_DECIMAL_QUANTIZER = Decimal('0.01')
 
 BASE_WIDTH = 1280
 BASE_HEIGHT = 800
 
+def _interp_color(v0, v1, t):
+    return tuple(int(v0[i] + (v1[i] - v0[i]) * t) for i in range(3))
+
 class BalanzaGUI(ttk.Window):
+    def _set_widget_prop(self, widget, prop, value):
+        """Sets a property on a widget only if the value has changed, using a cache."""
+        if not widget:
+            return
+        if not hasattr(self, '_ui_shadow') or self._ui_shadow is None:
+            self._ui_shadow = {}
+        widget_id = id(widget)
+        cache_key = (widget_id, prop)
+        if self._ui_shadow.get(cache_key) != value:
+            try:
+                widget.configure(**{prop: value})
+            except Exception:
+                pass
+            self._ui_shadow[cache_key] = value
+
     def _load_calibration_session(self, parent=None):
         """Carga los puntos de calibración desde disco y refresca la UI."""
         try:
@@ -51,6 +71,9 @@ class BalanzaGUI(ttk.Window):
     def _load_profiles(self):
         """Carrega perfis de manutenção a partir de settings.json.
         Garante que existam exatamente 5 perfis fixos (slots)."""
+        if getattr(self, '_profiles_cache', None) is not None:
+            return self._profiles_cache
+
         from config import load_settings, save_settings
         
         # Estructura base con keys estables
@@ -86,10 +109,12 @@ class BalanzaGUI(ttk.Window):
         except Exception as e:
             print(f"Erro ao carregar perfis: {e}")
             
+        self._profiles_cache = data
         return data
 
     def _save_profiles(self, profiles_data):
         """Salva perfis de manutenção dentro de settings.json."""
+        self._profiles_cache = profiles_data
         from config import load_settings, save_settings
         try:
             settings = load_settings()
@@ -109,6 +134,8 @@ class BalanzaGUI(ttk.Window):
         return None
 
     def __init__(self, data_queue, command_queue, data_processor=None):
+        self._profiles_cache = None
+        self._ui_shadow = {}
         super().__init__(themename=THEME_NAME)
         self.data_processor = data_processor
         self.title(APP_TITLE)
@@ -130,11 +157,6 @@ class BalanzaGUI(ttk.Window):
             except Exception:
                 pass
             self.geometry(f"{desired_w}x{desired_h}+{x}+{y}")
-        except Exception:
-            try:
-                self.state("zoomed")
-            except Exception:
-                self.geometry(f"{real_screen_width}x{real_screen_height}+0+0")
         except Exception:
             try:
                 self.state("zoomed")
@@ -1338,15 +1360,13 @@ class BalanzaGUI(ttk.Window):
             # Actualizar label en pestaña de mantenimiento
             try:
                 if hasattr(self, 'lbl_tare_value') and self.lbl_tare_value:
-                    if self.lbl_tare_value.cget('text') != tare_text:
-                        self.lbl_tare_value.configure(text=tare_text)
+                    self._set_widget_prop(self.lbl_tare_value, 'text', tare_text)
             except Exception:
                 pass
             # Actualizar label en vista principal (si existe)
             try:
                 if hasattr(self, 'lbl_tare_value_main') and self.lbl_tare_value_main:
-                    if self.lbl_tare_value_main.cget('text') != tare_text:
-                        self.lbl_tare_value_main.configure(text=tare_text)
+                    self._set_widget_prop(self.lbl_tare_value_main, 'text', tare_text)
             except Exception:
                 pass
         
@@ -1379,51 +1399,30 @@ class BalanzaGUI(ttk.Window):
         # Mudar cor do painel TOTAL segundo estado de sensores - FAIL-SAFE
         if any_disconnected:
             # VERMELHO - UI simplificada: solo estado de error
-            try:
-                if self.total_section.cget('style') != 'TotalPanelDanger.TFrame':
-                    self.total_section.configure(style='TotalPanelDanger.TFrame')
-            except Exception:
-                pass
-            try:
-                if self.lbl_total_title.cget('text') != "ERROR" or self.lbl_total_title.cget('style') != 'TotalLabelDanger.TLabel':
-                    self.lbl_total_title.configure(text="ERROR", style='TotalLabelDanger.TLabel')
-            except Exception:
-                pass
-            try:
-                if self.lbl_total.cget('text') != "ERROR" or self.lbl_total.cget('style') != 'TotalValueDanger.TLabel':
-                    self.lbl_total.configure(text="ERROR", style='TotalValueDanger.TLabel')
-            except Exception:
-                pass
-            try:
-                if self.lbl_total_unit.cget('text') != "" or self.lbl_total_unit.cget('style') != 'TotalUnitDanger.TLabel':
-                    self.lbl_total_unit.configure(text="", style='TotalUnitDanger.TLabel')
-            except Exception:
-                pass
+            self._set_widget_prop(self.total_section, 'style', 'TotalPanelDanger.TFrame')
+            self._set_widget_prop(self.lbl_total_title, 'text', 'ERRO')
+            self._set_widget_prop(self.lbl_total_title, 'style', 'TotalLabelDanger.TLabel')
+            self._set_widget_prop(self.lbl_total, 'text', 'ERRO')
+            self._set_widget_prop(self.lbl_total, 'style', 'TotalValueDanger.TLabel')
+            self._set_widget_prop(self.lbl_total_unit, 'text', '')
+            self._set_widget_prop(self.lbl_total_unit, 'style', 'TotalUnitDanger.TLabel')
+            
             # Mantener paridad visual en la pestaña de mantenimiento si existe
-            try:
-                if hasattr(self, 'lbl_maint_total') and self.lbl_maint_total:
-                    if self.lbl_maint_total.cget('text') != "ERROR" or self.lbl_maint_total.cget('style') != 'TotalValueDanger.TLabel':
-                        self.lbl_maint_total.configure(text="ERROR", style='TotalValueDanger.TLabel')
-                if hasattr(self, 'lbl_maint_total_title') and self.lbl_maint_total_title:
-                    if self.lbl_maint_total_title.cget('text') != "ERROR" or self.lbl_maint_total_title.cget('style') != 'TotalLabelDanger.TLabel':
-                        self.lbl_maint_total_title.configure(text="ERROR", style='TotalLabelDanger.TLabel')
-                if hasattr(self, 'lbl_maint_total_unit') and self.lbl_maint_total_unit:
-                    if self.lbl_maint_total_unit.cget('text') != "" or self.lbl_maint_total_unit.cget('style') != 'TotalUnitDanger.TLabel':
-                        self.lbl_maint_total_unit.configure(text="", style='TotalUnitDanger.TLabel')
-            except Exception:
-                pass
+            if hasattr(self, 'lbl_maint_total') and self.lbl_maint_total:
+                self._set_widget_prop(self.lbl_maint_total, 'text', 'ERRO')
+                self._set_widget_prop(self.lbl_maint_total, 'style', 'TotalValueDanger.TLabel')
+            if hasattr(self, 'lbl_maint_total_title') and self.lbl_maint_total_title:
+                self._set_widget_prop(self.lbl_maint_total_title, 'text', 'ERRO')
+                self._set_widget_prop(self.lbl_maint_total_title, 'style', 'TotalLabelDanger.TLabel')
+            if hasattr(self, 'lbl_maint_total_unit') and self.lbl_maint_total_unit:
+                self._set_widget_prop(self.lbl_maint_total_unit, 'text', '')
+                self._set_widget_prop(self.lbl_maint_total_unit, 'style', 'TotalUnitDanger.TLabel')
         else:
             # AZUL - Todos os sensores conectados (normal)
-            try:
-                if self.total_section.cget('style') != 'TotalPanel.TFrame':
-                    self.total_section.configure(style='TotalPanel.TFrame')
-            except Exception:
-                pass
-            try:
-                if self.lbl_total_title.cget('text') != "CARGA" or self.lbl_total_title.cget('style') != 'TotalLabel.TLabel':
-                    self.lbl_total_title.configure(text="CARGA", style='TotalLabel.TLabel')
-            except Exception:
-                pass
+            self._set_widget_prop(self.total_section, 'style', 'TotalPanel.TFrame')
+            self._set_widget_prop(self.lbl_total_title, 'text', 'CARGA')
+            self._set_widget_prop(self.lbl_total_title, 'style', 'TotalLabel.TLabel')
+            
             # Actualizar total usando timestamp (permitiendo totals negativos).
             incoming_total_last = data.get('total_last_seen', 0.0) or 0.0
             # Ignoramos la comprobación 'total_raw>0' para que valores negativos
@@ -1433,37 +1432,22 @@ class BalanzaGUI(ttk.Window):
             if incoming_total_last > self._widget_last_total:
                 peso_ton = data.get('total', 0.0)
                 total_text = f"{self._format_weight(peso_ton)}"
-                # Solo actualizar texto; la fuente permanece fija (definida por el estilo)
-                # para evitar parpadeos y cambios de tamaño durante la operación.
-                try:
-                    if self.lbl_total.cget('text') != total_text or self.lbl_total.cget('style') != 'TotalValue.TLabel':
-                        self.lbl_total.configure(text=total_text, style='TotalValue.TLabel')
-                except Exception:
-                    try:
-                        self.lbl_total.configure(text=total_text)
-                    except Exception:
-                        pass
+                self._set_widget_prop(self.lbl_total, 'text', total_text)
+                self._set_widget_prop(self.lbl_total, 'style', 'TotalValue.TLabel')
+                
                 # Actualizar también la vista de mantenimiento si existe
-                try:
-                    if hasattr(self, 'lbl_maint_total') and self.lbl_maint_total:
-                        try:
-                            if self.lbl_maint_total.cget('text') != total_text or self.lbl_maint_total.cget('style') != 'TotalValue.TLabel':
-                                self.lbl_maint_total.configure(text=total_text, style='TotalValue.TLabel')
-                        except Exception:
-                            try:
-                                if self.lbl_maint_total.cget('text') != total_text:
-                                    self.lbl_maint_total.configure(text=total_text)
-                            except Exception:
-                                pass
-                    if hasattr(self, 'lbl_maint_total_unit') and self.lbl_maint_total_unit:
-                        if self.lbl_maint_total_unit.cget('text') != "kgf":
-                            self.lbl_maint_total_unit.configure(text="kgf", style='TotalUnit.TLabel')
-                    if hasattr(self, 'lbl_maint_total_title') and self.lbl_maint_total_title:
-                        if self.lbl_maint_total_title.cget('text') != "CARGA":
-                            self.lbl_maint_total_title.configure(text="CARGA", style='TotalLabel.TLabel')
-                except Exception:
-                    pass
+                if hasattr(self, 'lbl_maint_total') and self.lbl_maint_total:
+                    self._set_widget_prop(self.lbl_maint_total, 'text', total_text)
+                    self._set_widget_prop(self.lbl_maint_total, 'style', 'TotalValue.TLabel')
+                if hasattr(self, 'lbl_maint_total_unit') and self.lbl_maint_total_unit:
+                    self._set_widget_prop(self.lbl_maint_total_unit, 'text', 'kgf')
+                    self._set_widget_prop(self.lbl_maint_total_unit, 'style', 'TotalUnit.TLabel')
+                if hasattr(self, 'lbl_maint_total_title') and self.lbl_maint_total_title:
+                    self._set_widget_prop(self.lbl_maint_total_title, 'text', 'CARGA')
+                    self._set_widget_prop(self.lbl_maint_total_title, 'style', 'TotalLabel.TLabel')
+                
                 self._widget_last_total = incoming_total_last
+                
                 # Actualizar la barra de carga (0..1200)
                 try:
                     val = float(peso_ton or 0.0)
@@ -1511,9 +1495,6 @@ class BalanzaGUI(ttk.Window):
                         pct = max(0.0, min(1.0, (val - min_v) / (max_v - min_v)))
                         marker_min_x, marker_max_x = -1, -1
 
-                        def interp_color(v0, v1, t):
-                            return tuple(int(v0[i] + (v1[i] - v0[i]) * t) for i in range(3))
-
                         blue = (37, 99, 235)
                         light_blue = (56, 189, 248)
                         green = (34, 197, 94)
@@ -1525,19 +1506,19 @@ class BalanzaGUI(ttk.Window):
                             rgb = blue
                         elif val <= 300:
                             t = val / 300.0
-                            rgb = interp_color(blue, light_blue, t)
+                            rgb = _interp_color(blue, light_blue, t)
                         elif val <= 600:
                             t = (val - 300) / 300.0
-                            rgb = interp_color(light_blue, green, t)
+                            rgb = _interp_color(light_blue, green, t)
                         elif val <= 800:
                             t = (val - 600) / 200.0
-                            rgb = interp_color(green, yellow, t)
+                            rgb = _interp_color(green, yellow, t)
                         elif val <= 1000:
                             t = (val - 800) / 200.0
-                            rgb = interp_color(yellow, orange, t)
+                            rgb = _interp_color(yellow, orange, t)
                         elif val <= 1200:
                             t = (val - 1000) / 200.0
-                            rgb = interp_color(orange, red, t)
+                            rgb = _interp_color(orange, red, t)
                         else:
                             rgb = red
                         color = '#%02x%02x%02x' % rgb
@@ -1596,15 +1577,14 @@ class BalanzaGUI(ttk.Window):
                                     text = f"{val:.1f}".replace('.', ',') + "°"
                                 else:
                                     text = "0,0°"
-                                if lbl.cget('text') != text:
-                                    lbl.configure(text=text)
+                                self._set_widget_prop(lbl, 'text', text)
                             except Exception:
                                 pass
                 except Exception:
                     pass
             try:
-                if self.lbl_total_unit.cget('text') != "kgf" or self.lbl_total_unit.cget('style') != 'TotalUnit.TLabel':
-                    self.lbl_total_unit.configure(text="kgf", style='TotalUnit.TLabel')
+                self._set_widget_prop(self.lbl_total_unit, 'text', 'kgf')
+                self._set_widget_prop(self.lbl_total_unit, 'style', 'TotalUnit.TLabel')
             except Exception:
                 pass
         
@@ -1634,62 +1614,33 @@ class BalanzaGUI(ttk.Window):
                 prev_last = self._widget_last_seen.get(key, 0.0)
                 if incoming_last > prev_last:
                     display_text = self._format_weight(valor_ton)
-                    try:
-                        if val_widget.cget('text') != display_text:
-                            val_widget.configure(text=display_text)
-                    except Exception:
-                        # Ignorar errores de Tk (widget ya destruido u otro fallo)
-                        try:
-                            val_widget['text'] = display_text
-                        except Exception:
-                            pass
-
+                    self._set_widget_prop(val_widget, 'text', display_text)
                     self._widget_last_seen[key] = incoming_last
 
                 # Atualizar estado visual segundo conexo
                 try:
                     if info.get('connected', True):
-                        try:
-                            if val_widget.cget('foreground') != "#1e293b":
-                                val_widget.configure(foreground="#1e293b")
-                        except Exception:
-                            pass
+                        self._set_widget_prop(val_widget, 'foreground', '#1e293b')
                         rssi_widget = widgets.get('rssi')
                         if rssi_widget and hasattr(rssi_widget, 'winfo_exists') and rssi_widget.winfo_exists():
-                            try:
-                                if rssi_widget.cget('text') != "" or rssi_widget.cget('foreground') != "#22c55e":
-                                    rssi_widget.configure(text="", foreground="#22c55e")
-                            except Exception:
-                                pass
+                            self._set_widget_prop(rssi_widget, 'text', '')
+                            self._set_widget_prop(rssi_widget, 'foreground', '#22c55e')
                         if 'status' in widgets:
                             st = widgets.get('status')
                             if st and hasattr(st, 'winfo_exists') and st.winfo_exists():
-                                try:
-                                    if st.cget('text') != "Ativo" or st.cget('foreground') != "#22c55e":
-                                        st.configure(text="Ativo", foreground="#22c55e")
-                                except Exception:
-                                    pass
+                                self._set_widget_prop(st, 'text', 'Ativo')
+                                self._set_widget_prop(st, 'foreground', '#22c55e')
                     else:
-                        try:
-                            if val_widget.cget('foreground') != "#cbd5e1":
-                                val_widget.configure(foreground="#cbd5e1")
-                        except Exception:
-                            pass
+                        self._set_widget_prop(val_widget, 'foreground', '#cbd5e1')
                         rssi_widget = widgets.get('rssi')
                         if rssi_widget and hasattr(rssi_widget, 'winfo_exists') and rssi_widget.winfo_exists():
-                            try:
-                                if rssi_widget.cget('text') != "" or rssi_widget.cget('foreground') != "#ef4444":
-                                    rssi_widget.configure(text="", foreground="#ef4444")
-                            except Exception:
-                                pass
+                            self._set_widget_prop(rssi_widget, 'text', '')
+                            self._set_widget_prop(rssi_widget, 'foreground', '#ef4444')
                         if 'status' in widgets:
                             st = widgets.get('status')
                             if st and hasattr(st, 'winfo_exists') and st.winfo_exists():
-                                try:
-                                    if st.cget('text') != "Sem Sinal" or st.cget('foreground') != "#ef4444":
-                                        st.configure(text="Sem Sinal", foreground="#ef4444")
-                                except Exception:
-                                    pass
+                                self._set_widget_prop(st, 'text', 'Sem Sinal')
+                                self._set_widget_prop(st, 'foreground', '#ef4444')
                 except Exception:
                     pass
 
@@ -2568,8 +2519,7 @@ class BalanzaGUI(ttk.Window):
         try:
             if self._show_decimals:
                 # Con decimales: 2 posiciones usando redondeo bancario
-                from decimal import Decimal, ROUND_HALF_EVEN
-                d = Decimal(str(val_float)).quantize(Decimal('0.01'), rounding=ROUND_HALF_EVEN)
+                d = Decimal(str(val_float)).quantize(_DECIMAL_QUANTIZER, rounding=ROUND_HALF_EVEN)
                 return f"{d}".replace('.', ',')
             else:
                 # Sin decimales: redondeo al entero más cercano (norma ISO 80000-1)
@@ -2821,10 +2771,12 @@ class BalanzaGUI(ttk.Window):
         
         def on_yes():
             result['value'] = True
-            result['done'] = True
+            try: dialog.destroy()
+            except: pass
             
         def on_no():
-            result['done'] = True
+            try: dialog.destroy()
+            except: pass
             
         btn_yes = ttk.Button(btn_frame, text="SIM", bootstyle="success", width=15, 
                              command=on_yes, padding=(30, 20))
@@ -2847,10 +2799,11 @@ class BalanzaGUI(ttk.Window):
         except Exception:
             pass
         
-        # Esperar respuesta con loop manual
-        while not result['done']:
-            dialog.update()
-            self.update()
+        # Esperar respuesta de forma pasiva y eficiente
+        try:
+            parent.wait_window(dialog)
+        except Exception:
+            pass
         
         # Limpiar
         try:
@@ -2916,15 +2869,18 @@ class BalanzaGUI(ttk.Window):
         
         def on_overwrite():
             result['value'] = 'overwrite'
-            result['done'] = True
+            try: dialog.destroy()
+            except: pass
             
         def on_clear():
             result['value'] = 'clear'
-            result['done'] = True
+            try: dialog.destroy()
+            except: pass
 
         def on_cancel():
             result['value'] = 'cancel'
-            result['done'] = True
+            try: dialog.destroy()
+            except: pass
             
         btn_overwrite = ttk.Button(btn_frame, text="SOBRESCREVER", bootstyle="success", width=15, 
                                    command=on_overwrite, padding=(10, 20))
@@ -2951,10 +2907,11 @@ class BalanzaGUI(ttk.Window):
         except Exception:
             pass
         
-        # Esperar respuesta con loop manual
-        while not result['done']:
-            dialog.update()
-            self.update()
+        # Esperar respuesta de forma pasiva y eficiente
+        try:
+            parent.wait_window(dialog)
+        except Exception:
+            pass
         
         # Limpiar
         try:

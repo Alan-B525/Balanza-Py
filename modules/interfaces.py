@@ -8,6 +8,7 @@ class ConnectionState(Enum):
     CONNECTED = "connected"
     SAMPLING = "sampling"
     ERROR = "error"
+    DISCONNECTING = "disconnecting"
 
 class ISistemaPesaje(ABC):
     """

@@ -45,6 +45,9 @@ class BackendController:
         self.active_nodos = active_nodos if active_nodos is not None else config.NODOS_CONFIG
         self.use_sensor_config = use_sensor_config
         self.modbus_params = modbus_params or {}
+        self._modbus_cached_data_source_key = self.modbus_params.get('data_source_key')
+        self._modbus_cached_swap_words = bool(self.modbus_params.get('swap_words', False))
+        self._modbus_cached_serial_port = self.modbus_params.get('serial_port', '')
 
         # Modbus server lifecycle variables (protegidos por modbus_state_lock)
         self.modbus_state_lock = threading.Lock()
@@ -75,6 +78,8 @@ class BackendController:
         self.GUI_KEEPALIVE_S = float(self.RUNTIME_TUNING.get('gui_keepalive_s', 0.5))
         self.last_gui_publish_ts = 0.0
         self.last_gui_sample_ts = None
+        self.last_proc_ts = 0.0
+        self.last_processed_result = {}
         self.diag_samples_budget = 0
         self.diag_last_log_ts = 0.0
 
@@ -95,6 +100,30 @@ class BackendController:
                 self.sistema_pesaje.set_port_autodetected_callback(self._handle_port_autodetected)
             except Exception:
                 pass
+
+        # Registrar callback de auto-desconexión del driver
+        if hasattr(self.sistema_pesaje, '_disconnect_callback'):
+            try:
+                self.sistema_pesaje._disconnect_callback = self._handle_auto_disconnect
+            except Exception:
+                pass
+
+        # Tracking de transición de conexión para detectar desconexiones silenciosas
+        self._was_connected = False
+
+    def _handle_auto_disconnect(self, reason: str, detail: str) -> None:
+        """Maneja la notificación de auto-desconexión del driver (ej: 50 errores consecutivos)."""
+        try:
+            self.data_queue.put({
+                'type': 'SENSOR_DISCONNECT',
+                'payload': {
+                    'reason': reason,
+                    'detail': detail
+                }
+            })
+            self.data_queue.put({'type': 'LOG', 'payload': f"Auto-desconexión del sensor: {reason} - {detail}"})
+        except Exception:
+            pass
 
     def _handle_port_autodetected(self, port: str) -> None:
         """Maneja el evento de puerto COM autodetectado."""
@@ -364,6 +393,7 @@ class BackendController:
                     ch_load = cfg_c1.get('ch_load') or cfg_c1.get('ch') if isinstance(cfg_c1, dict) else None
                     if node_id is not None:
                         self.modbus_params['data_source_key'] = f"{node_id}:{ch_load or 'ch1'}"
+                        self._modbus_cached_data_source_key = self.modbus_params['data_source_key']
                 except Exception:
                     pass
 
@@ -432,6 +462,9 @@ class BackendController:
                     'timeout': self.modbus_params.get('timeout'),
                     'enabled': bool(self.modbus_params.get('enabled', True)),
                 }
+                self._modbus_cached_data_source_key = self.modbus_params.get('data_source_key')
+                self._modbus_cached_swap_words = bool(self.modbus_params.get('swap_words', False))
+                self._modbus_cached_serial_port = self.modbus_params.get('serial_port', '')
 
             self.modbus_waiting_config_change = False
             self.modbus_last_not_started_reason = None
@@ -441,10 +474,7 @@ class BackendController:
 
             with self.modbus_state_lock:
                 if self.modbus_server is not None and (modbus_conf_changed or not new_modbus_conf.get('enabled', True)):
-                    try:
-                        self.modbus_server.stop()
-                    except Exception:
-                        pass
+                    self._stop_modbus_server_async(self.modbus_server)
                     self.modbus_server = None
                     if self.last_modbus_status != 'idle':
                         self.data_queue.put({'type': 'MODBUS_STATUS', 'payload': 'idle'})
@@ -497,10 +527,7 @@ class BackendController:
                     
                     with self.modbus_state_lock:
                         if self.modbus_server is not None:
-                            try:
-                                self.modbus_server.stop()
-                            except Exception:
-                                pass
+                            self._stop_modbus_server_async(self.modbus_server)
                             self.modbus_server = None
                     self.modbus_last_not_started_reason = None
                     self.modbus_start_ts = None
@@ -573,10 +600,7 @@ class BackendController:
                         pass
                     with self.modbus_state_lock:
                         if self.modbus_server is not None:
-                            try:
-                                self.modbus_server.stop()
-                            except Exception:
-                                pass
+                            self._stop_modbus_server_async(self.modbus_server)
                             self.modbus_server = None
                     self.modbus_last_not_started_reason = None
                     self.modbus_start_ts = None
@@ -652,6 +676,20 @@ class BackendController:
                     })
                     self.data_queue.put({'type': 'LOG', 'payload': f"Fallo reconexion de sensor {node_id} despues de {self.MAX_AUTO_RECONNECT} intentos"})
 
+    def _stop_modbus_server_async(self, server):
+        """Detiene el servidor Modbus de forma asíncrona en un hilo separado para evitar bloqueos."""
+        if server is None:
+            return
+        
+        def run_stop():
+            try:
+                server.stop()
+            except Exception:
+                pass
+                
+        t = threading.Thread(target=run_stop, name="ModbusStopThread", daemon=True)
+        t.start()
+
     def _publish_to_modbus(self, raw_data: List[Dict[str, Any]], datos_procesados: Dict[str, Any]) -> None:
         """Envía el valor bruto y los 5 ángulos al servidor Modbus RTU."""
         with self.modbus_state_lock:
@@ -674,12 +712,9 @@ class BackendController:
         if latest_ts is None or latest_ts != self.last_modbus_sample_ts:
             total_bruto = float(datos_procesados.get('total_gross', 0.0) or 0.0)
             modbus_value = total_bruto
-
-            with self.state_lock:
-                mb_params = self.modbus_params.copy() if self.modbus_params else {}
             
             try:
-                src = mb_params.get('data_source_key')
+                src = self._modbus_cached_data_source_key
                 if src:
                     sensores = datos_procesados.get('sensores', {}) or {}
                     sensor_info = sensores.get('celda_1')
@@ -696,7 +731,7 @@ class BackendController:
             if latest_ts is not None:
                 self.last_modbus_sample_ts = latest_ts
 
-            swap_words = bool(mb_params.get('swap_words', False))
+            swap_words = self._modbus_cached_swap_words
             
             # Serializar peso bruto de la celda 1 en 2 holding registers (float32)
             regs = self._float_to_float32_registers(modbus_value, swap_words)
@@ -743,13 +778,10 @@ class BackendController:
                             
                             if port_blocked:
                                 self.modbus_waiting_config_change = True
-                                serial_conf = mb_params.get('serial_port', '')
+                                serial_conf = self._modbus_cached_serial_port
                                 self.data_queue.put({'type': 'LOG', 'payload': f"Modbus RTU em espera: porta {serial_conf} ocupada/sem acceso. Altere em Configuração para tentar nuevamente."})
                             
-                            try:
-                                server.stop()
-                            except Exception:
-                                pass
+                            self._stop_modbus_server_async(server)
                             self.modbus_server = None
                             self.modbus_start_ts = None
                             self.modbus_fail_count = 0
@@ -784,76 +816,96 @@ class BackendController:
                 is_connected = False
 
             if is_connected and not self.acquisition_paused:
+                self._was_connected = True
                 try:
                     raw_data = self.sistema_pesaje.obtener_datos()
-                    datos_procesados = self.procesador.procesar(raw_data)
-
-                    if 'logs' in datos_procesados:
-                        for log_msg in datos_procesados['logs']:
-                            self.data_queue.put({'type': 'LOG', 'payload': log_msg})
-
-                    # Guardar último snapshot de ángulos
-                    try:
-                        angles = datos_procesados.get('angles')
-                        if isinstance(angles, list) and angles:
-                            cleaned = []
-                            for val in angles[:5]:
-                                try:
-                                    cleaned.append(float(val))
-                                except Exception:
-                                    cleaned.append(0.0)
-                            while len(cleaned) < 5:
-                                cleaned.append(0.0)
-                            self.last_angles = cleaned
-                    except Exception:
-                        pass
-
-                    # Gestionar reconexión de nodos
-                    self._manage_reconnections(datos_procesados)
-
-                    # Enviar datos a la GUI con filtrado/keepalive
+                    
                     now_ts = time.monotonic()
-                    latest_sample_ts = None
-                    try:
-                        last_frame = raw_data[-1] if isinstance(raw_data, list) and raw_data else {}
-                        if isinstance(last_frame, dict):
-                            latest_sample_ts = last_frame.get('timestamp_ns', None) or last_frame.get('timestamp', None)
-                    except Exception:
-                        latest_sample_ts = None
+                    if not raw_data and (now_ts - self.last_proc_ts < 0.1):
+                        # Short-circuit: sin nuevos datos y no ha pasado el intervalo de control periódico
+                        pass
+                    else:
+                        self.last_proc_ts = now_ts
+                        datos_procesados = self.procesador.procesar(raw_data)
+                        self.last_processed_result = datos_procesados
+                        
+                        if datos_procesados:
+                            if 'logs' in datos_procesados:
+                                for log_msg in datos_procesados['logs']:
+                                    self.data_queue.put({'type': 'LOG', 'payload': log_msg})
 
-                    has_new_sample = latest_sample_ts is not None and latest_sample_ts != self.last_gui_sample_ts
-                    periodic_keepalive = (now_ts - self.last_gui_publish_ts) >= self.GUI_KEEPALIVE_S
-                    rate_ok = (now_ts - self.last_gui_publish_ts) >= self.GUI_PUBLISH_INTERVAL_S
+                            # Guardar último snapshot de ángulos
+                            try:
+                                angles = datos_procesados.get('angles')
+                                if isinstance(angles, list) and angles:
+                                    cleaned = []
+                                    for val in angles[:5]:
+                                        try:
+                                            cleaned.append(float(val))
+                                        except Exception:
+                                            cleaned.append(0.0)
+                                    while len(cleaned) < 5:
+                                        cleaned.append(0.0)
+                                    self.last_angles = cleaned
+                            except Exception:
+                                pass
 
-                    if (has_new_sample and rate_ok) or periodic_keepalive:
-                        self.data_queue.put({'type': 'DATA', 'payload': datos_procesados})
-                        self.last_gui_publish_ts = now_ts
-                        if has_new_sample:
-                            self.last_gui_sample_ts = latest_sample_ts
+                            # Gestionar reconexión de nodos
+                            self._manage_reconnections(datos_procesados)
 
-                        # Logging diagnóstico (primeras muestras)
-                        try:
-                            if has_new_sample and self.diag_samples_budget > 0:
-                                now_diag = time.monotonic()
-                                if (now_diag - self.diag_last_log_ts) >= 0.20:
-                                    total_val = float(datos_procesados.get('total', 0.0) or 0.0)
-                                    total_raw = float(datos_procesados.get('total_raw', 0.0) or 0.0)
-                                    sensores = datos_procesados.get('sensores', {}) or {}
-                                    connected_count = sum(1 for info in sensores.values() if isinstance(info, dict) and info.get('connected', False))
-                                    self.data_queue.put({
-                                        'type': 'LOG',
-                                        'payload': f"[DIAG] sample ts={latest_sample_ts} total={total_val:.3f}kg raw={total_raw:.3f} sensores_on={connected_count}/{len(sensores)}"
-                                    })
-                                    self.diag_samples_budget -= 1
-                                    self.diag_last_log_ts = now_diag
-                        except Exception:
-                            pass
+                            # Enviar datos a la GUI con filtrado/keepalive
+                            latest_sample_ts = None
+                            try:
+                                last_frame = raw_data[-1] if isinstance(raw_data, list) and raw_data else {}
+                                if isinstance(last_frame, dict):
+                                    latest_sample_ts = last_frame.get('timestamp_ns', None) or last_frame.get('timestamp', None)
+                            except Exception:
+                                latest_sample_ts = None
 
-                    # Empujar datos al servidor Modbus
-                    self._publish_to_modbus(raw_data, datos_procesados)
+                            has_new_sample = latest_sample_ts is not None and latest_sample_ts != self.last_gui_sample_ts
+                            periodic_keepalive = (now_ts - self.last_gui_publish_ts) >= self.GUI_KEEPALIVE_S
+                            rate_ok = (now_ts - self.last_gui_publish_ts) >= self.GUI_PUBLISH_INTERVAL_S
+
+                            if (has_new_sample and rate_ok) or periodic_keepalive:
+                                self.data_queue.put({'type': 'DATA', 'payload': datos_procesados})
+                                self.last_gui_publish_ts = now_ts
+                                if has_new_sample:
+                                    self.last_gui_sample_ts = latest_sample_ts
+
+                                # Logging diagnóstico (primeras muestras)
+                                try:
+                                    if has_new_sample and self.diag_samples_budget > 0:
+                                        now_diag = time.monotonic()
+                                        if (now_diag - self.diag_last_log_ts) >= 0.20:
+                                            total_val = float(datos_procesados.get('total', 0.0) or 0.0)
+                                            total_raw = float(datos_procesados.get('total_raw', 0.0) or 0.0)
+                                            sensores = datos_procesados.get('sensores', {}) or {}
+                                            connected_count = sum(1 for info in sensores.values() if isinstance(info, dict) and info.get('connected', False))
+                                            self.data_queue.put({
+                                                'type': 'LOG',
+                                                'payload': f"[DIAG] sample ts={latest_sample_ts} total={total_val:.3f}kg raw={total_raw:.3f} sensores_on={connected_count}/{len(sensores)}"
+                                            })
+                                            self.diag_samples_budget -= 1
+                                            self.diag_last_log_ts = now_diag
+                                except Exception:
+                                    pass
+
+                            # Empujar datos al servidor Modbus
+                            self._publish_to_modbus(raw_data, datos_procesados)
 
                 except Exception as e:
                     self.data_queue.put({'type': 'LOG', 'payload': f"Erro na aquisicao: {e}"})
+            elif self._was_connected and not is_connected:
+                # Transición de conectado → desconectado detectada (ej: auto-disconnect por errores)
+                self._was_connected = False
+                self.data_queue.put({
+                    'type': 'SENSOR_DISCONNECT',
+                    'payload': {
+                        'reason': 'connection_lost',
+                        'detail': 'Sensor dejó de estar conectado inesperadamente'
+                    }
+                })
+                self.data_queue.put({'type': 'LOG', 'payload': 'Sensor desconectado inesperadamente'})
 
             # 3. Pausa dinámica
             try:
