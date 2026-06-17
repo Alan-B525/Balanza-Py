@@ -105,10 +105,10 @@ TRANSMISSAO = {
 }
 
 RUNTIME_TUNING = {
-    "gateway_getdata_timeout_ms": 30,
+    "gateway_getdata_timeout_ms": 1,
     "gateway_frame_timeout_s": 0.05,
     "gateway_timestamp_tolerance_ns": 20_000_000,
-    "backend_sleep_connected_s": 0.003,
+    "backend_sleep_connected_s": 0.010,
     "backend_sleep_idle_s": 0.05,
     "gui_publish_interval_s": 0.05,
     "gui_keepalive_s": 0.5,

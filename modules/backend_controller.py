@@ -791,12 +791,16 @@ class BackendController:
         last_loop_time = time.perf_counter()
 
         while self.running:
-            # Iniciar Modbus RTU automáticamente si está conectado y no pausado
+            # 1. Procesar Comandos
+            self._process_commands()
+
+            # Obtener el estado de conexión una única vez para esta iteración
             try:
                 is_connected = bool(self.sistema_pesaje.esta_conectado())
             except Exception:
                 is_connected = False
 
+            # Iniciar Modbus RTU automáticamente si está conectado y no pausado
             with self.modbus_state_lock:
                 m_server = self.modbus_server
             
@@ -806,15 +810,7 @@ class BackendController:
                     self.last_modbus_retry_ts = now_modbus
                     self._start_modbus_if_needed()
 
-            # 1. Procesar Comandos
-            self._process_commands()
-
             # 2. Adquisición de Datos
-            try:
-                is_connected = bool(self.sistema_pesaje.esta_conectado())
-            except Exception:
-                is_connected = False
-
             if is_connected and not self.acquisition_paused:
                 self._was_connected = True
                 try:
@@ -908,13 +904,8 @@ class BackendController:
                 self.data_queue.put({'type': 'LOG', 'payload': 'Sensor desconectado inesperadamente'})
 
             # 3. Pausa dinámica
-            try:
-                is_connected = bool(self.sistema_pesaje.esta_conectado())
-            except Exception:
-                is_connected = False
-
             if is_connected and not self.acquisition_paused:
-                target_interval = float(self.RUNTIME_TUNING.get('backend_sleep_connected_s', 0.003))
+                target_interval = float(self.RUNTIME_TUNING.get('backend_sleep_connected_s', 0.010))
                 now = time.perf_counter()
                 elapsed = now - last_loop_time
                 sleep_s = target_interval - elapsed

@@ -1224,6 +1224,16 @@ class BalanzaGUI(ttk.Window):
         latest_data = None
         processed = 0
         max_msgs = getattr(self, '_gui_max_msgs_per_tick', 80)
+        
+        # Verificar si hay un diálogo modal activo (configuración o teclado numérico)
+        is_modal_active = False
+        try:
+            if (getattr(self, '_config_dialog_active_ref', None) and self._config_dialog_active_ref.winfo_exists()) or \
+               (getattr(self, '_active_keypad', None) and self._active_keypad.winfo_exists()):
+                is_modal_active = True
+        except Exception:
+            pass
+
         try:
             while processed < max_msgs:
                 # Leer de la cola sin bloquear
@@ -1273,11 +1283,13 @@ class BalanzaGUI(ttk.Window):
             try:
                 if latest_data is not None:
                     self._last_sensor_data = latest_data  # Guardar para calibración
-                    self._update_display(latest_data)
+                    if not is_modal_active:
+                        self._update_display(latest_data)
             except Exception:
                 pass
-            # Reprogramar a atualizao
-            self.after(70, self.actualizar_gui)
+            # Reprogramar la actualización con throttle adaptativo (200ms si hay modal, 70ms normal)
+            interval = 200 if is_modal_active else 70
+            self.after(interval, self.actualizar_gui)
 
     def log_message(self, message):
         """Guarda mensajes y errores en el archivo log (I/O en hilo de fondo)."""
@@ -1527,9 +1539,24 @@ class BalanzaGUI(ttk.Window):
 
                     try:
                         if self.load_bar_canvas.winfo_exists():
+                            c_h_real = self.load_bar_canvas.winfo_height()
+                            if not hasattr(self, '_canvas_cache'):
+                                self._canvas_cache = {
+                                    'fill_w': -1,
+                                    'color': None,
+                                    'marker_min_x': -1,
+                                    'marker_max_x': -1,
+                                    'c_h_real': -1,
+                                    'full_w': -1
+                                }
+                            
                             if getattr(self, '_load_bar_fill', None):
-                                self.load_bar_canvas.coords(self._load_bar_fill, 0, 0, fill_w, self.load_bar_canvas.winfo_height())
-                                self.load_bar_canvas.itemconfig(self._load_bar_fill, fill=color)
+                                if fill_w != self._canvas_cache['fill_w'] or c_h_real != self._canvas_cache['c_h_real']:
+                                    self.load_bar_canvas.coords(self._load_bar_fill, 0, 0, fill_w, c_h_real)
+                                    self._canvas_cache['fill_w'] = fill_w
+                                if color != self._canvas_cache['color']:
+                                    self.load_bar_canvas.itemconfig(self._load_bar_fill, fill=color)
+                                    self._canvas_cache['color'] = color
                             
                             # Marcadores de limites
                             if not hasattr(self, '_marker_min'):
@@ -1537,20 +1564,31 @@ class BalanzaGUI(ttk.Window):
                                 self._marker_max = self.load_bar_canvas.create_line(0, 0, 0, 0, fill="black", width=self.scaled(4), dash=(2, 4))
                             
                             if marker_min_x >= 0:
-                                c_h_real = self.load_bar_canvas.winfo_height()
-                                self.load_bar_canvas.coords(self._marker_min, marker_min_x, 0, marker_min_x, c_h_real)
-                                self.load_bar_canvas.coords(self._marker_max, marker_max_x, 0, marker_max_x, c_h_real)
-                                self.load_bar_canvas.itemconfig(self._marker_min, state='normal')
-                                self.load_bar_canvas.itemconfig(self._marker_max, state='normal')
-                                self.load_bar_canvas.tag_raise(self._marker_min)
-                                self.load_bar_canvas.tag_raise(self._marker_max)
+                                if marker_min_x != self._canvas_cache['marker_min_x'] or \
+                                   marker_max_x != self._canvas_cache['marker_max_x'] or \
+                                   c_h_real != self._canvas_cache['c_h_real']:
+                                    self.load_bar_canvas.coords(self._marker_min, marker_min_x, 0, marker_min_x, c_h_real)
+                                    self.load_bar_canvas.coords(self._marker_max, marker_max_x, 0, marker_max_x, c_h_real)
+                                    self.load_bar_canvas.itemconfig(self._marker_min, state='normal')
+                                    self.load_bar_canvas.itemconfig(self._marker_max, state='normal')
+                                    self.load_bar_canvas.tag_raise(self._marker_min)
+                                    self.load_bar_canvas.tag_raise(self._marker_max)
+                                    self._canvas_cache['marker_min_x'] = marker_min_x
+                                    self._canvas_cache['marker_max_x'] = marker_max_x
+                                    self._canvas_cache['c_h_real'] = c_h_real
                             else:
-                                self.load_bar_canvas.itemconfig(self._marker_min, state='hidden')
-                                self.load_bar_canvas.itemconfig(self._marker_max, state='hidden')
+                                if self._canvas_cache['marker_min_x'] != -1:
+                                    self.load_bar_canvas.itemconfig(self._marker_min, state='hidden')
+                                    self.load_bar_canvas.itemconfig(self._marker_max, state='hidden')
+                                    self._canvas_cache['marker_min_x'] = -1
+                                    self._canvas_cache['marker_max_x'] = -1
 
                             if getattr(self, '_load_bar_border', None):
                                 full_w = self.load_bar_canvas.winfo_width() or c_w
-                                self.load_bar_canvas.coords(self._load_bar_border, 0, 0, full_w, self.load_bar_canvas.winfo_height())
+                                if full_w != self._canvas_cache['full_w'] or c_h_real != self._canvas_cache['c_h_real']:
+                                    self.load_bar_canvas.coords(self._load_bar_border, 0, 0, full_w, c_h_real)
+                                    self._canvas_cache['full_w'] = full_w
+                                    self._canvas_cache['c_h_real'] = c_h_real
                     except Exception:
                         pass
                 except Exception:
@@ -3719,6 +3757,23 @@ class BalanzaGUI(ttk.Window):
                 "nodes": NODOS_CONFIG
             }
 
+        # Inicializar variables de mantenimiento a None para evitar NoneType references antes de crearse la tab
+        self.tree_profiles = None
+        self.entry_name = None
+        self.entry_min = None
+        self.entry_max = None
+
+        # Inicializar variables de transmisión (Modbus) para desacoplar lectura de guardado
+        modbus_cfg = current_config.get('transmissao', {})
+        node_serial_port = current_config.get("serial_port", "COM3")
+        modbus_port = modbus_cfg.get('porta', current_config.get('serial_port', 'COM10'))
+        
+        modbus_port_var = tk.StringVar(value=str(modbus_port))
+        modbus_baud_var = tk.StringVar(value=str(modbus_cfg.get('velocidade', current_config.get('baudrate', 115200))))
+        modbus_slave_var = tk.StringVar(value=str(modbus_cfg.get('id_escravo_pc', current_config.get('slave_id', 1))))
+        modbus_parity_var = tk.StringVar(value=str(modbus_cfg.get('paridade', current_config.get('paridade', 'Nenhuma'))))
+        modbus_swap_var = tk.StringVar(value='Sim' if bool(modbus_cfg.get('swap_words', current_config.get('swap_words', False))) else 'Não')
+
         # Mantener todos los nodos configurados en la UI
 
         # Crear ventana de configuración (centrada, con barra de título)
@@ -3832,7 +3887,7 @@ class BalanzaGUI(ttk.Window):
             _cfg_unmap_bind_id = None
 
         # Estilos para pestañas grandes, modernas y centradas
-        style = ttk.Style()
+        style = self.style
         style.configure('CfgTab.TNotebook',
                         background='#f1f5f9', tabposition='nw')
         style.configure('CfgTab.TNotebook.Tab',
@@ -3990,13 +4045,18 @@ class BalanzaGUI(ttk.Window):
         notebook = ttk.Notebook(main_frame, style='CfgTab.TNotebook')
         notebook.pack(fill=BOTH, expand=True, pady=(6, 0))
 
+        _last_notebook_width = 0
+
         def _sync_cfg_tab_width(event=None):
+            nonlocal _last_notebook_width
             try:
+                w = int(notebook.winfo_width())
+                if w <= 1 or w == _last_notebook_width:
+                    return
+                _last_notebook_width = w
+                
                 tab_count = len(notebook.tabs())
                 if tab_count <= 0:
-                    return
-                w = int(notebook.winfo_width())
-                if w <= 1:
                     return
                 avail = max(1, w - self.scaled(16))
                 per_tab_px = max(1, int(avail / tab_count))
@@ -4014,7 +4074,6 @@ class BalanzaGUI(ttk.Window):
 
         try:
             notebook.bind('<Configure>', _sync_cfg_tab_width, add='+')
-            notebook.after(50, _sync_cfg_tab_width)
         except Exception:
             pass
 
@@ -4040,178 +4099,299 @@ class BalanzaGUI(ttk.Window):
         # --- TAB 3: Manutenção (New) ---
         tab_maint = ttk.Frame(notebook, padding=10)
         notebook.add(tab_maint, text="Manutenção")
+
+        # === ESTADOS PARA CONSTRUCCIÓN LAZY ===
+        built_tabs = {
+            "Configuração": True,
+            "Modbus": False,
+            "Manutenção": False
+        }
+
+        # === ESCANEO ASÍNCRONO DE PUERTOS COM ===
+        scanned_ports = []
+        comboboxes_to_update = []
         
-        # === MAINTENANCE TAB UI & LOGIC ===
-        maint_cols = ttk.Frame(tab_maint)
-        maint_cols.pack(fill=BOTH, expand=True)
-        maint_cols.columnconfigure(0, weight=1) # List
-        maint_cols.columnconfigure(1, weight=1) # Editor
-        maint_cols.rowconfigure(0, weight=1)     # Stretch vertically
-
-        # Estilo de fuente para campos de mantenimiento (ya definidos dinámicamente)
-
-        frame_list = ttk.Labelframe(maint_cols, text="Perfis", padding=15, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Panel.TLabelframe')
-        frame_list.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=8)
-        
-        # Treeview for profiles
-        cols = ("status", "name", "min", "max")
-        tv = ttk.Treeview(frame_list, columns=cols, show='headings', height=5)
-        tv.heading("status", text="Ativo")
-        tv.heading("name", text="Nome")
-        tv.heading("min", text="Mín (kgf)")
-        tv.heading("max", text="Máx (kgf)")
-        # Columnas iguales, se ajustan al espacio disponible
-        for c in cols:
-            tv.column(c, width=80, minwidth=60, anchor="center", stretch=True)
-        
-        # Aumentar fuente del Treeview para coincidir con labels del editor
-        try:
-            style = ttk.Style()
-            style.configure("Treeview", font=maint_font, rowheight=self.scaled(32 if small_screen else 40))
-            style.configure("Treeview.Heading", font=maint_font_bold)
-        except Exception:
-            pass
-
-        tv.pack(fill=BOTH, expand=True)
-        self.tree_profiles = tv
-
-        # Right: Editor de Perfis
-        frame_editor = ttk.Labelframe(maint_cols, text="Editor de Perfil", padding=15, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Panel.TLabelframe')
-        frame_editor.grid(row=0, column=1, sticky="nsew", padx=(8, 0), pady=8)
-        frame_editor.columnconfigure(0, weight=1)
-        for r in range(8):
-            frame_editor.rowconfigure(r, weight=1)
-        
-        ttk.Label(frame_editor, text="Nome do Perfil:", font=maint_font_bold).grid(row=0, column=0, sticky="w", pady=2)
-        e_pname = ttk.Entry(frame_editor, font=maint_font)
-        e_pname.grid(row=1, column=0, sticky="ew", ipady=self.scaled(4), pady=2)
-        
-        vcmd = (self.register(self._validate_numeric_input), '%P')
-
-        ttk.Label(frame_editor, text="Peso Mínimo (kgf):", font=maint_font_bold).grid(row=2, column=0, sticky="w", pady=2)
-        e_pmin = ttk.Entry(frame_editor, font=maint_font, validate="key", validatecommand=vcmd)
-        e_pmin.grid(row=3, column=0, sticky="ew", ipady=self.scaled(4), pady=2)
-
-        ttk.Label(frame_editor, text="Peso Máximo (kgf):", font=maint_font_bold).grid(row=4, column=0, sticky="w", pady=2)
-        e_pmax = ttk.Entry(frame_editor, font=maint_font, validate="key", validatecommand=vcmd)
-        e_pmax.grid(row=5, column=0, sticky="ew", ipady=self.scaled(4), pady=2)
-
-        # Asignar a self para acceso en callbacks
-        self.entry_name = e_pname
-        self.entry_min = e_pmin
-        self.entry_max = e_pmax
-
-        # Bindings para actualización inmediata
-        self.entry_name.bind("<KeyRelease>", self._update_profile_field)
-        self.entry_min.bind("<KeyRelease>", self._update_profile_field)
-        self.entry_max.bind("<KeyRelease>", self._update_profile_field)
-
-        # Rótulo do perfil ativo
-        lbl_active_status = ttk.Label(frame_editor, text="Perfil Ativo: -", font=("Segoe UI", 14, "bold"), foreground="#16a34a", anchor='center')
-        lbl_active_status.grid(row=6, column=0, sticky="ew", pady=5)
-
-        def load_profiles_to_ui():
-            # Clear tree
-            for item in tv.get_children():
-                tv.delete(item)
-            
-            data = self._load_profiles()
-            profiles = data.get("profiles", {})
-            active_slot = data.get("active_profile")
-            
-            # Load fixed slots 1-5
-            for i in range(1, 6):
-                slot_id = f"slot_{i}"
-                if slot_id in profiles:
-                    prof = profiles[slot_id]
-                    p_name = prof.get("name", f"Perfil {i}")
-                    p_min = prof.get("min", 0)
-                    p_max = prof.get("max", 0)
-                    
-                    is_active = (slot_id == active_slot)
-                    status_indicator = "✔" if is_active else ""
-                    
-                    tags = ('active',) if is_active else ()
-                    tv.insert("", "end", iid=slot_id, values=(status_indicator, p_name, p_min, p_max), tags=tags)
-            
-            # Update tag style
-            tv.tag_configure('active', font=("Segoe UI", 16, "bold"), background="#dcfce7") # Light green bg, same size
-
-            # Update active label status
-            act_name = profiles.get(active_slot, {}).get("name", "Nenhum") if active_slot else "Nenhum"
-            if 'lbl_active_status' in locals():
-                lbl_active_status.configure(text=f"Perfil Ativo: {act_name}")
-
-        def on_tv_select(event):
-            """Seleccionar perfil para edición (NO activa automáticamente)."""
-            sel = tv.selection()
-            if not sel: return
-            slot_id = sel[0]
-            self.current_profile_id = slot_id
-            
-            # Get data from profiles
-            data = self._load_profiles()
-            profiles_dict = data.get("profiles", {})
-            prof = profiles_dict.get(slot_id, {})
-            
-            # Fill editor fields only — no activation
-            self.entry_name.delete(0, END)
-            self.entry_name.insert(0, prof.get("name", ""))
-            self.entry_min.delete(0, END)
-            self.entry_min.insert(0, str(prof.get("min", 0)))
-            self.entry_max.delete(0, END)
-            self.entry_max.insert(0, str(prof.get("max", 0)))
-
-        tv.bind("<<TreeviewSelect>>", on_tv_select)
-
-        def activate_selected_profile():
-            """Activar el perfil seleccionado actualmente."""
-            sel = tv.selection()
-            if not sel:
-                try:
-                    self.show_alert("Aviso", "Selecione um perfil na lista primeiro.", parent=dialog)
-                except Exception:
-                    pass
-                return
-            slot_id = sel[0]
-            data = self._load_profiles()
-            profiles_dict = data.get("profiles", {})
-            prof = profiles_dict.get(slot_id, {})
-            
-            data["active_profile"] = slot_id
-            self._save_profiles(data)
-            
-            self.log_message(f"Perfil '{prof.get('name')}' ativado.")
-            
-            # Update Treeview tags visually
-            for child in tv.get_children():
-                if child == slot_id:
-                    tv.item(child, tags=('active',), values=("✔", tv.item(child, 'values')[1], tv.item(child, 'values')[2], tv.item(child, 'values')[3]))
-                else:
-                    tv.item(child, tags=(), values=("", tv.item(child, 'values')[1], tv.item(child, 'values')[2], tv.item(child, 'values')[3]))
-            
-            # Update active label
-            act_name = prof.get("name", "Nenhum")
-            lbl_active_status.configure(text=f"Perfil Ativo: {act_name}")
-            
-            # Refresh main display
+        def _update_comboboxes_with_ports(ports):
+            nonlocal scanned_ports
+            scanned_ports = list(ports)
             try:
-                self._update_display(self._last_sensor_data)
+                for cb in list(comboboxes_to_update):
+                    try:
+                        if cb.winfo_exists():
+                            current_val = cb.get()
+                            vals = list(ports)
+                            if current_val and current_val not in vals:
+                                vals.append(current_val)
+                            try:
+                                vals.sort(key=lambda x: int(x.replace('COM', '')) if x.startswith('COM') and x[3:].isdigit() else x)
+                            except:
+                                pass
+                            cb['values'] = vals
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+                
+        def _scan_ports_async():
+            try:
+                import serial.tools.list_ports
+                com_list = serial.tools.list_ports.comports()
+                ports = [p.device for p in com_list]
+            except Exception:
+                ports = []
+            try:
+                dialog.after(0, lambda: _update_comboboxes_with_ports(ports))
             except Exception:
                 pass
 
-        btn_activate = ttk.Button(
-            frame_editor,
-            text="✔  ATIVAR PERFIL",
-            bootstyle="success",
-            command=activate_selected_profile,
-        )
-        btn_activate.grid(row=7, column=0, sticky="ew", ipadx=self.scaled(10), ipady=self.scaled(8), pady=5)
+        import threading
+        threading.Thread(target=_scan_ports_async, daemon=True).start()
 
-        try:
+        # === FUNCIÓN PARA CONSTRUIR PESTAÑA DE MODBUS (LAZY) ===
+        def _build_modbus_tab_content():
+            # === TAB MODBUS: Transmissão de Dados ===
+            modbus_content = ttk.Frame(sf_modbus)
+            modbus_content.pack(fill=BOTH, expand=True, pady=(15, 0))
+            modbus_content.columnconfigure(0, weight=1)
+            modbus_content.rowconfigure(0, weight=1)
+
+            discover_frame = ttk.Labelframe(
+                modbus_content, text="Transmissão de Dados",
+                padding=15, borderwidth=self.scaled(3),
+                relief='solid', labelanchor='n', style='Panel.TLabelframe'
+            )
+            discover_frame.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+            discover_frame.rowconfigure(0, weight=1)
+            discover_frame.columnconfigure(0, weight=1)
+            try:
+                discover_frame.grid_propagate(True)
+            except Exception:
+                pass
+            
+            try:
+                style = self.style
+                style.configure('Panel.TLabelframe.Label', font=("Segoe UI", self.scaled(13), 'bold'))
+                try:
+                    style.configure('Calib.Node.TButton', font=("Segoe UI", self.scaled_font(16), 'bold'), padding=(self.scaled(8), self.scaled(6)))
+                except Exception:
+                    try:
+                        style.configure('Calib.Node.TButton', font=("Segoe UI", 16, 'bold'))
+                    except Exception:
+                        pass
+            except Exception:
+                try:
+                    style.configure('Panel.TLabelframe.Label', font=("Segoe UI", 13, 'bold'))
+                except Exception:
+                    pass
+            
+            trans_grid = ttk.Frame(discover_frame)
+            trans_grid.pack(fill=BOTH, expand=True, pady=10)
+            trans_grid.columnconfigure(0, weight=0, minsize=self.scaled(140))
+            trans_grid.columnconfigure(1, weight=0)
+            for r in range(7):
+                trans_grid.rowconfigure(r, weight=0)
+            row_pad = self.scaled(4 if small_screen else 6)
+
+            ttk.Label(trans_grid, text="Porta:", font=base_font_bold).grid(row=0, column=0, sticky='w', padx=(0, 20), pady=row_pad)
+            
+            initial_modbus_values = [modbus_port_var.get()]
+            if scanned_ports:
+                initial_modbus_values = list(scanned_ports)
+                if modbus_port_var.get() not in initial_modbus_values:
+                    initial_modbus_values.append(modbus_port_var.get())
+            
+            try:
+                entry_trans = ttk.Combobox(trans_grid, font=base_font, values=initial_modbus_values, textvariable=modbus_port_var)
+            except Exception:
+                entry_trans = ttk.Entry(trans_grid, font=base_font, textvariable=modbus_port_var)
+            entry_trans.grid(row=0, column=1, sticky='w', ipady=self.scaled(4), pady=row_pad)
+            try:
+                entry_trans.configure(width=14)
+            except Exception:
+                pass
+            
+            if isinstance(entry_trans, ttk.Combobox):
+                comboboxes_to_update.append(entry_trans)
+
+            ttk.Label(trans_grid, text="Velocidade:", font=base_font_bold).grid(row=1, column=0, sticky='w', padx=(0, 20), pady=row_pad)
+            entry_baud = ttk.Combobox(trans_grid, font=base_font, values=['9600', '19200', '38400', '57600', '115200'], textvariable=modbus_baud_var)
+            entry_baud.grid(row=1, column=1, sticky='w', ipady=self.scaled(4), pady=row_pad)
+            try:
+                entry_baud.configure(width=14)
+            except Exception:
+                pass
+
+            try:
+                style = self.style
+                modbus_rb_pad = (self.scaled(8), self.scaled(4)) if small_screen else (self.scaled(14), self.scaled(8))
+                style.configure('Modbus.Radio.TRadiobutton', font=base_font_bold, padding=modbus_rb_pad)
+            except Exception:
+                pass
+
+            ttk.Label(trans_grid, text="Paridade:", font=base_font_bold).grid(row=4, column=0, sticky='w', padx=(0, 20), pady=row_pad)
+            parity_frame = ttk.Frame(trans_grid)
+            parity_frame.grid(row=4, column=1, sticky='w', pady=row_pad)
+            for label in ['Nenhuma', 'Par', 'Ímpar']:
+                rb = ttk.Radiobutton(
+                    parity_frame,
+                    text=label,
+                    value=label,
+                    variable=modbus_parity_var,
+                    bootstyle='info',
+                    style='Modbus.Radio.TRadiobutton'
+                )
+                rb.pack(side=LEFT, padx=self.scaled(8))
+
+            ttk.Label(trans_grid, text="ID Escravo:", font=base_font_bold).grid(row=3, column=0, sticky='w', padx=(0, 20), pady=row_pad)
+            e_slave = ttk.Entry(trans_grid, font=base_font, textvariable=modbus_slave_var)
+            e_slave.grid(row=3, column=1, sticky='w', ipady=self.scaled(4), pady=row_pad)
+            try:
+                e_slave.configure(width=14)
+            except Exception:
+                pass
+
+            swap_frame = ttk.Frame(trans_grid)
+            swap_frame.grid(row=5, column=0, columnspan=2, sticky='w', pady=row_pad)
+            ttk.Label(swap_frame, text='Inverter Bytes (Swap Words):', font=base_font_bold).pack(side=LEFT, padx=(0, 10))
+            for label in ['Sim', 'Não']:
+                rb = ttk.Radiobutton(
+                    swap_frame,
+                    text=label,
+                    value=label,
+                    variable=modbus_swap_var,
+                    bootstyle='info',
+                    style='Modbus.Radio.TRadiobutton'
+                )
+                rb.pack(side=LEFT, padx=self.scaled(8))
+
+        # === FUNCIÓN PARA CONSTRUIR PESTAÑA DE MANTENIMIENTO (LAZY) ===
+        def _build_maint_tab_content():
+            maint_cols = ttk.Frame(tab_maint)
+            maint_cols.pack(fill=BOTH, expand=True)
+            maint_cols.columnconfigure(0, weight=1)
+            maint_cols.columnconfigure(1, weight=1)
+            maint_cols.rowconfigure(0, weight=1)
+
+            frame_list = ttk.Labelframe(maint_cols, text="Perfis", padding=15, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Panel.TLabelframe')
+            frame_list.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=8)
+            
+            cols = ("status", "name", "min", "max")
+            tv = ttk.Treeview(frame_list, columns=cols, show='headings', height=5)
+            tv.heading("status", text="Ativo")
+            tv.heading("name", text="Nome")
+            tv.heading("min", text="Mín (kgf)")
+            tv.heading("max", text="Máx (kgf)")
+            for c in cols:
+                tv.column(c, width=80, minwidth=60, anchor="center", stretch=True)
+            
+            try:
+                style = self.style
+                style.configure("Treeview", font=maint_font, rowheight=self.scaled(32 if small_screen else 40))
+                style.configure("Treeview.Heading", font=maint_font_bold)
+            except Exception:
+                pass
+
+            tv.pack(fill=BOTH, expand=True)
+            self.tree_profiles = tv
+
+            frame_editor = ttk.Labelframe(maint_cols, text="Editor de Perfil", padding=15, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Panel.TLabelframe')
+            frame_editor.grid(row=0, column=1, sticky="nsew", padx=(8, 0), pady=8)
+            frame_editor.columnconfigure(0, weight=1)
+            for r in range(8):
+                frame_editor.rowconfigure(r, weight=1)
+            
+            ttk.Label(frame_editor, text="Nome do Perfil:", font=maint_font_bold).grid(row=0, column=0, sticky="w", pady=2)
+            e_pname = ttk.Entry(frame_editor, font=maint_font)
+            e_pname.grid(row=1, column=0, sticky="ew", ipady=self.scaled(4), pady=2)
+            
+            vcmd = (self.register(self._validate_numeric_input), '%P')
+
+            ttk.Label(frame_editor, text="Peso Mínimo (kgf):", font=maint_font_bold).grid(row=2, column=0, sticky="w", pady=2)
+            e_pmin = ttk.Entry(frame_editor, font=maint_font, validate="key", validatecommand=vcmd)
+            e_pmin.grid(row=3, column=0, sticky="ew", ipady=self.scaled(4), pady=2)
+
+            ttk.Label(frame_editor, text="Peso Máximo (kgf):", font=maint_font_bold).grid(row=4, column=0, sticky="w", pady=2)
+            e_pmax = ttk.Entry(frame_editor, font=maint_font, validate="key", validatecommand=vcmd)
+            e_pmax.grid(row=5, column=0, sticky="ew", ipady=self.scaled(4), pady=2)
+
+            self.entry_name = e_pname
+            self.entry_min = e_pmin
+            self.entry_max = e_pmax
+
+            self.entry_name.bind("<KeyRelease>", self._update_profile_field)
+            self.entry_min.bind("<KeyRelease>", self._update_profile_field)
+            self.entry_max.bind("<KeyRelease>", self._update_profile_field)
+
+            lbl_active_status = ttk.Label(frame_editor, text="Perfil Ativo: -", font=("Segoe UI", 14, "bold"), foreground="#16a34a", anchor='center')
+            lbl_active_status.grid(row=6, column=0, sticky="ew", pady=5)
+
+            def load_profiles_to_ui():
+                for item in tv.get_children():
+                    tv.delete(item)
+                data = self._load_profiles()
+                profiles = data.get("profiles", {})
+                active_slot = data.get("active_profile")
+                for i in range(1, 6):
+                    slot_id = f"slot_{i}"
+                    if slot_id in profiles:
+                        prof = profiles[slot_id]
+                        p_name = prof.get("name", f"Perfil {i}")
+                        p_min = prof.get("min", 0)
+                        p_max = prof.get("max", 0)
+                        is_active = (slot_id == active_slot)
+                        tags = ('active',) if is_active else ()
+                        tv.insert("", "end", iid=slot_id, values=("✔" if is_active else "", p_name, p_min, p_max), tags=tags)
+                tv.tag_configure('active', font=("Segoe UI", 16, "bold"), background="#dcfce7")
+                act_name = profiles.get(active_slot, {}).get("name", "Nenhum") if active_slot else "Nenhum"
+                lbl_active_status.configure(text=f"Perfil Ativo: {act_name}")
+
+            def on_tv_select(event):
+                sel = tv.selection()
+                if not sel: return
+                slot_id = sel[0]
+                self.current_profile_id = slot_id
+                data = self._load_profiles()
+                profiles_dict = data.get("profiles", {})
+                prof = profiles_dict.get(slot_id, {})
+                self.entry_name.delete(0, END)
+                self.entry_name.insert(0, prof.get("name", ""))
+                self.entry_min.delete(0, END)
+                self.entry_min.insert(0, str(prof.get("min", 0)))
+                self.entry_max.delete(0, END)
+                self.entry_max.insert(0, str(prof.get("max", 0)))
+
+            tv.bind("<<TreeviewSelect>>", on_tv_select)
+
+            def activate_selected_profile():
+                sel = tv.selection()
+                if not sel: return
+                slot_id = sel[0]
+                data = self._load_profiles()
+                data["active_profile"] = slot_id
+                self._save_profiles(data)
+                load_profiles_to_ui()
+                try: self._update_display(self._last_sensor_data)
+                except: pass
+
+            btn_activate = ttk.Button(frame_editor, text="✔  ATIVAR PERFIL", bootstyle="success", command=activate_selected_profile)
+            btn_activate.grid(row=7, column=0, sticky="ew", ipadx=self.scaled(10), ipady=self.scaled(8), pady=5)
             load_profiles_to_ui()
-        except Exception:
-            pass
+
+        # === BINDING DE CAMBIO DE TAB PARA CONSTRUCCIÓN LAZY ===
+        def _on_tab_changed(event):
+            try:
+                selected_tab = notebook.select()
+                tab_text = notebook.tab(selected_tab, "text")
+                if tab_text == "Modbus" and not built_tabs["Modbus"]:
+                    _build_modbus_tab_content()
+                    built_tabs["Modbus"] = True
+                elif tab_text == "Manutenção" and not built_tabs["Manutenção"]:
+                    _build_maint_tab_content()
+                    built_tabs["Manutenção"] = True
+            except Exception as e:
+                print(f"[GUI] Erro ao carregar tab lazy: {e}")
+
+        notebook.bind('<<NotebookTabChanged>>', _on_tab_changed)
 
         # Fonte base uniforme para toda a aba de configuração
         base_font = ('Segoe UI', self.scaled_font(16))
@@ -4222,35 +4402,12 @@ class BalanzaGUI(ttk.Window):
         except Exception:
             pass
         try:
-            style = ttk.Style()
+            style = self.style
             style.configure('Trans.Check.TCheckbutton', font=base_font)
             style.configure('Trans.CheckBig.TCheckbutton', font=base_font)
         except Exception:
             pass
         
-        
-        # Preparar lista de puertos COM disponibles (se usará tanto para nodos como para transmisión)
-        com_values = []
-        try:
-            import serial.tools.list_ports
-            com_list = serial.tools.list_ports.comports()
-            com_values = [p.device for p in com_list]
-        except Exception:
-            com_values = []
-
-        current_port = current_config.get("transmissao", {}).get("porta", current_config.get("serial_port", "COM3"))
-        if not com_values:
-            com_values.append(current_port)
-        elif current_port not in com_values:
-            com_values.append(current_port)
-
-        try:
-            com_values.sort(key=lambda x: int(x.replace('COM', '')) if x.startswith('COM') and x[3:].isdigit() else x)
-        except Exception:
-            pass
-
-        # Import/Export moved to the CALIBRACAO tab (see _setup_calibration_tab)
-
         node_entries = {}
         
         # === CONTENEDOR PRINCIPAL: Configuração do Nó ===
@@ -4264,128 +4421,6 @@ class BalanzaGUI(ttk.Window):
         main_content.rowconfigure(0, weight=0) # Porta serial + Calibrar Carga
         main_content.rowconfigure(1, weight=1) # Configuração dos Nós frame
 
-        # === TAB MODBUS: Transmissão de Dados ===
-        modbus_content = ttk.Frame(sf_modbus)
-        modbus_content.pack(fill=BOTH, expand=True, pady=(15, 0))
-        modbus_content.columnconfigure(0, weight=1)
-        modbus_content.rowconfigure(0, weight=1)
-
-        discover_frame = ttk.Labelframe(
-            modbus_content, text="Transmissão de Dados",
-            padding=15, borderwidth=self.scaled(3),
-            relief='solid', labelanchor='n', style='Panel.TLabelframe'
-        )
-        discover_frame.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
-        discover_frame.rowconfigure(0, weight=1)
-        discover_frame.columnconfigure(0, weight=1)
-        try:
-            discover_frame.grid_propagate(True)
-        except Exception:
-            pass
-        # Estilo para los panels / Descoberta: etiqueta en negrita y fuente ligeramente mayor
-        try:
-            style = ttk.Style()
-            style.configure('Panel.TLabelframe.Label', font=("Segoe UI", self.scaled(13), 'bold'))
-            # Estilo para el botón de calibración por nodo (más grande)
-            try:
-                style.configure('Calib.Node.TButton', font=("Segoe UI", self.scaled_font(16), 'bold'), padding=(self.scaled(8), self.scaled(6)))
-            except Exception:
-                try:
-                    style.configure('Calib.Node.TButton', font=("Segoe UI", 16, 'bold'))
-                except Exception:
-                    pass
-        except Exception:
-            try:
-                style.configure('Panel.TLabelframe.Label', font=("Segoe UI", 13, 'bold'))
-            except Exception:
-                pass
-        
-        # ==================== Seção de Transmissão Modbus ====================
-
-        trans_grid = ttk.Frame(discover_frame)
-        trans_grid.pack(fill=BOTH, expand=True, pady=10)
-        trans_grid.columnconfigure(0, weight=0, minsize=self.scaled(140))
-        trans_grid.columnconfigure(1, weight=0)
-        for r in range(7):
-            trans_grid.rowconfigure(r, weight=0)
-        row_pad = self.scaled(4 if small_screen else 6)
-
-        ttk.Label(trans_grid, text="Porta:", font=base_font_bold).grid(row=0, column=0, sticky='w', padx=(0, 20), pady=row_pad)
-        try:
-            entry_trans = ttk.Combobox(trans_grid, font=base_font, values=com_values)
-            entry_trans.set(current_port)
-        except Exception:
-            entry_trans = ttk.Entry(trans_grid, font=base_font)
-            entry_trans.insert(0, current_port)
-        entry_trans.grid(row=0, column=1, sticky='w', ipady=self.scaled(4), pady=row_pad)
-        try:
-            entry_trans.configure(width=14)
-        except Exception:
-            pass
-
-        ttk.Label(trans_grid, text="Velocidade:", font=base_font_bold).grid(row=1, column=0, sticky='w', padx=(0, 20), pady=row_pad)
-        entry_baud = ttk.Combobox(trans_grid, font=base_font, values=['9600', '19200', '38400', '57600', '115200'])
-        modbus_cfg = current_config.get('transmissao', {})
-        baud_val = modbus_cfg.get('velocidade', current_config.get('baudrate', 115200))
-        entry_baud.set(str(baud_val))
-        entry_baud.grid(row=1, column=1, sticky='w', ipady=self.scaled(4), pady=row_pad)
-        try:
-            entry_baud.configure(width=14)
-        except Exception:
-            pass
-
-        try:
-            style = ttk.Style()
-            modbus_rb_pad = (self.scaled(8), self.scaled(4)) if small_screen else (self.scaled(14), self.scaled(8))
-            style.configure('Modbus.Radio.TRadiobutton', font=base_font_bold, padding=modbus_rb_pad)
-        except Exception:
-            pass
-
-        ttk.Label(trans_grid, text="Paridade:", font=base_font_bold).grid(row=4, column=0, sticky='w', padx=(0, 20), pady=row_pad)
-        parity_val = modbus_cfg.get('paridade', current_config.get('paridade', 'Nenhuma'))
-        parity_var = tk.StringVar(value=parity_val)
-        parity_frame = ttk.Frame(trans_grid)
-        parity_frame.grid(row=4, column=1, sticky='w', pady=row_pad)
-        for label in ['Nenhuma', 'Par', 'Ímpar']:
-            rb = ttk.Radiobutton(
-                parity_frame,
-                text=label,
-                value=label,
-                variable=parity_var,
-                bootstyle='info',
-                style='Modbus.Radio.TRadiobutton'
-            )
-            rb.pack(side=LEFT, padx=self.scaled(8))
-
-        ttk.Label(trans_grid, text="ID Escravo:", font=base_font_bold).grid(row=3, column=0, sticky='w', padx=(0, 20), pady=row_pad)
-        e_slave = ttk.Entry(trans_grid, font=base_font)
-        slave_val = modbus_cfg.get('id_escravo_pc', current_config.get('id_escravo_pc', 1))
-        e_slave.insert(0, str(slave_val))
-        e_slave.grid(row=3, column=1, sticky='w', ipady=self.scaled(4), pady=row_pad)
-        try:
-            e_slave.configure(width=14)
-        except Exception:
-            pass
-
-        swap_val = modbus_cfg.get('swap_words', current_config.get('swap_words', False))
-        swap_var = tk.StringVar(value='Sim' if bool(swap_val) else 'Não')
-        swap_frame = ttk.Frame(trans_grid)
-        swap_frame.grid(row=5, column=0, columnspan=2, sticky='w', pady=row_pad)
-        ttk.Label(swap_frame, text='Inverter Bytes (Swap Words):', font=base_font_bold).pack(side=LEFT, padx=(0, 10))
-        for label in ['Sim', 'Não']:
-            rb = ttk.Radiobutton(
-                swap_frame,
-                text=label,
-                value=label,
-                variable=swap_var,
-                bootstyle='info',
-                style='Modbus.Radio.TRadiobutton'
-            )
-            rb.pack(side=LEFT, padx=self.scaled(8))
-
-        # Spacer no longer needed as trans_grid expands with grid weights
-        
-        # =====================================================================
         # === Porta Serial (Gateway USB) ===
         port_frame = ttk.Labelframe(
             main_content, text='Porta Serial (Gateway USB)',
@@ -4400,41 +4435,22 @@ class BalanzaGUI(ttk.Window):
         
         ttk.Label(port_grid, text="Porta COM:", font=base_font_bold).grid(row=0, column=0, sticky="w", padx=(0, 15), pady=4)
         
-        # Función para escanear puertos COM disponibles
-        def _scan_com_ports():
-            com_vals = []
-            try:
-                import serial.tools.list_ports
-                com_list = serial.tools.list_ports.comports()
-                com_vals = [p.device for p in com_list]
-            except:
-                com_vals = []
-            try:
-                cur = entry_serial.get()
-            except:
-                cur = current_config.get("serial_port", "COM3")
-            if not cur:
-                cur = current_config.get("serial_port", "COM3")
-            if not com_vals:
-                com_vals.append(cur)
-            elif cur not in com_vals:
-                com_vals.append(cur)
-            try:
-                com_vals.sort(key=lambda x: int(x.replace('COM', '')) if x.startswith('COM') and x[3:].isdigit() else x)
-            except:
-                pass
-            return com_vals
-            
-        current_port = current_config.get("serial_port", "COM3")
+        node_serial_port = current_config.get("serial_port", "COM3")
         
-        entry_serial = ttk.Combobox(port_grid, font=base_font, values=_scan_com_ports(), width=12, state='readonly')
-        entry_serial.set(current_port)
+        initial_serial_values = [node_serial_port]
+        if scanned_ports:
+            initial_serial_values = list(scanned_ports)
+            if node_serial_port not in initial_serial_values:
+                initial_serial_values.append(node_serial_port)
+        
+        entry_serial = ttk.Combobox(port_grid, font=base_font, values=initial_serial_values, width=12, state='readonly')
+        entry_serial.set(node_serial_port)
         entry_serial.grid(row=0, column=1, sticky="w", ipady=self.scaled(4), pady=4)
+        comboboxes_to_update.append(entry_serial)
         
         # Botón para refrescar puertos COM disponibles
         def _refresh_com_ports():
-            new_vals = _scan_com_ports()
-            entry_serial['values'] = new_vals
+            threading.Thread(target=_scan_ports_async, daemon=True).start()
             
         btn_refresh = ttk.Button(
             port_grid, text="Atualizar Portos", command=_refresh_com_ports,
@@ -4686,14 +4702,14 @@ class BalanzaGUI(ttk.Window):
         def save_config():
             # Recolectar valores de la sección de transmisión
             try:
-                baud_val = int(entry_baud.get())
+                baud_val = int(modbus_baud_var.get())
             except Exception:
                 try:
                     baud_val = int(current_config.get('baudrate', 9600))
                 except Exception:
                     baud_val = 9600
             try:
-                slave_id_val = int(e_slave.get())
+                slave_id_val = int(modbus_slave_var.get())
             except Exception:
                 try:
                     slave_id_val = int(current_config.get('id_escravo_pc', current_config.get('slave_id', 1)))
@@ -4749,15 +4765,15 @@ class BalanzaGUI(ttk.Window):
                     del new_config[k]
 
             try:
-                _porta = entry_trans.get()
+                _porta = modbus_port_var.get()
             except Exception:
                 _porta = current_config.get('transmissao', {}).get('porta', 'COM10')
             try:
-                _paridade = parity_var.get()
+                _paridade = modbus_parity_var.get()
             except Exception:
                 _paridade = current_config.get('transmissao', {}).get('paridade', 'Nenhuma')
             try:
-                _swap = True if swap_var.get() == 'Sim' else False
+                _swap = True if modbus_swap_var.get() == 'Sim' else False
             except Exception:
                 _swap = current_config.get('transmissao', {}).get('swap_words', False)
 
