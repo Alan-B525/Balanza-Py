@@ -1225,14 +1225,8 @@ class BalanzaGUI(ttk.Window):
         processed = 0
         max_msgs = getattr(self, '_gui_max_msgs_per_tick', 80)
         
-        # Verificar si hay un diálogo modal activo (configuración o teclado numérico)
+        # No pausamos el refresco de la pantalla principal al ingresar o estar en la configuración.
         is_modal_active = False
-        try:
-            if (getattr(self, '_config_dialog_active_ref', None) and self._config_dialog_active_ref.winfo_exists()) or \
-               (getattr(self, '_active_keypad', None) and self._active_keypad.winfo_exists()):
-                is_modal_active = True
-        except Exception:
-            pass
 
         try:
             while processed < max_msgs:
@@ -4081,20 +4075,15 @@ class BalanzaGUI(ttk.Window):
         tab_config = ttk.Frame(notebook, padding=10)
         notebook.add(tab_config, text="Configuração")
         
-        # Usar ScrolledFrame para evitar cortes em resoluções menores
-        from ttkbootstrap.scrolled import ScrolledFrame
-        sf_config = ScrolledFrame(tab_config, autohide=True)
-        sf_config.pack(fill=BOTH, expand=YES)
-        
         # Legacy variable name mapping to preserve existing logic below
-        tab_nodes = sf_config
+        tab_nodes = tab_config
 
         # --- TAB 2: Modbus ---
         tab_modbus = ttk.Frame(notebook, padding=10)
         notebook.add(tab_modbus, text="Modbus")
         
-        sf_modbus = ScrolledFrame(tab_modbus, autohide=True)
-        sf_modbus.pack(fill=BOTH, expand=YES)
+        # Legacy variable name mapping to preserve existing logic below
+        sf_modbus = tab_modbus
 
         # --- TAB 3: Manutenção (New) ---
         tab_maint = ttk.Frame(notebook, padding=10)
@@ -4416,8 +4405,8 @@ class BalanzaGUI(ttk.Window):
             main_content.pack(fill=BOTH, expand=True, pady=(15, self.scaled(30)))
         else:
             main_content.pack(fill=BOTH, expand=True, pady=(15, 0))
-        main_content.columnconfigure(0, weight=1)
-        main_content.columnconfigure(1, weight=1)
+        main_content.columnconfigure(0, weight=1, uniform="top_row")
+        main_content.columnconfigure(1, weight=1, uniform="top_row")
         main_content.rowconfigure(0, weight=0) # Porta serial + Calibrar Carga
         main_content.rowconfigure(1, weight=1) # Configuração dos Nós frame
 
@@ -4661,19 +4650,31 @@ class BalanzaGUI(ttk.Window):
                 ch_btn_frame = ttk.Frame(cell_grid)
                 ch_btn_frame.grid(row=row_idx, column=1, sticky='w', pady=2 if small_screen else 4)
                 
-                for ch_opt in ["ch1", "ch2", "ch3"]:
+                # Espaçador invisível (coluna vazia) antes do botão 1 (aumentado para deslocar mais à direita)
+                spacer = ttk.Frame(ch_btn_frame, width=self.scaled(75))
+                spacer.pack(side=LEFT)
+                
+                # Aumentar ligeiramente o tamanho e fonte dos botões para telas touch (só um pouco)
+                ch_btn_padding_touch = (18, 14) if small_screen else (25, 20)
+                ch_btn_width_touch = 6 if small_screen else 7
+                ch_radio_font_touch = ("Segoe UI", self.scaled_font(18), "bold") if small_screen else ("Segoe UI", self.scaled_font(27), "bold")
+
+                for i, ch_opt in enumerate(["ch1", "ch2", "ch3"]):
                     ch_btn = ttk.Radiobutton(
                         ch_btn_frame, 
                         text=f" {ch_opt[-1]} ",
                         variable=ch_var,
                         value=ch_opt,
                         bootstyle="info-toolbutton",
-                        width=ch_btn_width,
-                        padding=ch_btn_padding
+                        width=ch_btn_width_touch,
+                        padding=ch_btn_padding_touch
                     )
-                    ch_btn.pack(side=LEFT, padx=4 if small_screen else 6)
+                    # Alinhar o primeiro botão perfeitamente à esquerda da coluna
+                    left_pad = 0 if i == 0 else (4 if small_screen else 6)
+                    right_pad = 4 if small_screen else 6
+                    ch_btn.pack(side=LEFT, padx=(left_pad, right_pad))
                     try:
-                        ch_btn.configure(font=ch_radio_font)
+                        ch_btn.configure(font=ch_radio_font_touch)
                     except Exception:
                         pass
                 row_idx += 1
