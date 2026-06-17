@@ -126,6 +126,7 @@ DEFAULT_SETTINGS = {
     "transmissao": TRANSMISSAO,
     "nodes": NODOS_CONFIG,
     "runtime_tuning": RUNTIME_TUNING,
+    "decimals": 2,
     "profiles_data": {
         "profiles": {
             "slot_1": {"name": "Perfil 1", "min": 200.0, "max": 1000.0},
@@ -180,6 +181,14 @@ def validate_settings(settings: dict) -> bool:
         if not isinstance(nodes, dict):
             settings["nodes"] = DEFAULT_SETTINGS["nodes"].copy()
             
+        try:
+            decimals = int(settings.get("decimals", 2))
+            if decimals < 0 or decimals > 3:
+                decimals = 2
+            settings["decimals"] = decimals
+        except (ValueError, TypeError):
+            settings["decimals"] = 2
+
         return True
     except Exception:
         return False

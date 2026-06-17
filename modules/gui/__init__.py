@@ -191,6 +191,12 @@ class BalanzaGUI(ttk.Window):
         # Control de visualización de decimales (por defecto: SIN decimales)
         self._show_decimals = False
 
+        # Cantidad de decimales a mostrar (por defecto desde configuración settings.json)
+        try:
+            self._decimals = int(load_settings().get("decimals", 2))
+        except Exception:
+            self._decimals = 2
+
         
         # Variables para conexin asncrona
         self._connection_thread = None
@@ -2549,13 +2555,15 @@ class BalanzaGUI(ttk.Window):
             return "--"
 
         try:
-            if self._show_decimals:
-                # Con decimales: 2 posiciones usando redondeo bancario
-                d = Decimal(str(val_float)).quantize(_DECIMAL_QUANTIZER, rounding=ROUND_HALF_EVEN)
-                return f"{d}".replace('.', ',')
-            else:
+            decimals = getattr(self, '_decimals', 2)
+            if decimals <= 0:
                 # Sin decimales: redondeo al entero más cercano (norma ISO 80000-1)
                 return f"{round(val_float)}"
+            else:
+                # Con decimales (de 1 a 3): redondeo bancario
+                fmt = '1.' + '0' * decimals
+                d = Decimal(str(val_float)).quantize(Decimal(fmt), rounding=ROUND_HALF_EVEN)
+                return f"{d}".replace('.', ',')
         except Exception:
             return "--"
 
@@ -3058,8 +3066,8 @@ class BalanzaGUI(ttk.Window):
         Muestra dialogo de alerta cuando un sensor se desconecta.
         Permite reconexion manual o esperar reconexion automatica.
         """
-        node_id = payload['node_id']
-        nombre = payload['nombre']
+        node_id = payload.get('node_id', 'global')
+        nombre = payload.get('nombre', 'Sistema/Gateway')
         max_attempts = payload.get('max_attempts', 5)
         
         # Si ya hay un dialogo abierto para este nodo, no crear otro
@@ -3197,7 +3205,7 @@ class BalanzaGUI(ttk.Window):
     
     def _update_reconnect_progress(self, payload):
         """Actualiza el progreso de reconexion en el dialogo."""
-        node_id = payload['node_id']
+        node_id = payload.get('node_id', 'global')
         attempt = payload['attempt']
         max_attempts = payload['max_attempts']
         
@@ -3210,7 +3218,7 @@ class BalanzaGUI(ttk.Window):
     
     def _handle_sensor_reconnected(self, payload):
         """Maneja quando um sensor se reconecta com sucesso."""
-        node_id = payload['node_id']
+        node_id = payload.get('node_id', 'global')
         
         # Mostrar mensaje de exito y cerrar dialogo
         self.log_message(f"Sensor {node_id} reconectado com sucesso")
@@ -3231,7 +3239,7 @@ class BalanzaGUI(ttk.Window):
     
     def _handle_reconnect_failed(self, payload):
         """Maneja cuando falla la reconexion automatica."""
-        node_id = payload['node_id']
+        node_id = payload.get('node_id', 'global')
         attempts = payload['attempts']
         
         self.log_message(f" Falha reconexão do sensor {node_id} após {attempts} tentativas")
@@ -4407,7 +4415,8 @@ class BalanzaGUI(ttk.Window):
             main_content.pack(fill=BOTH, expand=True, pady=(15, 0))
         main_content.columnconfigure(0, weight=1, uniform="top_row")
         main_content.columnconfigure(1, weight=1, uniform="top_row")
-        main_content.rowconfigure(0, weight=0) # Porta serial + Calibrar Carga
+        main_content.columnconfigure(2, weight=1, uniform="top_row")
+        main_content.rowconfigure(0, weight=0) # Porta serial + Casas Decimais + Calibrar Carga
         main_content.rowconfigure(1, weight=1) # Configuração dos Nós frame
 
         # === Porta Serial (Gateway USB) ===
@@ -4447,13 +4456,32 @@ class BalanzaGUI(ttk.Window):
         )
         btn_refresh.grid(row=0, column=2, sticky="w", padx=(8, 0), pady=4)
 
+        # === Casas Decimais ===
+        decimals_frame = ttk.Labelframe(
+            main_content, text='Casas Decimais',
+            padding=(15, 6), borderwidth=self.scaled(2),
+            relief='solid', labelanchor='n', style='Panel.TLabelframe'
+        )
+        decimals_frame.grid(row=0, column=1, sticky='nsew', padx=(4, 4), pady=(4, 8))
+        
+        decimals_grid = ttk.Frame(decimals_frame)
+        decimals_grid.pack(fill=X)
+        decimals_grid.columnconfigure(1, weight=1)
+        
+        ttk.Label(decimals_grid, text="Decimais:", font=base_font_bold).grid(row=0, column=0, sticky="w", padx=(0, 15), pady=4)
+        
+        current_decimals = current_config.get("decimals", 2)
+        entry_decimals = ttk.Combobox(decimals_grid, font=base_font, values=['0', '1', '2', '3'], width=12, state='readonly')
+        entry_decimals.set(str(current_decimals))
+        entry_decimals.grid(row=0, column=1, sticky="w", ipady=self.scaled(4), pady=4)
+
         # === Botão Calibrar Carga (ao lado da seção de porta COM) ===
         cal_frame = ttk.Labelframe(
             main_content, text='Calibração',
             padding=(15, 6), borderwidth=self.scaled(2),
             relief='solid', labelanchor='n', style='Panel.TLabelframe'
         )
-        cal_frame.grid(row=0, column=1, sticky='nsew', padx=(4, 8), pady=(4, 8))
+        cal_frame.grid(row=0, column=2, sticky='nsew', padx=(4, 8), pady=(4, 8))
         cal_frame.columnconfigure(0, weight=1)
         cal_frame.rowconfigure(0, weight=1)
 
@@ -4524,7 +4552,7 @@ class BalanzaGUI(ttk.Window):
             padding=14, borderwidth=self.scaled(2),
             relief='solid', labelanchor='n', style='Panel.TLabelframe'
         )
-        panel1.grid(row=1, column=0, columnspan=2, rowspan=1, sticky='nsew', padx=8, pady=8)
+        panel1.grid(row=1, column=0, columnspan=3, rowspan=1, sticky='nsew', padx=8, pady=8)
         panel1.columnconfigure(0, weight=1)
         panel1.columnconfigure(1, weight=1)
         panel1.rowconfigure(0, weight=1)
@@ -4778,10 +4806,16 @@ class BalanzaGUI(ttk.Window):
             except Exception:
                 _swap = current_config.get('transmissao', {}).get('swap_words', False)
 
+            try:
+                dec_val = int(entry_decimals.get())
+            except Exception:
+                dec_val = 2
+
             new_config.update({
                 "execution_mode": current_config.get('execution_mode', 'REAL'),
                 "use_sensor_config": current_config.get('use_sensor_config', True),
                 "serial_port": entry_serial.get(),
+                "decimals": dec_val,
                 "nodes": built_nodes,
                 "transmissao": {
                     "porta": _porta,
@@ -4851,6 +4885,12 @@ class BalanzaGUI(ttk.Window):
                     pass
 
                 
+                self._decimals = dec_val
+                try:
+                    self._refresh_all_displays()
+                except Exception:
+                    pass
+
                 # Mostrar el mensaje de éxito anclado a la ventana de configuración
                 # Registrar y devolver el foco al diálogo de configuración sin mostrar aviso
                 try:
