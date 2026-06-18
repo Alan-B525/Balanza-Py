@@ -127,6 +127,8 @@ DEFAULT_SETTINGS = {
     "nodes": NODOS_CONFIG,
     "runtime_tuning": RUNTIME_TUNING,
     "decimals": 2,
+    "angle_decimals": 1,
+    "unit": "kgf",
     "profiles_data": {
         "profiles": {
             "slot_1": {"name": "Perfil 1", "min": 200.0, "max": 1000.0},
@@ -188,6 +190,22 @@ def validate_settings(settings: dict) -> bool:
             settings["decimals"] = decimals
         except (ValueError, TypeError):
             settings["decimals"] = 2
+
+        try:
+            angle_decimals = int(settings.get("angle_decimals", 1))
+            if angle_decimals < 0 or angle_decimals > 2:
+                angle_decimals = 1
+            settings["angle_decimals"] = angle_decimals
+        except (ValueError, TypeError):
+            settings["angle_decimals"] = 1
+
+        try:
+            unit = str(settings.get("unit", "kgf")).strip().lower()
+            if unit not in ("kgf", "kg", "ton", "kn"):
+                unit = "kgf"
+            settings["unit"] = unit
+        except Exception:
+            settings["unit"] = "kgf"
 
         return True
     except Exception:

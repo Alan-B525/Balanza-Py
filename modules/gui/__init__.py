@@ -193,9 +193,14 @@ class BalanzaGUI(ttk.Window):
 
         # Cantidad de decimales a mostrar (por defecto desde configuración settings.json)
         try:
-            self._decimals = int(load_settings().get("decimals", 2))
+            settings_data = load_settings()
+            self._decimals = int(settings_data.get("decimals", 2))
+            self._angle_decimals = int(settings_data.get("angle_decimals", 1))
+            self._unit = str(settings_data.get("unit", "kgf"))
         except Exception:
             self._decimals = 2
+            self._angle_decimals = 1
+            self._unit = "kgf"
 
         
         # Variables para conexin asncrona
@@ -862,8 +867,8 @@ class BalanzaGUI(ttk.Window):
         self.lbl_total = ttk.Label(load_center_frame, text="0", style='TotalValue.TLabel')
         self.lbl_total.grid(row=0, column=1)
         
-        # Unidad "kgf" justo después del número (columna 2, pegada a la izquierda)
-        self.lbl_total_unit = ttk.Label(load_center_frame, text="kgf", style='TotalUnit.TLabel')
+        # Unidad justo después del número (columna 2, pegada a la izquierda)
+        self.lbl_total_unit = ttk.Label(load_center_frame, text=self.get_display_unit(), style='TotalUnit.TLabel')
         self.lbl_total_unit.grid(row=0, column=2, sticky='sw', padx=(self.scaled(8), 0), pady=(0, self.scaled(12)))
 
         # --- BARRA DE COLOR (0 - 1200) ---
@@ -1368,7 +1373,7 @@ class BalanzaGUI(ttk.Window):
                 except Exception:
                     pass
             # Actualizar el widget nuevo si existe, sino mantener compatibilidad
-            tare_text = f"{self._format_weight(tara_ton)} kgf"
+            tare_text = f"{self._format_weight(tara_ton)} {self.get_display_unit()}"
             # Actualizar label en pestaña de mantenimiento
             try:
                 if hasattr(self, 'lbl_tare_value') and self.lbl_tare_value:
@@ -1452,7 +1457,7 @@ class BalanzaGUI(ttk.Window):
                     self._set_widget_prop(self.lbl_maint_total, 'text', total_text)
                     self._set_widget_prop(self.lbl_maint_total, 'style', 'TotalValue.TLabel')
                 if hasattr(self, 'lbl_maint_total_unit') and self.lbl_maint_total_unit:
-                    self._set_widget_prop(self.lbl_maint_total_unit, 'text', 'kgf')
+                    self._set_widget_prop(self.lbl_maint_total_unit, 'text', self.get_display_unit())
                     self._set_widget_prop(self.lbl_maint_total_unit, 'style', 'TotalUnit.TLabel')
                 if hasattr(self, 'lbl_maint_total_title') and self.lbl_maint_total_title:
                     self._set_widget_prop(self.lbl_maint_total_title, 'text', 'CARGA')
@@ -1612,16 +1617,24 @@ class BalanzaGUI(ttk.Window):
                             try:
                                 if idx < len(angles):
                                     val = float(angles[idx])
-                                    text = f"{val:.1f}".replace('.', ',') + "°"
+                                    angle_decimals = getattr(self, '_angle_decimals', 1)
+                                    if angle_decimals <= 0:
+                                        text = f"{round(val)}°"
+                                    else:
+                                        text = f"{val:.{angle_decimals}f}".replace('.', ',') + "°"
                                 else:
-                                    text = "0,0°"
+                                    angle_decimals = getattr(self, '_angle_decimals', 1)
+                                    if angle_decimals <= 0:
+                                        text = "0°"
+                                    else:
+                                        text = ("0," + "0" * angle_decimals) + "°"
                                 self._set_widget_prop(lbl, 'text', text)
                             except Exception:
                                 pass
                 except Exception:
                     pass
             try:
-                self._set_widget_prop(self.lbl_total_unit, 'text', 'kgf')
+                self._set_widget_prop(self.lbl_total_unit, 'text', self.get_display_unit())
                 self._set_widget_prop(self.lbl_total_unit, 'style', 'TotalUnit.TLabel')
             except Exception:
                 pass
@@ -2536,11 +2549,20 @@ class BalanzaGUI(ttk.Window):
     
     def _refresh_all_displays(self):
         """Actualiza todos los displays con el formato actual."""
+        try:
+            self._set_widget_prop(self.lbl_total_unit, 'text', self.get_display_unit())
+        except Exception:
+            pass
+        try:
+            if hasattr(self, 'lbl_maint_total_unit') and self.lbl_maint_total_unit:
+                self._set_widget_prop(self.lbl_maint_total_unit, 'text', self.get_display_unit())
+        except Exception:
+            pass
         if hasattr(self, '_last_sensor_data') and self._last_sensor_data:
             self._update_display(self._last_sensor_data)
 
     def _format_weight(self, value):
-        """Formatea el peso según configuración de decimales (redondeo bancario/IEEE 754)."""
+        """Formatea el peso según configuración de decimales en cumplimiento con el Sistema Internacional (SI) (separador de miles con espacio y decimal con coma)."""
         if value is None:
             return "--"
         try:
@@ -2557,15 +2579,39 @@ class BalanzaGUI(ttk.Window):
         try:
             decimals = getattr(self, '_decimals', 2)
             if decimals <= 0:
-                # Sin decimales: redondeo al entero más cercano (norma ISO 80000-1)
-                return f"{round(val_float)}"
+                rounded_val = round(val_float)
+                is_negative = rounded_val < 0 or (val_float < 0 and rounded_val == 0)
+                abs_val = abs(rounded_val)
+                formatted = f"{abs_val:,}".replace(',', ' ')
+                if is_negative:
+                    formatted = '-' + formatted
+                return formatted
             else:
-                # Con decimales (de 1 a 3): redondeo bancario
                 fmt = '1.' + '0' * decimals
                 d = Decimal(str(val_float)).quantize(Decimal(fmt), rounding=ROUND_HALF_EVEN)
-                return f"{d}".replace('.', ',')
+                d_str = f"{d}"
+                if '.' in d_str:
+                    entera, decimal = d_str.split('.')
+                    is_negative = entera.startswith('-')
+                    abs_entera = abs(int(entera))
+                    entera_formatted = f"{abs_entera:,}".replace(',', ' ')
+                    if is_negative:
+                        entera_formatted = '-' + entera_formatted
+                    return f"{entera_formatted},{decimal}"
+                else:
+                    is_negative = d_str.startswith('-')
+                    abs_entera = abs(int(d_str))
+                    entera_formatted = f"{abs_entera:,}".replace(',', ' ')
+                    if is_negative:
+                        entera_formatted = '-' + entera_formatted
+                    return entera_formatted
         except Exception:
             return "--"
+
+    def get_display_unit(self):
+        """Devuelve el símbolo oficial de la unidad para mostrar en la interfaz gráfica."""
+        mapping = {"kgf": "kgf", "kg": "kg", "ton": "t", "kn": "kN"}
+        return mapping.get(self._unit, self._unit)
 
     def export_calibrations_gui(self):
         """Exporta todas las calibraciones JSON a un único CSV en el directorio de calibraciones."""
@@ -3775,6 +3821,9 @@ class BalanzaGUI(ttk.Window):
         modbus_slave_var = tk.StringVar(value=str(modbus_cfg.get('id_escravo_pc', current_config.get('slave_id', 1))))
         modbus_parity_var = tk.StringVar(value=str(modbus_cfg.get('paridade', current_config.get('paridade', 'Nenhuma'))))
         modbus_swap_var = tk.StringVar(value='Sim' if bool(modbus_cfg.get('swap_words', current_config.get('swap_words', False))) else 'Não')
+        modbus_stopbits_var = tk.StringVar(value=str(modbus_cfg.get('stopbits', 1)))
+        modbus_bytesize_var = tk.StringVar(value=str(modbus_cfg.get('bytesize', 8)))
+        modbus_timeout_var = tk.StringVar(value=str(modbus_cfg.get('timeout', 0.005)))
 
         # Mantener todos los nodos configurados en la UI
 
@@ -4184,82 +4233,71 @@ class BalanzaGUI(ttk.Window):
             trans_grid = ttk.Frame(discover_frame)
             trans_grid.pack(fill=BOTH, expand=True, pady=10)
             trans_grid.columnconfigure(0, weight=0, minsize=self.scaled(140))
-            trans_grid.columnconfigure(1, weight=0)
-            for r in range(7):
+            trans_grid.columnconfigure(1, weight=1)
+            trans_grid.columnconfigure(2, weight=0, minsize=self.scaled(240))
+            trans_grid.columnconfigure(3, weight=1)
+            for r in range(4):
                 trans_grid.rowconfigure(r, weight=0)
-            row_pad = self.scaled(4 if small_screen else 6)
+            row_pad = self.scaled(6)
 
+            # 1. Porta (Coluna Esquerda, Linha 0)
             ttk.Label(trans_grid, text="Porta:", font=base_font_bold).grid(row=0, column=0, sticky='w', padx=(0, 20), pady=row_pad)
+            
+            # Container frame to place the combobox and the refresh button side-by-side in Column 1
+            porta_container = ttk.Frame(trans_grid)
+            porta_container.grid(row=0, column=1, sticky='w', pady=row_pad)
             
             initial_modbus_values = [modbus_port_var.get()]
             if scanned_ports:
                 initial_modbus_values = list(scanned_ports)
                 if modbus_port_var.get() not in initial_modbus_values:
                     initial_modbus_values.append(modbus_port_var.get())
-            
-            try:
-                entry_trans = ttk.Combobox(trans_grid, font=base_font, values=initial_modbus_values, textvariable=modbus_port_var)
-            except Exception:
-                entry_trans = ttk.Entry(trans_grid, font=base_font, textvariable=modbus_port_var)
-            entry_trans.grid(row=0, column=1, sticky='w', ipady=self.scaled(4), pady=row_pad)
-            try:
-                entry_trans.configure(width=14)
-            except Exception:
-                pass
-            
-            if isinstance(entry_trans, ttk.Combobox):
-                comboboxes_to_update.append(entry_trans)
+            entry_trans = ttk.Combobox(porta_container, font=base_font, values=initial_modbus_values, textvariable=modbus_port_var, state='readonly', width=14)
+            entry_trans.pack(side=LEFT, ipady=self.scaled(4))
+            comboboxes_to_update.append(entry_trans)
 
+            # Botão para refrescar portas COM na guia Modbus
+            btn_refresh_mb = ttk.Button(
+                porta_container, text="Atualizar Portas", command=_refresh_com_ports,
+                bootstyle="info-outline", style='Config.Small.TButton'
+            )
+            btn_refresh_mb.pack(side=LEFT, padx=(8, 0))
+
+            # 2. Velocidade (Baudrate) (Coluna Esquerda, Linha 1)
             ttk.Label(trans_grid, text="Velocidade:", font=base_font_bold).grid(row=1, column=0, sticky='w', padx=(0, 20), pady=row_pad)
-            entry_baud = ttk.Combobox(trans_grid, font=base_font, values=['9600', '19200', '38400', '57600', '115200'], textvariable=modbus_baud_var)
+            entry_baud = ttk.Combobox(trans_grid, font=base_font, values=['9600', '19200', '38400', '57600', '115200'], textvariable=modbus_baud_var, state='readonly', width=14)
             entry_baud.grid(row=1, column=1, sticky='w', ipady=self.scaled(4), pady=row_pad)
-            try:
-                entry_baud.configure(width=14)
-            except Exception:
-                pass
 
-            try:
-                style = self.style
-                modbus_rb_pad = (self.scaled(8), self.scaled(4)) if small_screen else (self.scaled(14), self.scaled(8))
-                style.configure('Modbus.Radio.TRadiobutton', font=base_font_bold, padding=modbus_rb_pad)
-            except Exception:
-                pass
+            # 3. ID Escravo (Coluna Esquerda, Linha 2)
+            ttk.Label(trans_grid, text="ID Escravo:", font=base_font_bold).grid(row=2, column=0, sticky='w', padx=(0, 20), pady=row_pad)
+            slave_ids = [str(i) for i in range(1, 248)]
+            entry_slave = ttk.Combobox(trans_grid, font=base_font, values=slave_ids, textvariable=modbus_slave_var, state='readonly', width=14)
+            entry_slave.grid(row=2, column=1, sticky='w', ipady=self.scaled(4), pady=row_pad)
 
-            ttk.Label(trans_grid, text="Paridade:", font=base_font_bold).grid(row=4, column=0, sticky='w', padx=(0, 20), pady=row_pad)
-            parity_frame = ttk.Frame(trans_grid)
-            parity_frame.grid(row=4, column=1, sticky='w', pady=row_pad)
-            for label in ['Nenhuma', 'Par', 'Ímpar']:
-                rb = ttk.Radiobutton(
-                    parity_frame,
-                    text=label,
-                    value=label,
-                    variable=modbus_parity_var,
-                    bootstyle='info',
-                    style='Modbus.Radio.TRadiobutton'
-                )
-                rb.pack(side=LEFT, padx=self.scaled(8))
+            # 4. Paridade (Coluna Esquerda, Linha 3)
+            ttk.Label(trans_grid, text="Paridade:", font=base_font_bold).grid(row=3, column=0, sticky='w', padx=(0, 20), pady=row_pad)
+            entry_parity = ttk.Combobox(trans_grid, font=base_font, values=['Nenhuma', 'Par', 'Ímpar'], textvariable=modbus_parity_var, state='readonly', width=14)
+            entry_parity.grid(row=3, column=1, sticky='w', ipady=self.scaled(4), pady=row_pad)
 
-            ttk.Label(trans_grid, text="ID Escravo:", font=base_font_bold).grid(row=3, column=0, sticky='w', padx=(0, 20), pady=row_pad)
-            e_slave = ttk.Entry(trans_grid, font=base_font, textvariable=modbus_slave_var)
-            e_slave.grid(row=3, column=1, sticky='w', ipady=self.scaled(4), pady=row_pad)
-            try:
-                e_slave.configure(width=14)
-            except Exception:
-                pass
+            # 5. Inverter Bytes (Swap Words) (Coluna Direita, Linha 0)
+            ttk.Label(trans_grid, text="Inverter Bytes (Swap Words):", font=base_font_bold).grid(row=0, column=2, sticky='w', padx=(40, 20), pady=row_pad)
+            entry_swap = ttk.Combobox(trans_grid, font=base_font, values=['Sim', 'Não'], textvariable=modbus_swap_var, state='readonly', width=14)
+            entry_swap.grid(row=0, column=3, sticky='w', ipady=self.scaled(4), pady=row_pad)
 
-            swap_frame = ttk.Frame(trans_grid)
-            swap_frame.grid(row=5, column=0, columnspan=2, sticky='w', pady=row_pad)
-            ttk.Label(swap_frame, text='Inverter Bytes (Swap Words):', font=base_font_bold).pack(side=LEFT, padx=(0, 10))
-            for label in ['Sim', 'Não']:
-                rb = ttk.Radiobutton(
-                    swap_frame,
-                    text=label,
-                    value=label,
-                    variable=modbus_swap_var,
-                    bootstyle='info',
-                    style='Modbus.Radio.TRadiobutton'
-                )
-                rb.pack(side=LEFT, padx=self.scaled(8))
+            # 6. Bits de Parada (Stopbits) (Coluna Direita, Linha 1)
+            ttk.Label(trans_grid, text="Bits de Parada:", font=base_font_bold).grid(row=1, column=2, sticky='w', padx=(40, 20), pady=row_pad)
+            entry_stop = ttk.Combobox(trans_grid, font=base_font, values=['1', '2'], textvariable=modbus_stopbits_var, state='readonly', width=14)
+            entry_stop.grid(row=1, column=3, sticky='w', ipady=self.scaled(4), pady=row_pad)
+
+            # 7. Bits de Dados (Bytesize) (Coluna Direita, Linha 2)
+            ttk.Label(trans_grid, text="Bits de Dados:", font=base_font_bold).grid(row=2, column=2, sticky='w', padx=(40, 20), pady=row_pad)
+            entry_bytesize = ttk.Combobox(trans_grid, font=base_font, values=['7', '8'], textvariable=modbus_bytesize_var, state='readonly', width=14)
+            entry_bytesize.grid(row=2, column=3, sticky='w', ipady=self.scaled(4), pady=row_pad)
+
+            # 8. Timeout de Resposta (s) (Coluna Direita, Linha 3)
+            ttk.Label(trans_grid, text="Timeout de Resposta (s):", font=base_font_bold).grid(row=3, column=2, sticky='w', padx=(40, 20), pady=row_pad)
+            entry_timeout = ttk.Combobox(trans_grid, font=base_font, values=['0.001', '0.005', '0.01', '0.02', '0.05', '0.1', '0.2', '0.5', '1.0'], textvariable=modbus_timeout_var, state='readonly', width=14)
+            entry_timeout.grid(row=3, column=3, sticky='w', ipady=self.scaled(4), pady=row_pad)
 
         # === FUNCIÓN PARA CONSTRUIR PESTAÑA DE MANTENIMIENTO (LAZY) ===
         def _build_maint_tab_content():
@@ -4402,6 +4440,7 @@ class BalanzaGUI(ttk.Window):
             style = self.style
             style.configure('Trans.Check.TCheckbutton', font=base_font)
             style.configure('Trans.CheckBig.TCheckbutton', font=base_font)
+            style.configure('Config.Small.TButton', font=base_font_bold)
         except Exception:
             pass
         
@@ -4415,17 +4454,17 @@ class BalanzaGUI(ttk.Window):
             main_content.pack(fill=BOTH, expand=True, pady=(15, 0))
         main_content.columnconfigure(0, weight=1, uniform="top_row")
         main_content.columnconfigure(1, weight=1, uniform="top_row")
-        main_content.columnconfigure(2, weight=1, uniform="top_row")
-        main_content.rowconfigure(0, weight=0) # Porta serial + Casas Decimais + Calibrar Carga
-        main_content.rowconfigure(1, weight=1) # Configuração dos Nós frame
-
+        main_content.rowconfigure(0, weight=0) # Porta serial / Exibição
+        main_content.rowconfigure(1, weight=0) # Calibração / Exibição
+        main_content.rowconfigure(2, weight=1) # Configuração dos Nós frame
+ 
         # === Porta Serial (Gateway USB) ===
         port_frame = ttk.Labelframe(
             main_content, text='Porta Serial (Gateway USB)',
             padding=(15, 6), borderwidth=self.scaled(2),
             relief='solid', labelanchor='n', style='Panel.TLabelframe'
         )
-        port_frame.grid(row=0, column=0, sticky='nsew', padx=(8, 4), pady=(4, 8))
+        port_frame.grid(row=0, column=0, sticky='nsew', padx=(8, 4), pady=(4, 4))
         
         port_grid = ttk.Frame(port_frame)
         port_grid.pack(fill=X)
@@ -4451,29 +4490,44 @@ class BalanzaGUI(ttk.Window):
             threading.Thread(target=_scan_ports_async, daemon=True).start()
             
         btn_refresh = ttk.Button(
-            port_grid, text="Atualizar Portos", command=_refresh_com_ports,
-            bootstyle="info-outline"
+            port_grid, text="Atualizar Portas", command=_refresh_com_ports,
+            bootstyle="info-outline", style='Config.Small.TButton'
         )
         btn_refresh.grid(row=0, column=2, sticky="w", padx=(8, 0), pady=4)
 
-        # === Casas Decimais ===
-        decimals_frame = ttk.Labelframe(
-            main_content, text='Casas Decimais',
+        # === Exibição (Casas Decimais & Unidades) ===
+        display_frame = ttk.Labelframe(
+            main_content, text='Exibição',
             padding=(15, 6), borderwidth=self.scaled(2),
             relief='solid', labelanchor='n', style='Panel.TLabelframe'
         )
-        decimals_frame.grid(row=0, column=1, sticky='nsew', padx=(4, 4), pady=(4, 8))
+        display_frame.grid(row=0, column=1, rowspan=2, sticky='nsew', padx=(4, 8), pady=(4, 8))
         
-        decimals_grid = ttk.Frame(decimals_frame)
-        decimals_grid.pack(fill=X)
-        decimals_grid.columnconfigure(1, weight=1)
+        display_grid = ttk.Frame(display_frame)
+        display_grid.pack(fill=X)
+        display_grid.columnconfigure(1, weight=1)
+        display_grid.columnconfigure(3, weight=1)
         
-        ttk.Label(decimals_grid, text="Decimais:", font=base_font_bold).grid(row=0, column=0, sticky="w", padx=(0, 15), pady=4)
-        
+        # Row 0: Decimais da Carga + Unidade
+        ttk.Label(display_grid, text="Decimais Carga:", font=base_font_bold).grid(row=0, column=0, sticky="w", padx=(0, 15), pady=4)
         current_decimals = current_config.get("decimals", 2)
-        entry_decimals = ttk.Combobox(decimals_grid, font=base_font, values=['0', '1', '2', '3'], width=12, state='readonly')
+        entry_decimals = ttk.Combobox(display_grid, font=base_font, values=['0', '1', '2', '3'], width=12, state='readonly')
         entry_decimals.set(str(current_decimals))
         entry_decimals.grid(row=0, column=1, sticky="w", ipady=self.scaled(4), pady=4)
+
+        ttk.Label(display_grid, text="Unidade:", font=base_font_bold).grid(row=0, column=2, sticky="w", padx=(15, 15), pady=4)
+        current_unit = current_config.get("unit", "kgf")
+        unit_display_map = {"kgf": "kgf", "kg": "kg", "ton": "t", "kn": "kN"}
+        entry_unit = ttk.Combobox(display_grid, font=base_font, values=['kgf', 'kg', 't', 'kN'], width=12, state='readonly')
+        entry_unit.set(unit_display_map.get(current_unit, "kgf"))
+        entry_unit.grid(row=0, column=3, sticky="w", ipady=self.scaled(4), pady=4)
+
+        # Row 1: Decimais dos Ângulos
+        ttk.Label(display_grid, text="Decimais Ângulo:", font=base_font_bold).grid(row=1, column=0, sticky="w", padx=(0, 15), pady=4)
+        current_angle_decimals = current_config.get("angle_decimals", 1)
+        entry_angle_decimals = ttk.Combobox(display_grid, font=base_font, values=['0', '1', '2'], width=12, state='readonly')
+        entry_angle_decimals.set(str(current_angle_decimals))
+        entry_angle_decimals.grid(row=1, column=1, sticky="w", ipady=self.scaled(4), pady=4)
 
         # === Botão Calibrar Carga (ao lado da seção de porta COM) ===
         cal_frame = ttk.Labelframe(
@@ -4481,7 +4535,7 @@ class BalanzaGUI(ttk.Window):
             padding=(15, 6), borderwidth=self.scaled(2),
             relief='solid', labelanchor='n', style='Panel.TLabelframe'
         )
-        cal_frame.grid(row=0, column=2, sticky='nsew', padx=(4, 8), pady=(4, 8))
+        cal_frame.grid(row=1, column=0, sticky='nsew', padx=(8, 4), pady=(4, 8))
         cal_frame.columnconfigure(0, weight=1)
         cal_frame.rowconfigure(0, weight=1)
 
@@ -4552,7 +4606,7 @@ class BalanzaGUI(ttk.Window):
             padding=14, borderwidth=self.scaled(2),
             relief='solid', labelanchor='n', style='Panel.TLabelframe'
         )
-        panel1.grid(row=1, column=0, columnspan=3, rowspan=1, sticky='nsew', padx=8, pady=8)
+        panel1.grid(row=2, column=0, columnspan=2, rowspan=1, sticky='nsew', padx=8, pady=8)
         panel1.columnconfigure(0, weight=1)
         panel1.columnconfigure(1, weight=1)
         panel1.rowconfigure(0, weight=1)
@@ -4602,40 +4656,40 @@ class BalanzaGUI(ttk.Window):
             cell_grid = ttk.Frame(node_frame)
             cell_grid.grid(row=0, column=0, columnspan=2, sticky='nsew')
             try:
-                cell_grid.columnconfigure(0, weight=0, minsize=self.scaled(140))
+                cell_grid.columnconfigure(0, weight=0, minsize=self.scaled(100))
                 cell_grid.columnconfigure(1, weight=1)
+                cell_grid.columnconfigure(2, weight=0, minsize=self.scaled(110))
+                cell_grid.columnconfigure(3, weight=1)
             except Exception:
                 pass
 
             row_idx = 0
 
-            # ID do Nó
+            # ID do Nó e Nº de Série lado a lado na mesma linha
             ttk.Label(cell_grid, text='ID do Nó:', font=base_font_bold).grid(
                 row=row_idx, column=0, sticky='w', padx=(0, 12), pady=row_pady)
-            e_id = ttk.Entry(cell_grid, font=base_font, width=14)
+            e_id = ttk.Entry(cell_grid, font=base_font, width=8)
             e_id.insert(0, str(current_node_data.get('id', 0)))
             e_id.grid(row=row_idx, column=1, sticky='ew', ipady=self.scaled(4), pady=row_pady)
             self._bind_numeric_keypad(e_id, f'ID do Nó — {node_title}')
-            row_idx += 1
 
-            # Nº de Série
             ttk.Label(cell_grid, text='Nº de Série:', font=base_font_bold).grid(
-                row=row_idx, column=0, sticky='w', padx=(0, 12), pady=row_pady)
-            e_serial = ttk.Entry(cell_grid, font=base_font, width=14)
+                row=row_idx, column=2, sticky='w', padx=(20, 12), pady=row_pady)
+            e_serial = ttk.Entry(cell_grid, font=base_font, width=12)
             e_serial.insert(0, str(current_node_data.get('serial', '')))
-            e_serial.grid(row=row_idx, column=1, sticky='ew', ipady=self.scaled(4), pady=row_pady)
+            e_serial.grid(row=row_idx, column=3, sticky='ew', ipady=self.scaled(4), pady=row_pady)
             self._bind_numeric_keypad(e_serial, f'Nº Série — {node_title}')
             row_idx += 1
 
             # Separador e cabeçalho de canais
             try:
                 ttk.Separator(cell_grid, orient='horizontal').grid(
-                    row=row_idx, column=0, columnspan=2, sticky='ew', pady=(10, 3))
+                    row=row_idx, column=0, columnspan=4, sticky='ew', pady=(10, 3))
                 row_idx += 1
                 ttk.Label(
                     cell_grid, text='Atribuição de Canais',
                     font=base_font_bold, anchor='center'
-                ).grid(row=row_idx, column=0, columnspan=2, sticky='ew', pady=(2, 6))
+                ).grid(row=row_idx, column=0, columnspan=4, sticky='ew', pady=(2, 6))
                 row_idx += 1
             except Exception:
                 pass
@@ -4676,7 +4730,7 @@ class BalanzaGUI(ttk.Window):
 
                 # Seleção de canal via Radiobuttons
                 ch_btn_frame = ttk.Frame(cell_grid)
-                ch_btn_frame.grid(row=row_idx, column=1, sticky='w', pady=2 if small_screen else 4)
+                ch_btn_frame.grid(row=row_idx, column=1, columnspan=3, sticky='w', pady=2 if small_screen else 4)
                 
                 # Espaçador invisível (coluna vazia) antes do botão 1 (aumentado para deslocar mais à direita)
                 spacer = ttk.Frame(ch_btn_frame, width=self.scaled(75))
@@ -4805,17 +4859,42 @@ class BalanzaGUI(ttk.Window):
                 _swap = True if modbus_swap_var.get() == 'Sim' else False
             except Exception:
                 _swap = current_config.get('transmissao', {}).get('swap_words', False)
+            try:
+                _stopbits = int(modbus_stopbits_var.get())
+            except Exception:
+                _stopbits = int(current_config.get('transmissao', {}).get('stopbits', 1))
+            try:
+                _bytesize = int(modbus_bytesize_var.get())
+            except Exception:
+                _bytesize = int(current_config.get('transmissao', {}).get('bytesize', 8))
+            try:
+                _timeout = float(modbus_timeout_var.get())
+            except Exception:
+                _timeout = float(current_config.get('transmissao', {}).get('timeout', 0.005))
 
             try:
                 dec_val = int(entry_decimals.get())
             except Exception:
                 dec_val = 2
 
+            try:
+                angle_dec_val = int(entry_angle_decimals.get())
+            except Exception:
+                angle_dec_val = 1
+
+            try:
+                reverse_unit_map = {"kgf": "kgf", "kg": "kg", "ton": "ton", "t": "ton", "kN": "kn", "Kgf": "kgf", "Kg": "kg"}
+                unit_val = reverse_unit_map.get(entry_unit.get(), "kgf")
+            except Exception:
+                unit_val = "kgf"
+
             new_config.update({
                 "execution_mode": current_config.get('execution_mode', 'REAL'),
                 "use_sensor_config": current_config.get('use_sensor_config', True),
                 "serial_port": entry_serial.get(),
                 "decimals": dec_val,
+                "angle_decimals": angle_dec_val,
+                "unit": unit_val,
                 "nodes": built_nodes,
                 "transmissao": {
                     "porta": _porta,
@@ -4823,9 +4902,9 @@ class BalanzaGUI(ttk.Window):
                     "paridade": _paridade,
                     "id_escravo_pc": slave_id_val,
                     "swap_words": _swap,
-                    "stopbits": current_config.get('transmissao', {}).get('stopbits', 1),
-                    "bytesize": current_config.get('transmissao', {}).get('bytesize', 8),
-                    "timeout": current_config.get('transmissao', {}).get('timeout', 0.005)
+                    "stopbits": _stopbits,
+                    "bytesize": _bytesize,
+                    "timeout": _timeout
                 }
             })
             
@@ -4886,6 +4965,8 @@ class BalanzaGUI(ttk.Window):
 
                 
                 self._decimals = dec_val
+                self._angle_decimals = angle_dec_val
+                self._unit = unit_val
                 try:
                     self._refresh_all_displays()
                 except Exception:

@@ -58,6 +58,8 @@
         "debug_print_getdata_calls": false
     },
     "decimals": 1,
+    "angle_decimals": 1,
+    "unit": "kn",
     "profiles_data": {
         "profiles": {
             "slot_1": {

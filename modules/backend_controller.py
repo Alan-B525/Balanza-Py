@@ -365,6 +365,13 @@ class BackendController:
             except Exception:
                 pass
 
+        # Determinar si los parámetros de hardware cambiaron para evitar reconexión innecesaria
+        hardware_changed = False
+        with self.state_lock:
+            port_changed = (self.active_com != new_port) if new_port else False
+            nodes_changed = (self.active_nodos != new_nodes) if new_nodes else False
+            hardware_changed = port_changed or nodes_changed
+
         with self.state_lock:
             if new_port:
                 self.active_com = new_port
@@ -482,7 +489,7 @@ class BackendController:
             
             self.data_queue.put({'type': 'LOG', 'payload': "Configuração de transmissão Modbus atualizada."})
 
-        # Reconectar si ya estábamos conectados
+        # Reconectar si ya estábamos conectados y los parámetros de hardware cambiaron
         was_connected = False
         try:
             was_connected = bool(self.sistema_pesaje.esta_conectado())
@@ -490,10 +497,13 @@ class BackendController:
             pass
 
         if was_connected:
-            if not self.connection_in_progress.is_set():
-                self.connection_in_progress.set()
-                t = threading.Thread(target=self._do_reconnect, daemon=True)
-                t.start()
+            if hardware_changed:
+                if not self.connection_in_progress.is_set():
+                    self.connection_in_progress.set()
+                    t = threading.Thread(target=self._do_reconnect, daemon=True)
+                    t.start()
+            else:
+                self.data_queue.put({'type': 'LOG', 'payload': "Configuração salva. Parâmetros de hardware inalterados (reconexão evitada)."})
         else:
             self.data_queue.put({'type': 'LOG', 'payload': "Configuração salva. Reconexão automática ignorada (sistema desconectado)."})
 
@@ -733,12 +743,23 @@ class BackendController:
 
             swap_words = self._modbus_cached_swap_words
             
-            # Serializar peso bruto de la celda 1 en 2 holding registers (float32)
-            regs = self._float_to_float32_registers(modbus_value, swap_words)
+            # Obtener y normalizar la lista de 5 ángulos
+            angles = datos_procesados.get('angles', [])
+            try:
+                angles_padded = list(angles) + [0.0] * (5 - len(angles))
+                angles_padded = [float(a) for a in angles_padded[:5]]
+            except Exception:
+                angles_padded = [0.0] * 5
+
+            # Serializar peso bruto de la celda 1 y los 5 ángulos en 12 holding registers (float32)
+            all_regs = []
+            all_regs.extend(self._float_to_float32_registers(modbus_value, swap_words))
+            for ang in angles_padded:
+                all_regs.extend(self._float_to_float32_registers(ang, swap_words))
 
             modbus_ok = False
             try:
-                modbus_ok = server.push_data(regs)
+                modbus_ok = server.push_data(all_regs)
             except Exception:
                 pass
 
