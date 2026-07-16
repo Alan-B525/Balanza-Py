@@ -110,6 +110,7 @@ class BackendController:
 
         # Tracking de transición de conexión para detectar desconexiones silenciosas
         self._was_connected = False
+        self._manual_disconnect = False
 
     def _handle_auto_disconnect(self, reason: str, detail: str) -> None:
         """Maneja la notificación de auto-desconexión del driver (ej: 50 errores consecutivos)."""
@@ -515,6 +516,7 @@ class BackendController:
                 cmd = cmd_msg['cmd']
 
                 if cmd in ('CONNECT', 'CONNECT_WITH_PROGRESS'):
+                    self._manual_disconnect = False
                     if not self.connection_in_progress.is_set():
                         self.connection_in_progress.set()
                         t = threading.Thread(target=self._do_connect, daemon=True)
@@ -525,6 +527,7 @@ class BackendController:
                     self.data_queue.put({'type': 'LOG', 'payload': 'Cancelamento solicitado. Aguardando término da conexão...'})
 
                 elif cmd == 'DISCONNECT':
+                    self._manual_disconnect = True
                     try:
                         self.sistema_pesaje.desconectar()
                     except Exception:
@@ -915,14 +918,17 @@ class BackendController:
             elif self._was_connected and not is_connected:
                 # Transición de conectado → desconectado detectada (ej: auto-disconnect por errores)
                 self._was_connected = False
-                self.data_queue.put({
-                    'type': 'SENSOR_DISCONNECT',
-                    'payload': {
-                        'reason': 'connection_lost',
-                        'detail': 'Sensor dejó de estar conectado inesperadamente'
-                    }
-                })
-                self.data_queue.put({'type': 'LOG', 'payload': 'Sensor desconectado inesperadamente'})
+                if not getattr(self, '_manual_disconnect', False):
+                    self.data_queue.put({
+                        'type': 'SENSOR_DISCONNECT',
+                        'payload': {
+                            'reason': 'connection_lost',
+                            'detail': 'Sensor dejó de estar conectado inesperadamente'
+                        }
+                    })
+                    self.data_queue.put({'type': 'LOG', 'payload': 'Sensor desconectado inesperadamente'})
+                else:
+                    self._manual_disconnect = False
 
             # 3. Pausa dinámica
             if is_connected and not self.acquisition_paused:

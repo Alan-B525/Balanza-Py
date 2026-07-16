@@ -516,6 +516,10 @@ class BalanzaGUI(ttk.Window):
         # Estilo para hora en footer (más grande)
         self.style.configure('FooterTime.TLabel', background=BG_CARD, foreground=TEXT_MUTED, font=(FONT_MAIN, sf(24), "bold"))
 
+        # Estilos para teclados virtuales
+        self.style.configure("Keyboard.TButton", font=(FONT_MAIN, sf(16), "bold"))
+        self.style.configure("KbAction.TButton", font=(FONT_MAIN, sf(13), "bold"))
+
     def _setup_ui(self):
         # Main Container - padding escalado
         main_container = ttk.Frame(self, style='Body.TFrame', padding=self.scaled(10))
@@ -1912,11 +1916,8 @@ class BalanzaGUI(ttk.Window):
         keypad.resizable(False, False)
         keypad.transient(parent)
         keypad.attributes('-topmost', True)
-        if not pin_mode:
-            self._apply_window_icon(keypad)
         keypad.configure(bg="#222222")
-        if pin_mode:
-            keypad.overrideredirect(True)
+        keypad.overrideredirect(True)
         self._active_keypad = keypad
         self._keypad_target_widget = entry_widget
 
@@ -1973,33 +1974,25 @@ class BalanzaGUI(ttk.Window):
         # Frame superior para layout grid
         keypad_frame = ttk.Frame(keypad)
         keypad_frame.pack(fill="both", expand=True)
-        if pin_mode:
-            keypad_frame.rowconfigure(0, weight=1)  # título
-            keypad_frame.rowconfigure(1, weight=2)  # entry
-            keypad_frame.rowconfigure(2, weight=8)  # botones
-        else:
-            keypad_frame.rowconfigure(0, weight=2)  # entry
-            keypad_frame.rowconfigure(1, weight=8)  # botones
+        keypad_frame.rowconfigure(0, weight=1)  # título
+        keypad_frame.rowconfigure(1, weight=2)  # entry
+        keypad_frame.rowconfigure(2, weight=8)  # botones
         keypad_frame.columnconfigure(0, weight=1)
 
-        # Título personalizado (solo en pin_mode, reemplaza la barra de Windows)
-        if pin_mode:
-            title_lbl = ttk.Label(
-                keypad_frame,
-                text=title,
-                font=("Segoe UI", 14, "bold"),
-                anchor="center"
-            )
-            title_lbl.grid(row=0, column=0, sticky="ew", padx=20, pady=(16, 4))
-            entry_row = 1
-            btns_row = 2
-        else:
-            entry_row = 0
-            btns_row = 1
+        # Título personalizado (reemplaza la barra de Windows)
+        title_lbl = ttk.Label(
+            keypad_frame,
+            text=title,
+            font=("Segoe UI", 14, "bold"),
+            anchor="center"
+        )
+        title_lbl.grid(row=0, column=0, sticky="ew", padx=20, pady=(16, 4))
+        entry_row = 1
+        btns_row = 2
 
         # Entry grande para mostrar el valor digitado
         entry_display = ttk.Entry(keypad_frame, textvariable=kp_value, font=("Segoe UI", 32), justify="center", state="readonly")
-        entry_display.grid(row=entry_row, column=0, sticky="nsew", padx=40, pady=(10 if pin_mode else 40, 20))
+        entry_display.grid(row=entry_row, column=0, sticky="nsew", padx=40, pady=(10, 20))
 
         # Frame de botones
         all_btns = ttk.Frame(keypad_frame)
@@ -2042,6 +2035,7 @@ class BalanzaGUI(ttk.Window):
                 entry_widget.insert(0, kp_value.get())
                 try:
                     entry_widget.focus_set()
+                    entry_widget.event_generate("<KeyRelease>")
                 except Exception:
                     pass
             _close_keypad()
@@ -2127,12 +2121,14 @@ class BalanzaGUI(ttk.Window):
         ttk.Button(all_btns, text="0", command=lambda: press_digit("0"), bootstyle="light", padding=pad_num).grid(row=3, column=1, sticky="nsew", padx=4, pady=4)
         ttk.Button(all_btns, text="DEL", command=press_backspace, bootstyle="warning", padding=pad_act).grid(row=3, column=2, sticky="nsew", padx=4, pady=4)
 
-        # Fila 4: [-/CANCELAR] | OK (OK ocupa 2 columnas)
+        # Fila 4: CANCELAR | [-/deshabilitado] | OK
         if not pin_mode:
-            ttk.Button(all_btns, text="-", command=lambda: press_digit("-"), bootstyle="secondary", padding=pad_act).grid(row=4, column=0, sticky="nsew", padx=4, pady=4)
+            ttk.Button(all_btns, text="CANCELAR", command=cancel_and_close, bootstyle="danger", padding=pad_act).grid(row=4, column=0, sticky="nsew", padx=4, pady=4)
+            ttk.Button(all_btns, text="-", command=lambda: press_digit("-"), bootstyle="secondary", padding=pad_act).grid(row=4, column=1, sticky="nsew", padx=4, pady=4)
+            ttk.Button(all_btns, text="OK", command=confirm_and_close, bootstyle="success", padding=pad_act).grid(row=4, column=2, sticky="nsew", padx=4, pady=4)
         else:
             ttk.Button(all_btns, text="CANCELAR", command=cancel_and_close, bootstyle="danger", padding=pad_act).grid(row=4, column=0, sticky="nsew", padx=4, pady=4)
-        ttk.Button(all_btns, text="OK", command=confirm_and_close, bootstyle="success", padding=pad_act).grid(row=4, column=1, columnspan=2, sticky="nsew", padx=4, pady=4)
+            ttk.Button(all_btns, text="OK", command=confirm_and_close, bootstyle="success", padding=pad_act).grid(row=4, column=1, columnspan=2, sticky="nsew", padx=4, pady=4)
 
         # Mostrar la ventana solo ahora que todo está configurado (sin flash de barra de título)
         try:
@@ -2229,6 +2225,376 @@ class BalanzaGUI(ttk.Window):
 
         try:
             entry_widget.bind("<Button-1>", _open_keypad, add="+")
+        except Exception:
+            pass
+
+        # No enlazar FocusIn para permitir uso fluido del teclado físico.
+
+    def _show_alphanumeric_keyboard(self, entry_widget, title="Inserir Nome"):
+        """Teclado alfanumérico virtual (QWERTY) para pantallas táctiles.
+        
+        Diseño profesional con grid de 20 columnas para centrado real
+        de las filas QWERTY, botones grandes táctiles y layout cohesivo.
+        """
+        try:
+            if hasattr(self, '_active_keyboard') and self._active_keyboard and not self._active_keyboard.winfo_exists():
+                self._active_keyboard = None
+                self._keyboard_target_widget = None
+        except Exception:
+            self._active_keyboard = None
+            self._keyboard_target_widget = None
+
+        # Si ya existe para el mismo widget, no recrear
+        try:
+            if (
+                entry_widget is not None
+                and hasattr(self, '_active_keyboard')
+                and self._active_keyboard
+                and self._active_keyboard.winfo_exists()
+                and getattr(self, '_keyboard_target_widget', None) is entry_widget
+            ):
+                try:
+                    self._active_keyboard.lift()
+                    self._active_keyboard.focus_force()
+                except Exception:
+                    pass
+                return
+        except Exception:
+            pass
+
+        # Cerrar teclado anterior si existe
+        if hasattr(self, '_active_keyboard') and self._active_keyboard:
+            try:
+                self._active_keyboard.destroy()
+            except:
+                pass
+            self._active_keyboard = None
+
+        # Valor actual del entry
+        current_value = entry_widget.get() if entry_widget is not None else ""
+
+        # Tamaño del teclado — más amplio y alto para botones grandes
+        kb_width, kb_height = 1000, 560
+
+        # Obtener la ventana padre
+        parent = entry_widget.winfo_toplevel() if entry_widget is not None else self
+
+        keyboard = tk.Toplevel(parent)
+        keyboard.withdraw()
+        keyboard.title(title)
+        self._center_toplevel(keyboard, kb_width, kb_height)
+        keyboard.resizable(False, False)
+        keyboard.transient(parent)
+        keyboard.attributes('-topmost', True)
+        keyboard.configure(bg="#222222")
+        keyboard.overrideredirect(True)
+        self._active_keyboard = keyboard
+        self._keyboard_target_widget = entry_widget
+
+        kb_value = tk.StringVar(value=current_value)
+        is_shift = [True]  # Empezar en mayúsculas por defecto
+
+        # ── Funciones de entrada ──
+        def press_char(char):
+            if char == " ":
+                kb_value.set(kb_value.get() + " ")
+                return
+            val = char.upper() if is_shift[0] else char.lower()
+            kb_value.set(kb_value.get() + val)
+
+        def toggle_shift():
+            is_shift[0] = not is_shift[0]
+            _update_keys_case()
+
+        def press_backspace():
+            kb_value.set(kb_value.get()[:-1])
+
+        def press_clear():
+            kb_value.set("")
+
+        def _close_keyboard():
+            try:
+                keyboard.grab_release()
+            except:
+                pass
+            try:
+                keyboard.destroy()
+            except:
+                pass
+            self._active_keyboard = None
+            self._keyboard_target_widget = None
+
+        def confirm_and_close():
+            entry_widget.delete(0, tk.END)
+            entry_widget.insert(0, kb_value.get())
+            try:
+                entry_widget.focus_set()
+                entry_widget.event_generate("<KeyRelease>")
+            except Exception:
+                pass
+            _close_keyboard()
+
+        def cancel_and_close():
+            _close_keyboard()
+
+        # ── Layout principal ──
+        main_frame = ttk.Frame(keyboard)
+        main_frame.pack(fill="both", expand=True, padx=12, pady=8)
+
+        main_frame.rowconfigure(0, weight=0)   # Título
+        main_frame.rowconfigure(1, weight=0)   # Entry display
+        main_frame.rowconfigure(2, weight=1)   # Teclas
+        main_frame.columnconfigure(0, weight=1)
+
+                # ── Entry display ──
+        entry_display = ttk.Entry(
+            main_frame,
+            textvariable=kb_value,
+            font=("Segoe UI", 32),
+            justify="center",
+            state="readonly"
+        )
+        entry_display.grid(row=1, column=0, sticky="ew", padx=30, pady=(4, 8), ipady=6)
+
+        # ── Frame de teclas ──
+        # Grid de 20 columnas (cada tecla ocupa 2 columnas → 10 teclas por fila)
+        # Filas centradas con offsets:
+        #   Fila 0 (números):  10 teclas → cols 0..19 (offset=0)
+        #   Fila 1 (QWERTY):   10 teclas → cols 0..19 (offset=0)
+        #   Fila 2 (ASDF):      9 teclas → cols 1..18 (offset=1)
+        #   Fila 3 (ZXCV):      9 teclas (SHIFT + 7 letras + DEL)
+        #   Fila 4 (acciones): LIMPAR | ESPAÇO | CANCELAR | OK
+
+        keys_frame = ttk.Frame(main_frame)
+        keys_frame.grid(row=2, column=0, sticky="nsew")
+
+        num_rows = 5
+        num_cols = 20
+        for r in range(num_rows):
+            keys_frame.rowconfigure(r, weight=1)
+        for c in range(num_cols):
+            keys_frame.columnconfigure(c, weight=1, uniform="kb_u")
+
+        # Padding táctil generoso
+        btn_pad_xy = (2, 2)  # padx, pady del grid
+        key_font = ("Segoe UI", 16, "bold")
+        key_font_sm = ("Segoe UI", 13, "bold")
+        key_padding = (6, 16)  # padding interno del botón
+
+        letter_buttons = []  # Para actualizar mayúsculas/minúsculas
+
+        # ── Fila 0: Números 1-0 ──
+        nums = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
+        for i, n in enumerate(nums):
+            col = i * 2
+            btn = ttk.Button(
+                keys_frame, text=n,
+                command=lambda ch=n: press_char(ch),
+                bootstyle="light", padding=key_padding
+            )
+            btn.grid(row=0, column=col, columnspan=2, sticky="nsew",
+                     padx=btn_pad_xy[0], pady=btn_pad_xy[1])
+            btn.configure(style="Keyboard.TButton")
+
+        # ── Fila 1: QWERTYUIOP ──
+        row1 = ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"]
+        for i, letter in enumerate(row1):
+            col = i * 2
+            btn = ttk.Button(
+                keys_frame, text=letter,
+                command=lambda l=letter: press_char(l),
+                bootstyle="light", padding=key_padding
+            )
+            btn.grid(row=1, column=col, columnspan=2, sticky="nsew",
+                     padx=btn_pad_xy[0], pady=btn_pad_xy[1])
+            letter_buttons.append((btn, letter))
+
+        # ── Fila 2: ASDFGHJKL (centrada con offset=1) ──
+        row2 = ["A", "S", "D", "F", "G", "H", "J", "K", "L"]
+        for i, letter in enumerate(row2):
+            col = 1 + i * 2
+            btn = ttk.Button(
+                keys_frame, text=letter,
+                command=lambda l=letter: press_char(l),
+                bootstyle="light", padding=key_padding
+            )
+            btn.grid(row=2, column=col, columnspan=2, sticky="nsew",
+                     padx=btn_pad_xy[0], pady=btn_pad_xy[1])
+            letter_buttons.append((btn, letter))
+
+        # ── Fila 3: SHIFT + ZXCVBNM + ⌫ DEL ──
+        # SHIFT: cols 0-2 (3 columnas)
+        btn_shift = ttk.Button(
+            keys_frame, text="⇧",
+            command=toggle_shift,
+            bootstyle="info", padding=key_padding
+        )
+        btn_shift.grid(row=3, column=0, columnspan=3, sticky="nsew",
+                       padx=btn_pad_xy[0], pady=btn_pad_xy[1])
+
+        # Letras Z-M: cada una 2 cols, empezando en col 3
+        row3 = ["Z", "X", "C", "V", "B", "N", "M"]
+        for i, letter in enumerate(row3):
+            col = 3 + i * 2
+            btn = ttk.Button(
+                keys_frame, text=letter,
+                command=lambda l=letter: press_char(l),
+                bootstyle="light", padding=key_padding
+            )
+            btn.grid(row=3, column=col, columnspan=2, sticky="nsew",
+                     padx=btn_pad_xy[0], pady=btn_pad_xy[1])
+            letter_buttons.append((btn, letter))
+
+        # DEL: cols 17-19 (3 columnas)
+        btn_back = ttk.Button(
+            keys_frame, text="⌫",
+            command=press_backspace,
+            bootstyle="warning", padding=key_padding
+        )
+        btn_back.grid(row=3, column=17, columnspan=3, sticky="nsew",
+                       padx=btn_pad_xy[0], pady=btn_pad_xy[1])
+
+        # ── Fila 4: LIMPAR | ESPAÇO (ancho) | CANCELAR | OK ──
+        # LIMPAR: cols 0-3
+        btn_clear = ttk.Button(
+            keys_frame, text="LIMPAR",
+            command=press_clear,
+            bootstyle="danger", padding=key_padding
+        )
+        btn_clear.grid(row=4, column=0, columnspan=4, sticky="nsew",
+                       padx=btn_pad_xy[0], pady=btn_pad_xy[1])
+
+        # ESPAÇO: cols 4-11 (barra espaciadora amplia)
+        btn_space = ttk.Button(
+            keys_frame, text="ESPAÇO",
+            command=lambda: press_char(" "),
+            bootstyle="light", padding=key_padding
+        )
+        btn_space.grid(row=4, column=4, columnspan=8, sticky="nsew",
+                       padx=btn_pad_xy[0], pady=btn_pad_xy[1])
+
+        # CANCELAR: cols 12-15
+        btn_cancel = ttk.Button(
+            keys_frame, text="CANCELAR",
+            command=cancel_and_close,
+            bootstyle="danger", padding=key_padding
+        )
+        btn_cancel.grid(row=4, column=12, columnspan=4, sticky="nsew",
+                        padx=btn_pad_xy[0], pady=btn_pad_xy[1])
+
+        # OK: cols 16-19
+        btn_ok = ttk.Button(
+            keys_frame, text="OK",
+            command=confirm_and_close,
+            bootstyle="success", padding=key_padding
+        )
+        btn_ok.grid(row=4, column=16, columnspan=4, sticky="nsew",
+                    padx=btn_pad_xy[0], pady=btn_pad_xy[1])
+
+        # Aplicar font a todos los botones del teclado
+        for child in keys_frame.winfo_children():
+            try:
+                child.configure(style="Keyboard.TButton")
+            except Exception:
+                pass
+        # Botones de acción con font ligeramente más chica
+        try:
+            for btn_action in (btn_shift, btn_back, btn_clear, btn_space, btn_cancel, btn_ok):
+                btn_action.configure(style="KbAction.TButton")
+        except Exception:
+            pass
+
+        # ── Función para actualizar mayúsculas/minúsculas ──
+        def _update_keys_case():
+            for btn, orig_letter in letter_buttons:
+                txt = orig_letter.upper() if is_shift[0] else orig_letter.lower()
+                btn.configure(text=txt)
+            # Feedback visual en el botón SHIFT
+            try:
+                if is_shift[0]:
+                    btn_shift.configure(text="⇧", bootstyle="info")
+                else:
+                    btn_shift.configure(text="⇧", bootstyle="secondary")
+            except Exception:
+                pass
+
+        # ── Soporte de teclado físico ──
+        def _handle_physical_key(event):
+            try:
+                keysym = event.keysym
+                char = event.char
+                if keysym in ('Return', 'KP_Enter'):
+                    confirm_and_close()
+                    return "break"
+                if keysym == 'Escape':
+                    cancel_and_close()
+                    return "break"
+                if keysym in ('BackSpace', 'Delete'):
+                    press_backspace()
+                    return "break"
+                if char:
+                    if char.isalnum() or char in (" ", "-", "_", ".", ",", "/"):
+                        press_char(char)
+                        return "break"
+            except Exception:
+                pass
+            return None
+
+        try:
+            keyboard.bind('<KeyPress>', _handle_physical_key, add='+')
+            keyboard.bind('<Return>', _handle_physical_key, add='+')
+            keyboard.bind('<KP_Enter>', _handle_physical_key, add='+')
+            keyboard.bind('<Escape>', _handle_physical_key, add='+')
+            keyboard.bind('<BackSpace>', _handle_physical_key, add='+')
+            keyboard.bind('<Delete>', _handle_physical_key, add='+')
+        except Exception:
+            pass
+
+        # ── Mostrar ventana ──
+        try:
+            keyboard.update_idletasks()
+            keyboard.deiconify()
+        except:
+            pass
+
+        try:
+            keyboard.focus_force()
+        except Exception:
+            pass
+
+    def _bind_alphanumeric_keyboard(self, entry_widget, title="Inserir Nome"):
+        """Vincula teclado alfanumérico a un Entry sin bloquear teclado físico."""
+        if entry_widget is None:
+            return
+
+        def _open_keyboard(_event=None):
+            try:
+                now_ts = time.monotonic()
+                last_ts = float(getattr(self, '_last_keyboard_open_req_ts', 0.0) or 0.0)
+                last_widget = getattr(self, '_last_keyboard_open_widget', None)
+                if last_widget is entry_widget and (now_ts - last_ts) < 0.18:
+                    return "break"
+                self._last_keyboard_open_req_ts = now_ts
+                self._last_keyboard_open_widget = entry_widget
+
+                if (
+                    getattr(self, '_active_keyboard', None)
+                    and self._active_keyboard.winfo_exists()
+                    and getattr(self, '_keyboard_target_widget', None) is entry_widget
+                ):
+                    try:
+                        self._active_keyboard.lift()
+                        self._active_keyboard.focus_force()
+                    except Exception:
+                        pass
+                    return "break"
+                self.after(40, lambda: self._show_alphanumeric_keyboard(entry_widget, title))
+            except Exception:
+                pass
+            return "break"
+
+        try:
+            entry_widget.bind("<Button-1>", _open_keyboard, add="+")
         except Exception:
             pass
 
@@ -4101,6 +4467,8 @@ class BalanzaGUI(ttk.Window):
         def _sync_cfg_tab_width(event=None):
             nonlocal _last_notebook_width
             try:
+                if event and event.widget != notebook:
+                    return
                 w = int(notebook.winfo_width())
                 if w <= 1 or w == _last_notebook_width:
                     return
@@ -4303,8 +4671,8 @@ class BalanzaGUI(ttk.Window):
         def _build_maint_tab_content():
             maint_cols = ttk.Frame(tab_maint)
             maint_cols.pack(fill=BOTH, expand=True)
-            maint_cols.columnconfigure(0, weight=1)
-            maint_cols.columnconfigure(1, weight=1)
+            maint_cols.columnconfigure(0, weight=1, uniform="maint_col")
+            maint_cols.columnconfigure(1, weight=1, uniform="maint_col")
             maint_cols.rowconfigure(0, weight=1)
 
             frame_list = ttk.Labelframe(maint_cols, text="Perfis", padding=15, borderwidth=self.scaled(3), relief='solid', labelanchor='n', style='Panel.TLabelframe')
@@ -4356,6 +4724,11 @@ class BalanzaGUI(ttk.Window):
             self.entry_name.bind("<KeyRelease>", self._update_profile_field)
             self.entry_min.bind("<KeyRelease>", self._update_profile_field)
             self.entry_max.bind("<KeyRelease>", self._update_profile_field)
+
+            # Vincular teclados táctiles virtuales
+            self._bind_alphanumeric_keyboard(self.entry_name, "Nome do Perfil")
+            self._bind_numeric_keypad(self.entry_min, "Peso Mínimo (kgf)")
+            self._bind_numeric_keypad(self.entry_max, "Peso Máximo (kgf)")
 
             lbl_active_status = ttk.Label(frame_editor, text="Perfil Ativo: -", font=("Segoe UI", 14, "bold"), foreground="#16a34a", anchor='center')
             lbl_active_status.grid(row=6, column=0, sticky="ew", pady=5)

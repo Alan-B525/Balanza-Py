@@ -3,7 +3,7 @@
     "use_sensor_config": true,
     "mock_sample_rate_hz": 30,
     "transmissao": {
-        "porta": "COM10",
+        "porta": "COM9",
         "velocidade": 115200,
         "paridade": "Nenhuma",
         "id_escravo_pc": 1,
