@@ -62,6 +62,7 @@ class DataProcessor:
     EMA_ALPHA = 0.3
     SENSOR_TIMEOUT_S = 5.0  # 5 segundos para sensores de 0.5Hz (1 dato cada 2s)
     USE_FILTERS = False  # Cambia a True si quieres activar filtros
+    MA_WINDOW_SIZE = 10  # Ventana de media móvil simple (cantidad de muestras)
     
     def __init__(self, nodos_config: Dict[str, Dict[str, Any]], 
                  median_window: int = 5,
@@ -86,6 +87,8 @@ class DataProcessor:
         self._ema_values: Dict[str, Optional[float]] = {}
         self._tares: Dict[str, float] = {}
         self._last_raw_readings: Dict[str, float] = {}
+        # Buffers de media móvil por canal (carga y ángulos)
+        self._ma_buffers: Dict[str, deque] = {}
         # Último valor procesado (estable) por composite (sample & hold)
         self._last_stable_values: Dict[str, float] = {}
         self._last_seen: Dict[str, float] = {}
@@ -110,6 +113,7 @@ class DataProcessor:
         self._tares.clear()
         self._last_stable_values.clear()
         self._last_raw_readings.clear()
+        self._ma_buffers.clear()
         self._last_seen.clear()
         self._node_connected_state.clear()
         self._composite_to_serial.clear()
@@ -217,6 +221,61 @@ class DataProcessor:
         median_value = self._apply_median_filter(node_key, raw_value)
         ema_value = self._apply_ema_filter(node_key, median_value)
         return ema_value
+
+    # =========================================================================
+    # MEDIA MÓVIL SIMPLE (SMA) — Ventana de 10 muestras
+    # =========================================================================
+
+    def _extract_all_samples(self, raw_data: List[Dict[str, Any]]) -> Dict[str, List[float]]:
+        """Extrae TODAS las muestras individuales por key, preservando orden temporal.
+
+        A diferencia de _extract_node_data() que solo retiene el último valor,
+        este método conserva cada muestra de cada frame para alimentar la media móvil.
+        """
+        result: Dict[str, List[float]] = {}
+        if not raw_data:
+            return result
+
+        for frame in raw_data:
+            if not isinstance(frame, dict):
+                continue
+            values = frame.get("values", {})
+            if not isinstance(values, dict):
+                continue
+            for key, val in values.items():
+                try:
+                    fval = float(val)
+                except Exception:
+                    continue
+                skey = str(key)
+                if skey not in result:
+                    result[skey] = []
+                result[skey].append(fval)
+
+        return result
+
+    def _feed_moving_average(self, key: str, value: float) -> float:
+        """Alimenta el buffer de media móvil con un nuevo valor y retorna el promedio actual.
+
+        El buffer es un deque(maxlen=MA_WINDOW_SIZE). Al llenarse, el valor más
+        viejo se descarta automáticamente.
+        """
+        if key not in self._ma_buffers:
+            self._ma_buffers[key] = deque(maxlen=self.MA_WINDOW_SIZE)
+        buf = self._ma_buffers[key]
+        buf.append(value)
+        return sum(buf) / len(buf)
+
+    def _get_moving_average(self, key: str) -> Optional[float]:
+        """Retorna el promedio actual sin agregar nuevos valores.
+
+        Usado para sample-and-hold: cuando no llegan datos nuevos,
+        se repite el último promedio sin contaminar el buffer.
+        """
+        buf = self._ma_buffers.get(key)
+        if buf and len(buf) > 0:
+            return sum(buf) / len(buf)
+        return None
     
     def procesar(self, raw_data: List[Dict[str, Any]]) -> Dict[str, Any]:
         resultado = {
@@ -232,6 +291,15 @@ class DataProcessor:
         
         current_time = time.time()
         datos_por_nodo = self._extract_node_data(raw_data)
+
+        # Extraer TODAS las muestras individuales y alimentar buffers de media móvil
+        all_samples = self._extract_all_samples(raw_data)
+        ma_current: Dict[str, float] = {}
+        for key, samples in all_samples.items():
+            avg = 0.0
+            for sample in samples:
+                avg = self._feed_moving_average(key, sample)
+            ma_current[key] = avg  # Último promedio después de alimentar todas las muestras
 
         for node_key in self._node_to_name.keys():
              if node_key in datos_por_nodo:
@@ -266,13 +334,16 @@ class DataProcessor:
                 val_load = 0.0
                 if comp_load in datos_por_nodo:
                     try:
-                        val_load = float(datos_por_nodo[comp_load])
+                        raw_val = float(datos_por_nodo[comp_load])
                     except Exception:
-                        val_load = 0.0
-                    self._last_raw_readings[comp_load] = val_load
-                    val_load = val_load * mult
+                        raw_val = 0.0
+                    self._last_raw_readings[comp_load] = raw_val
+                    # Usar media móvil (ya alimentada con todas las muestras del lote)
+                    val_load = ma_current.get(comp_load, raw_val) * mult
                 else:
-                    val_load = self._last_raw_readings.get(comp_load, 0.0) * mult
+                    # Sample-and-hold: repetir último promedio MA sin alimentar buffer
+                    ma_val = self._get_moving_average(comp_load)
+                    val_load = (ma_val if ma_val is not None else 0.0) * mult
 
                 val_load_filt = self._filter_value(comp_load, val_load)
                 if comp_load in datos_por_nodo:
@@ -304,14 +375,27 @@ class DataProcessor:
                 val_angle = 0.0
                 if comp_angle in datos_por_nodo:
                     try:
-                        val_angle = float(datos_por_nodo[comp_angle])
+                        raw_angle = float(datos_por_nodo[comp_angle])
                         if convert_rad:
-                            val_angle = math.degrees(val_angle)
+                            raw_angle = math.degrees(raw_angle)
                     except Exception:
-                        val_angle = 0.0
-                    self._last_raw_readings[comp_angle] = val_angle
+                        raw_angle = 0.0
+                    self._last_raw_readings[comp_angle] = raw_angle
+                    # Usar media móvil para ángulos (ya alimentada)
+                    # Nota: si convert_rad, los valores en ma_current son crudos (radianes)
+                    # pero la MA de radianes convertida a grados = grados de la MA (operación lineal)
+                    ma_angle = ma_current.get(comp_angle)
+                    if ma_angle is not None:
+                        val_angle = math.degrees(ma_angle) if convert_rad else ma_angle
+                    else:
+                        val_angle = raw_angle
                 else:
-                    val_angle = self._last_raw_readings.get(comp_angle, 0.0)
+                    # Sample-and-hold: repetir último promedio MA
+                    ma_val = self._get_moving_average(comp_angle)
+                    if ma_val is not None:
+                        val_angle = math.degrees(ma_val) if convert_rad else ma_val
+                    else:
+                        val_angle = self._last_raw_readings.get(comp_angle, 0.0)
 
                 node_angles.append(val_angle)
                 angles_ordered.append(val_angle)

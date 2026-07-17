@@ -1,9 +1,9 @@
 {
-    "execution_mode": "MOCK",
+    "execution_mode": "REAL",
     "use_sensor_config": true,
     "mock_sample_rate_hz": 30,
     "transmissao": {
-        "porta": "COM9",
+        "porta": "COM4",
         "velocidade": 115200,
         "paridade": "Nenhuma",
         "id_escravo_pc": 1,

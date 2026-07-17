@@ -39,28 +39,35 @@ def _decode_float32(hi: int, lo: int, swap_words: bool = False) -> float:
 
 _first_error_printed = False
 
-def _read_once(client, address, unit_id, scale) -> Tuple[bool, float, float, float]:
+from typing import List
+
+def _read_once(client, address, unit_id, scale) -> Tuple[bool, float, List[float], float]:
     global _first_error_printed
     t0 = time.perf_counter()
     try:
-        r = client.read_holding_registers(address, count=2, device_id=unit_id)
+        r = client.read_holding_registers(address, count=12, device_id=unit_id)
     except Exception as e:
         rtt_ms = (time.perf_counter() - t0) * 1000
         if not _first_error_printed:
             print(f"  [DIAG] Excepção: {type(e).__name__}: {e}")
             _first_error_printed = True
-        return False, 0.0, 0.0, rtt_ms
+        return False, 0.0, [0.0] * 5, rtt_ms
     rtt_ms = (time.perf_counter() - t0) * 1000
-    if r and hasattr(r, "registers") and len(r.registers) >= 2:
+    if r and hasattr(r, "registers") and len(r.registers) >= 12:
         _first_error_printed = False
-        val = _decode_float32(r.registers[0], r.registers[1], swap_words=False)
-        return True, val, val, rtt_ms
+        val_peso = _decode_float32(r.registers[0], r.registers[1], swap_words=False)
+        angles = []
+        for i in range(5):
+            idx = 2 + i * 2
+            ang_val = _decode_float32(r.registers[idx], r.registers[idx + 1], swap_words=False)
+            angles.append(ang_val)
+        return True, val_peso, angles, rtt_ms
     # La respuesta existe pero no tiene registros -> error Modbus
     if not _first_error_printed:
         is_err = getattr(r, 'isError', lambda: False)()
         print(f"  [DIAG] Resposta inválida: type={type(r).__name__}  isError={is_err}  obj={r}")
         _first_error_printed = True
-    return False, 0.0, 0.0, rtt_ms
+    return False, 0.0, [0.0] * 5, rtt_ms
 
 
 # ── Ventana de configuración simple ──────────────────────────────────────
@@ -194,7 +201,7 @@ def run_live(client, address, unit_id, scale, print_every):
 
     print(f"\n  Leitura contínua | janela={SLIDE_WINDOW_S:.0f}s | Ctrl+C para parar\n")
 
-    ts_vals: deque = deque()          # (t, value)
+    ts_vals: deque = deque()          # (t, peso, angles_list)
     console: deque = deque(maxlen=CONSOLE_LINES)  # líneas de log
 
     def log(line: str):
@@ -203,15 +210,17 @@ def run_live(client, address, unit_id, scale, print_every):
 
     # ── Layout ──────────────────────────────────────────────────────────
     plt.ion()
-    fig = plt.figure(figsize=(13, 7))
+    fig = plt.figure(figsize=(13, 8))
     fig.patch.set_facecolor("#0f172a")
-    gs  = gridspec.GridSpec(2, 1, height_ratios=[3.2, 1], hspace=0.0)
+    # Tres filas: Carga (3), Ángulos (2.5), Consola (1)
+    gs  = gridspec.GridSpec(3, 1, height_ratios=[3.0, 2.5, 1.2], hspace=0.35)
     gs.update(left=0.07, right=0.97, top=0.95, bottom=0.04)
 
     ax_val = fig.add_subplot(gs[0])
-    ax_con = fig.add_subplot(gs[1])
+    ax_ang = fig.add_subplot(gs[1])
+    ax_con = fig.add_subplot(gs[2])
 
-    # Estilo gráfico principal
+    # Estilo gráfico principal (Carga)
     ax_val.set_facecolor("#1e293b")
     ax_val.tick_params(colors="#94a3b8", labelsize=8)
     ax_val.spines[:].set_color("#334155")
@@ -221,9 +230,29 @@ def run_live(client, address, unit_id, scale, print_every):
     ax_val.grid(True, alpha=0.15, color="#334155")
 
     (line_val,) = ax_val.plot([], [], lw=2, color="#3b82f6")
-    ax_val.set_title("Carga  (janela deslizante: 2 min)", pad=6)
+    ax_val.set_title("Carga (janela deslizante: 2 min)", pad=6)
     ax_val.set_ylabel("Carga (kg)")
-    ax_val.set_xlabel("")   # lo oculta el panel consola que está pegado
+    ax_val.set_xlabel("")
+
+    # Estilo gráfico secundario (Ángulos)
+    ax_ang.set_facecolor("#1e293b")
+    ax_ang.tick_params(colors="#94a3b8", labelsize=8)
+    ax_ang.spines[:].set_color("#334155")
+    ax_ang.xaxis.label.set_color("#64748b")
+    ax_ang.yaxis.label.set_color("#64748b")
+    ax_ang.title.set_color("#e2e8f0")
+    ax_ang.grid(True, alpha=0.15, color="#334155")
+    ax_ang.set_title("Ángulos de inclinación", pad=6)
+    ax_ang.set_ylabel("Ángulos (°)")
+    ax_ang.set_xlabel("")
+
+    # 5 líneas para los 5 ángulos
+    colors_ang = ["#ef4444", "#eab308", "#22c55e", "#a855f7", "#ec4899"] # Rojo, Amarillo, Verde, Púrpura, Rosa
+    lines_ang = []
+    for idx in range(5):
+        line, = ax_ang.plot([], [], lw=1.5, color=colors_ang[idx], label=f"Ang {idx+1}")
+        lines_ang.append(line)
+    ax_ang.legend(loc="upper left", facecolor="#0f172a", edgecolor="#334155", labelcolor="#e2e8f0", fontsize=7)
 
     # Panel consola – sin ejes, fondo muy oscuro
     ax_con.set_facecolor("#020617")
@@ -264,14 +293,14 @@ def run_live(client, address, unit_id, scale, print_every):
 
     while True:
         now_s = time.perf_counter() - t_start
-        ok, value, raw, rtt_ms = _read_once(client, address, unit_id, scale)
+        ok, value, angles, rtt_ms = _read_once(client, address, unit_id, scale)
         count += 1; stats_count += 1
 
         if ok:
             errors_consec = 0
-            ts_vals.append((now_s, value))
+            ts_vals.append((now_s, value, angles))
 
-            if raw != last_raw:
+            if value != last_raw:
                 if last_raw is not None:
                     interval_s = now_s - t_last_change if t_last_change else 0.0
                     delta      = value - last_raw
@@ -280,14 +309,16 @@ def run_live(client, address, unit_id, scale, print_every):
                     if len(intervals) > MAX_INTERVALS:
                         intervals.pop(0)
                     freq = 1.0 / interval_s if interval_s > 0 else 0
+                    ang_str = ", ".join([f"{a:.1f}°" for a in angles])
                     log(f"t={now_s:6.1f}s  ★  {value:>10.3f} kg"
                         f"  Δ={delta:>+8.3f}  int={interval_s*1000:5.0f}ms"
-                        f"  {freq:.1f}Hz  #{n_changes}")
+                        f"  {freq:.1f}Hz  #{n_changes} | Angs: [{ang_str}]")
                 t_last_change = now_s
-                last_raw      = raw
+                last_raw      = value
             elif print_every <= 1 or (count % print_every) == 0:
+                ang_str = ", ".join([f"{a:.1f}°" for a in angles])
                 log(f"t={now_s:6.1f}s     {value:>10.3f} kg"
-                    f"  RTT={rtt_ms:.1f}ms")
+                    f"  RTT={rtt_ms:.1f}ms | Angs: [{ang_str}]")
         else:
             errors_consec += 1
             if print_every <= 1 or (count % print_every) == 0:
@@ -305,6 +336,13 @@ def run_live(client, address, unit_id, scale, print_every):
                 line_val.set_data(xs, [p[1] for p in ts_vals])
                 ax_val.set_xlim(x_left, x_right)
                 ax_val.relim(); ax_val.autoscale_view(scalex=False)
+
+                # Actualizar las 5 líneas de ángulos
+                for idx in range(5):
+                    ys_ang = [p[2][idx] for p in ts_vals]
+                    lines_ang[idx].set_data(xs, ys_ang)
+                ax_ang.set_xlim(x_left, x_right)
+                ax_ang.relim(); ax_ang.autoscale_view(scalex=False)
 
             _refresh_console()
             plt.pause(0.001)
@@ -340,14 +378,38 @@ def main():
     )
     settings = _load_settings(settings_path)
 
-    cfg = show_config(
-        default_port     = "COM9",
-        default_baud     = "115200",
-        default_unit     = "1",
-        default_print_ev = "10",
-    )
-    if cfg is None:
-        sys.exit(0)
+    # Permitir bypass de la ventana de configuración si se pasan parámetros por consola
+    # Formato: python modbus_client.py [puerto] [baudrate] [unit_id] [print_every]
+    if len(sys.argv) >= 3:
+        port = sys.argv[1]
+        try:
+            baudrate = int(sys.argv[2])
+        except ValueError:
+            baudrate = 115200
+        try:
+            unit_id = int(sys.argv[3]) if len(sys.argv) >= 4 else 1
+        except ValueError:
+            unit_id = 1
+        try:
+            print_every = int(sys.argv[4]) if len(sys.argv) >= 5 else 10
+        except ValueError:
+            print_every = 10
+            
+        cfg = {
+            "port": port,
+            "baud": baudrate,
+            "unit": unit_id,
+            "print_every": print_every
+        }
+    else:
+        cfg = show_config(
+            default_port     = "COM9",
+            default_baud     = "115200",
+            default_unit     = "1",
+            default_print_ev = "10",
+        )
+        if cfg is None:
+            sys.exit(0)
 
     port      = cfg["port"]
     baudrate  = cfg["baud"]

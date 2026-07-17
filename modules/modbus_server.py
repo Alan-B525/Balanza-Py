@@ -165,12 +165,32 @@ class ModbusDataServer:
     # ------------------------------------------------------------------ #
     #  Data publishing
     # ------------------------------------------------------------------ #
+    def check_port_physical_presence(self) -> bool:
+        """Verifica si el puerto serial configurado sigue presente en el sistema operativo."""
+        if not self.serial_port:
+            return False
+        try:
+            import serial.tools.list_ports
+            ports = [p.device for p in serial.tools.list_ports.comports()]
+            return self.serial_port in ports
+        except Exception:
+            return True  # Por seguridad en caso de error, asumimos True
+
     def push_data(self, regs: List[int]) -> bool:
         """Publica inmediatamente una lista de enteros (0..65535) en los holding registers."""
         if not self.is_running:
             return False
         if not self._context:
             return False
+
+        # Verificar si el puerto sigue presente en el sistema (evita falsos positivos por desconexión de USB)
+        if not self.check_port_physical_presence():
+            log.warning("Puerto serial %s desconectado físicamente del sistema.", self.serial_port)
+            self.last_error_msg = f"Puerto serial {self.serial_port} desconectado físicamente."
+            self.is_running = False
+            self.stop()
+            return False
+
         try:
             safe = [int(x) & 0xFFFF for x in regs]
             with self._lock:
