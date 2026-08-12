@@ -723,23 +723,8 @@ class BackendController:
             latest_ts = None
 
         if latest_ts is None or latest_ts != self.last_modbus_sample_ts:
-            total_bruto = float(datos_procesados.get('total_gross', 0.0) or 0.0)
-            modbus_value = total_bruto
-            
-            try:
-                src = self._modbus_cached_data_source_key
-                if src:
-                    sensores = datos_procesados.get('sensores', {}) or {}
-                    sensor_info = sensores.get('celda_1')
-                    if isinstance(sensor_info, dict) and sensor_info.get('key') == src:
-                        modbus_value = float(sensor_info.get('bruto', total_bruto))
-                    else:
-                        for info in sensores.values():
-                            if isinstance(info, dict) and info.get('key') == src:
-                                modbus_value = float(info.get('bruto', total_bruto))
-                                break
-            except Exception:
-                pass
+            # Tomar exactamente el valor de carga procesada y mostrado en la pantalla principal
+            modbus_value = float(datos_procesados.get('total', 0.0) or 0.0)
 
             if latest_ts is not None:
                 self.last_modbus_sample_ts = latest_ts

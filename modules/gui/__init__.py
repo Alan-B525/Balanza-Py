@@ -2115,7 +2115,7 @@ class BalanzaGUI(ttk.Window):
 
         # Fila 3: [./deshabilitado en PIN] 0 DEL
         if not pin_mode:
-            ttk.Button(all_btns, text=".", command=lambda: press_digit("."), bootstyle="secondary", padding=pad_num).grid(row=3, column=0, sticky="nsew", padx=4, pady=4)
+            ttk.Button(all_btns, text=",", command=lambda: press_digit("."), bootstyle="secondary", padding=pad_num).grid(row=3, column=0, sticky="nsew", padx=4, pady=4)
         else:
             ttk.Button(all_btns, text="", state="disabled", bootstyle="secondary", padding=pad_num).grid(row=3, column=0, sticky="nsew", padx=4, pady=4)
         ttk.Button(all_btns, text="0", command=lambda: press_digit("0"), bootstyle="light", padding=pad_num).grid(row=3, column=1, sticky="nsew", padx=4, pady=4)
@@ -3800,6 +3800,31 @@ class BalanzaGUI(ttk.Window):
         """Actualiza la estructura de datos interna inmediatamente al editar campos."""
         if not hasattr(self, 'current_profile_id') or not self.current_profile_id:
             return
+
+        # Reemplazar comas por puntos en caliente para asegurar que la visualización sea siempre un punto '.'
+        try:
+            val_min = self.entry_min.get()
+            if ',' in val_min:
+                pos = self.entry_min.index(tk.INSERT)
+                self.entry_min.configure(validate="none")
+                self.entry_min.delete(0, tk.END)
+                self.entry_min.insert(0, val_min.replace(',', '.'))
+                self.entry_min.configure(validate="key")
+                self.entry_min.icursor(pos)
+        except Exception:
+            pass
+
+        try:
+            val_max = self.entry_max.get()
+            if ',' in val_max:
+                pos = self.entry_max.index(tk.INSERT)
+                self.entry_max.configure(validate="none")
+                self.entry_max.delete(0, tk.END)
+                self.entry_max.insert(0, val_max.replace(',', '.'))
+                self.entry_max.configure(validate="key")
+                self.entry_max.icursor(pos)
+        except Exception:
+            pass
 
         # Obtener valores actuales de los inputs
         name = self.entry_name.get()

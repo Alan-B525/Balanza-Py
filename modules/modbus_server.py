@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import logging
+import time
 from typing import List, Optional
 
 log = logging.getLogger(__name__)
@@ -66,6 +67,10 @@ class ModbusDataServer:
         self.is_running = False
         self.last_error_msg: Optional[str] = None
         self._lock = threading.Lock()
+
+        # Throttling para verificación física de puerto (evita latencias excesivas en push_data)
+        self._last_port_check_ts = 0.0
+        self._last_port_check_result = True
 
     # ------------------------------------------------------------------ #
     #  Start / Stop
@@ -165,16 +170,22 @@ class ModbusDataServer:
     # ------------------------------------------------------------------ #
     #  Data publishing
     # ------------------------------------------------------------------ #
-    def check_port_physical_presence(self) -> bool:
-        """Verifica si el puerto serial configurado sigue presente en el sistema operativo."""
+    def check_port_physical_presence(self, min_interval_s: float = 3.0) -> bool:
+        """Verifica si el puerto serial configurado sigue presente en el sistema operativo (con throttling)."""
         if not self.serial_port:
             return False
+        now = time.monotonic()
+        if (now - self._last_port_check_ts) < min_interval_s:
+            return self._last_port_check_result
+        self._last_port_check_ts = now
         try:
             import serial.tools.list_ports
             ports = [p.device for p in serial.tools.list_ports.comports()]
-            return self.serial_port in ports
+            self._last_port_check_result = self.serial_port in ports
+            return self._last_port_check_result
         except Exception:
-            return True  # Por seguridad en caso de error, asumimos True
+            self._last_port_check_result = True  # Por seguridad en caso de error, asumimos True
+            return True
 
     def push_data(self, regs: List[int]) -> bool:
         """Publica inmediatamente una lista de enteros (0..65535) en los holding registers."""
