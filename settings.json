@@ -1,6 +1,7 @@
 {
     "execution_mode": "REAL",
     "use_sensor_config": true,
+    "serial_port": "COM3",
     "mock_sample_rate_hz": 30,
     "transmissao": {
         "porta": "COM4",
@@ -97,6 +98,5 @@
         "19344:ch1": 0.0,
         "19344:ch2": 0.0,
         "19344:ch3": 0.0
-    },
-    "serial_port": "COM3"
+    }
 }

@@ -51,48 +51,41 @@ def _acquire_single_instance() -> bool:
 def load_custom_settings():
     """Carga los parametros desde settings.json si existe."""
     global ACTIVE_COM, ACTIVE_NODOS, ACTIVE_MODE, USE_SENSOR_CONFIG, RUNTIME_TUNING
-    import json
-    
-    settings_path = os.path.join(current_dir, "settings.json")
-    if os.path.exists(settings_path):
-        try:
-            with open(settings_path, 'r', encoding='utf-8') as f:
-                settings = json.load(f)
+    try:
+        settings = config.load_settings()
 
-            with _GLOBAL_STATE_LOCK:
-                # Leer si se debe usar la configuración cargada en el nodo
-                USE_SENSOR_CONFIG = settings.get("use_sensor_config", True)
+        with _GLOBAL_STATE_LOCK:
+            # Leer si se debe usar la configuración cargada en el nodo
+            USE_SENSOR_CONFIG = settings.get("use_sensor_config", True)
 
-                # Configurar Modo de Execucao
-                if "execution_mode" in settings:
-                    ACTIVE_MODE = settings["execution_mode"]
+            # Configurar Modo de Execucao
+            if "execution_mode" in settings:
+                ACTIVE_MODE = settings["execution_mode"]
 
-                # Leer el puerto COM del primer nodo (fuente de verdad)
-                if "nodes" in settings and isinstance(settings["nodes"], dict):
-                    first_node = next(iter(settings["nodes"].values()), {})
-                    ACTIVE_COM = first_node.get("com_port", "") or DEFAULT_COM
-                elif "gateway" in settings and isinstance(settings["gateway"], dict):
-                    # Compatibilidad con settings.json anteriores
-                    ACTIVE_COM = settings["gateway"].get("porta", DEFAULT_COM)
-                else:
-                    ACTIVE_COM = settings.get("serial_port", DEFAULT_COM)
-                    
-                # Configurar Nos
-                if "nodes" in settings:
-                    ACTIVE_NODOS = settings["nodes"]
-
-                # Actualizar RUNTIME_TUNING con valores de settings.json (deep merge)
-                if "runtime_tuning" in settings and isinstance(settings["runtime_tuning"], dict):
-                    RUNTIME_TUNING = {**RUNTIME_TUNING, **settings["runtime_tuning"]}
+            # Puerto serial consistente (sincronizado con serial_port y nodos)
+            ACTIVE_COM = settings.get("serial_port")
+            if not ACTIVE_COM and "nodes" in settings and isinstance(settings["nodes"], dict):
+                first_node = next(iter(settings["nodes"].values()), {})
+                ACTIVE_COM = first_node.get("com_port", "")
+            if not ACTIVE_COM:
+                ACTIVE_COM = DEFAULT_COM
                 
-            print(f"[INFO] Configuracao carregada de settings.json")
-            print(f"       Modo: {ACTIVE_MODE}")
-            print(f"       Porta: {ACTIVE_COM}")
-            print(f"       Nos: {len(ACTIVE_NODOS)}")
-            print(f"       modbus_net_window_size: {RUNTIME_TUNING.get('modbus_net_window_size', 30)}")
+            # Configurar Nos
+            if "nodes" in settings and isinstance(settings["nodes"], dict):
+                ACTIVE_NODOS = settings["nodes"]
+
+            # Actualizar RUNTIME_TUNING con valores de settings.json (deep merge)
+            if "runtime_tuning" in settings and isinstance(settings["runtime_tuning"], dict):
+                RUNTIME_TUNING = {**RUNTIME_TUNING, **settings["runtime_tuning"]}
             
-        except Exception as e:
-            print(f"[ERRO] Erro carregando settings.json: {e}")
+        print(f"[INFO] Configuracao carregada de settings.json")
+        print(f"       Modo: {ACTIVE_MODE}")
+        print(f"       Porta: {ACTIVE_COM}")
+        print(f"       Nos: {len(ACTIVE_NODOS)}")
+        print(f"       modbus_net_window_size: {RUNTIME_TUNING.get('modbus_net_window_size', 30)}")
+        
+    except Exception as e:
+        print(f"[ERRO] Erro carregando settings.json: {e}")
 
 
 def show_startup_info():

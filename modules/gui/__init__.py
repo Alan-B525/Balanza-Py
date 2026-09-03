@@ -103,8 +103,9 @@ class BalanzaGUI(ttk.Window):
                     
             data["profiles"] = base_profiles
             
-            # Guardar de vuelta en settings.json
-            self._save_profiles(data)
+            # Guardar sólo si no existían perfiles en settings.json para inicializarlos
+            if not loaded_profs or not loaded_active:
+                self._save_profiles(data)
             
         except Exception as e:
             print(f"Erro ao carregar perfis: {e}")
@@ -4204,8 +4205,15 @@ class BalanzaGUI(ttk.Window):
 
         # Inicializar variables de transmisión (Modbus) para desacoplar lectura de guardado
         modbus_cfg = current_config.get('transmissao', {})
-        node_serial_port = current_config.get("serial_port", "COM3")
-        modbus_port = modbus_cfg.get('porta', current_config.get('serial_port', 'COM10'))
+        node_serial_port = current_config.get("serial_port")
+        if not node_serial_port and isinstance(current_config.get("nodes"), dict):
+            first_node = next(iter(current_config["nodes"].values()), {})
+            if isinstance(first_node, dict):
+                node_serial_port = first_node.get("com_port")
+        if not node_serial_port and isinstance(current_config.get("gateway"), dict):
+            node_serial_port = current_config["gateway"].get("porta")
+        node_serial_port = node_serial_port or "COM3"
+        modbus_port = modbus_cfg.get('porta', node_serial_port or 'COM10')
         
         modbus_port_var = tk.StringVar(value=str(modbus_port))
         modbus_baud_var = tk.StringVar(value=str(modbus_cfg.get('velocidade', current_config.get('baudrate', 115200))))
@@ -4870,7 +4878,14 @@ class BalanzaGUI(ttk.Window):
         
         ttk.Label(port_grid, text="Porta COM:", font=base_font_bold).grid(row=0, column=0, sticky="w", padx=(0, 15), pady=4)
         
-        node_serial_port = current_config.get("serial_port", "COM3")
+        node_serial_port = current_config.get("serial_port")
+        if not node_serial_port and isinstance(current_config.get("nodes"), dict):
+            first_node = next(iter(current_config["nodes"].values()), {})
+            if isinstance(first_node, dict):
+                node_serial_port = first_node.get("com_port")
+        if not node_serial_port and isinstance(current_config.get("gateway"), dict):
+            node_serial_port = current_config["gateway"].get("porta")
+        node_serial_port = node_serial_port or "COM3"
         
         initial_serial_values = [node_serial_port]
         if scanned_ports:
@@ -5240,7 +5255,7 @@ class BalanzaGUI(ttk.Window):
             new_config = load_settings()
             
             # Limpiar redundancias del nivel superior
-            keys_to_remove = ["baudrate", "paridade", "stopbits", "bytesize", "timeout", "id_escravo_pc", "swap_words", "connection_type"]
+            keys_to_remove = ["gateway", "baudrate", "paridade", "stopbits", "bytesize", "timeout", "id_escravo_pc", "swap_words", "connection_type"]
             for k in keys_to_remove:
                 if k in new_config:
                     del new_config[k]
@@ -5324,6 +5339,13 @@ class BalanzaGUI(ttk.Window):
                     except Exception:
                         saved_ok = False
                 
+                # Sincronizar diccionario de configuración en memoria del diálogo
+                try:
+                    current_config.clear()
+                    current_config.update(new_config)
+                except Exception:
+                    pass
+
                 # Aplicar cambios en caliente al driver si existe
                 if hasattr(self, 'driver') and self.driver:
                     try:

@@ -122,6 +122,7 @@ RUNTIME_TUNING = {
 DEFAULT_SETTINGS = {
     "execution_mode": MODO_EJECUCION,
     "use_sensor_config": True,
+    "serial_port": PUERTO_COM,
     "mock_sample_rate_hz": 50,
     "transmissao": TRANSMISSAO,
     "nodes": NODOS_CONFIG,
@@ -163,6 +164,17 @@ def validate_settings(settings: dict) -> bool:
     try:
         if settings.get("execution_mode") not in ("REAL", "MOCK"):
             settings["execution_mode"] = "REAL"
+
+        # Validar serial_port del sensor
+        serial_p = settings.get("serial_port")
+        if not serial_p or not isinstance(serial_p, str):
+            # Intentar rescatar del primer nodo si existe
+            if isinstance(settings.get("nodes"), dict):
+                first_node = next(iter(settings["nodes"].values()), {})
+                serial_p = first_node.get("com_port") if isinstance(first_node, dict) else None
+            if not serial_p:
+                serial_p = PUERTO_COM
+        settings["serial_port"] = str(serial_p).strip()
             
         t = settings.setdefault("transmissao", {})
         if not isinstance(t, dict):
@@ -182,6 +194,11 @@ def validate_settings(settings: dict) -> bool:
         nodes = settings.setdefault("nodes", {})
         if not isinstance(nodes, dict):
             settings["nodes"] = DEFAULT_SETTINGS["nodes"].copy()
+        else:
+            # Asegurar que cada nodo tenga sincronizado su com_port con serial_port
+            for n_cfg in settings["nodes"].values():
+                if isinstance(n_cfg, dict):
+                    n_cfg["com_port"] = settings["serial_port"]
             
         try:
             decimals = int(settings.get("decimals", 2))
@@ -221,14 +238,39 @@ def load_settings():
         import json
         with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
             data = json.load(f)
+
+            # Migración: rescatar porta de gateway legacy si serial_port no estaba definido
+            had_legacy_gateway = "gateway" in data
+            if had_legacy_gateway and isinstance(data.get("gateway"), dict):
+                gw_port = data["gateway"].get("porta")
+                if gw_port and not data.get("serial_port"):
+                    data["serial_port"] = gw_port
+                data.pop("gateway", None)
+
+            # Rescatar serial_port desde el primer nodo si no existe a nivel superior
+            if not data.get("serial_port") and isinstance(data.get("nodes"), dict):
+                first_node = next(iter(data["nodes"].values()), {})
+                if isinstance(first_node, dict) and first_node.get("com_port"):
+                    data["serial_port"] = first_node.get("com_port")
+
             merged = deep_merge(DEFAULT_SETTINGS, data)
+
+            # Eliminar siempre el bloque gateway legacy si quedó en merged
+            merged.pop("gateway", None)
+
+            # Eliminar claves obsoletas de versiones antiguas
+            obsolete = ["baudrate", "connection_type", "paridade", "id_escravo_pc", "swap_words", "stopbits", "bytesize", "timeout", "tcp_ip", "tcp_port"]
+            for k in obsolete:
+                merged.pop(k, None)
+
             validate_settings(merged)
 
-            # Eliminar claves obsoletas
-            if "gateway" in merged:
-                obsolete = ["serial_port", "baudrate", "connection_type", "paridade", "id_escravo_pc", "swap_words", "stopbits", "bytesize", "timeout", "tcp_ip", "tcp_port"]
-                for k in obsolete:
-                    merged.pop(k, None)
+            # Si el archivo tenía formato legacy (ej: contenía "gateway"), reescribirlo limpio
+            if had_legacy_gateway:
+                try:
+                    save_settings(merged)
+                except Exception:
+                    pass
 
             return merged
     except Exception:
@@ -240,6 +282,17 @@ def save_settings(settings_dict):
     try:
         import json
         validate_settings(settings_dict)
+
+        # Eliminar gateway legacy para asegurar que nunca se vuelva a escribir
+        settings_dict.pop("gateway", None)
+
+        # Asegurar sincronización del puerto COM a todos los nodos
+        target_port = settings_dict.get("serial_port", PUERTO_COM)
+        if isinstance(settings_dict.get("nodes"), dict):
+            for n_cfg in settings_dict["nodes"].values():
+                if isinstance(n_cfg, dict):
+                    n_cfg["com_port"] = target_port
+
         with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
             json.dump(settings_dict, f, indent=4, ensure_ascii=False)
         return True
